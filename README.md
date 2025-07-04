@@ -32,6 +32,12 @@ Metal (MPS).
 ## Installing dependencies
 
 ```bash
+./setup.sh
+```
+
+Or do it manually:
+
+```bash
 python -m venv venv
 source venv/bin/activate   # on Windows use "venv\Scripts\activate"
 pip install -r requirements.txt
