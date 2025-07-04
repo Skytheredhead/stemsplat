@@ -1,7 +1,12 @@
 FROM python:3.10-slim
 
 WORKDIR /app
-COPY pyproject.toml .
-RUN pip install poetry && poetry config virtualenvs.create false && poetry install --no-dev
+
+# Install Python dependencies without using Poetry to keep the image simple
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
+
+# Launch the API server
 CMD ["uvicorn", "stemrunner.server:app", "--host", "0.0.0.0", "--port", "8000"]

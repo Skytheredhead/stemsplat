@@ -58,6 +58,16 @@ python -m stemrunner path/to/*.wav   # auto selects CUDA or Metal if available
 
 The CLI will print progress for each file to the terminal.
 
+## Run the web server locally
+
+After installing the requirements you can start the FastAPI server directly:
+
+```bash
+uvicorn stemrunner.server:app --reload
+```
+
+Then open `http://localhost:8000` in your browser.
+
 ## Quick-start (Docker CPU)
 
 ```bash
@@ -69,6 +79,18 @@ docker run --rm -p 8000:8000 \
 ```
 
 After running the container point your browser to `http://localhost:8000`.
+
+## Quick-start (Docker GPU)
+
+```bash
+docker build -f Dockerfile.gpu -t stemrunner-gpu .
+docker run --gpus all --rm -p 8000:8000 \
+  -v "$PWD/models:/app/models" \
+  -v "$PWD/music:/music" \
+  stemrunner-gpu
+```
+
+This image uses NVIDIA CUDA and requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) to be installed.
 
 ## Browser GUI
 
