@@ -23,7 +23,9 @@ def process_file(path: Path, manager: ModelManager, segment: int | None = None, 
     torchaudio.save(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate, encoding='PCM_S24LE')
 
     # Stage B
-    drums, bass, other = manager.split_instrumental(instrumental, SEGMENT_STAGE_B, OVERLAP)
+    drums, bass, other, karaoke, guitar = manager.split_instrumental(instrumental, SEGMENT_STAGE_B, OVERLAP)
     torchaudio.save(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate, encoding='PCM_S24LE')
     torchaudio.save(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate, encoding='PCM_S24LE')
     torchaudio.save(out_dir / f"{path.stem}—Other.wav", other, sample_rate, encoding='PCM_S24LE')
+    torchaudio.save(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate, encoding='PCM_S24LE')
+    torchaudio.save(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate, encoding='PCM_S24LE')

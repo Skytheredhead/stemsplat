@@ -22,10 +22,13 @@ const status = document.getElementById('status');
 function upload(file) {
   const formData = new FormData();
   formData.append('file', file);
-  fetch('/upload', {method: 'POST', body: formData});
-  const div = document.createElement('div');
-  div.textContent = `Queued ${file.name}`;
-  status.appendChild(div);
+  fetch('/upload', {method: 'POST', body: formData})
+    .then(r => r.json())
+    .then(data => {
+      const div = document.createElement('div');
+      div.textContent = `Queued ${file.name}: ${data.stems.join(', ')}`;
+      status.appendChild(div);
+    });
 }
 
 dropzone.addEventListener('click', () => fileInput.click());

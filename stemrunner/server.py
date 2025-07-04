@@ -16,7 +16,9 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
     background_tasks.add_task(process_file, path, manager)
-    return {'status': 'queued'}
+    stems = [f"{Path(file.filename).stem}—{name}.wav" for name in [
+        'Vocals', 'Instrumental', 'Drums', 'Bass', 'Other', 'Karaoke', 'Guitar']]
+    return {'queued': file.filename, 'stems': stems}
 
 
 @app.get('/', response_class=HTMLResponse)
