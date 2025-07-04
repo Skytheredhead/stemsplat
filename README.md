@@ -1,4 +1,4 @@
-# Stemrunner
+# stemsplat
 
 Self-hosted stem-separation service with real-time progress updates. The
 project now auto-detects NVIDIA GPUs as well as Apple Silicon machines using
