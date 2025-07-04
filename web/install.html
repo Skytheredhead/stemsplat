@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>stemsplat setup</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg-deep: #0f0f11;
+      --bg-card: rgba(40,40,48,0.55);
+      --txt-main: #e5e5e5;
+      --accent: #2ec7f8;
+      --accent-lite: #47d6ff;
+    }
+    .glass {
+      background: var(--bg-card);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .fade-in {
+      animation: fade 0.7s ease forwards;
+    }
+    @keyframes fade {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center gap-10" style="background: var(--bg-deep); font-family: 'Nunito Sans', sans-serif;">
+  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat setup</h1>
+  <div class="glass w-11/12 max-w-xl px-8 py-6 rounded-xl flex flex-col gap-4 fade-in">
+    <span id="status" class="text-[var(--txt-main)]">starting…</span>
+    <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
+      <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%"></div>
+    </div>
+    <div id="error" class="hidden text-red-400 text-sm"></div>
+  </div>
+  <script>
+    async function poll(){
+      const res = await fetch('/progress');
+      const data = await res.json();
+      const bar = document.getElementById('bar');
+      const status = document.getElementById('status');
+      const err = document.getElementById('error');
+      if(data.pct >= 0){ bar.style.width = data.pct + '%'; }
+      status.textContent = data.step;
+      if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
+      if(data.pct >= 100){ return; }
+      setTimeout(poll, 1000);
+    }
+    poll();
+  </script>
+</body>
+</html>
