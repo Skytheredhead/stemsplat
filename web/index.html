@@ -1,51 +1,166 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Stemrunner</title>
+  <title>stemsplat</title>
+
+  <!-- nunito sans -->
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+
+  <!-- tailwind (cdn build) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
   <style>
-  body { font-family: sans-serif; margin: 2em; }
-  #dropzone { border: 2px dashed #999; padding: 2em; text-align: center; }
-  progress { width: 100%; }
+    /* custom palette */
+    :root {
+      --bg-deep: #0f0f11;
+      --bg-card: rgba(40,40,48,0.55);   /* glass-blur card */
+      --txt-main: #e5e5e5;
+      --accent:  #2ec7f8;               /* dulled aqua */
+      --accent-lite: #47d6ff;
+    }
+
+    /* glass effect */
+    .glass {
+      background: var(--bg-card);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    /* smooth fade-in */
+    .fade-in {
+      animation: fade 0.7s ease forwards;
+    }
+    @keyframes fade {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
-<body>
-  <h1>Stemrunner</h1>
-  <div id="dropzone">Drop files here or click to upload</div>
-  <input type="file" id="fileInput" multiple style="display:none" />
-  <div id="status"></div>
-<script>
-const dropzone = document.getElementById('dropzone');
-const fileInput = document.getElementById('fileInput');
-const status = document.getElementById('status');
 
-function upload(file) {
-  const formData = new FormData();
-  formData.append('file', file);
-  fetch('/upload', {method: 'POST', body: formData})
-    .then(r => r.json())
-    .then(data => {
-      const div = document.createElement('div');
-      div.textContent = `Queued ${file.name}: ${data.stems.join(', ')}`;
-      status.appendChild(div);
-    });
-}
+<body class="min-h-screen flex flex-col items-center justify-center gap-10"
+      style="background: var(--bg-deep); font-family: 'Nunito Sans', sans-serif;">
 
-dropzone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => {
-  [...fileInput.files].forEach(upload);
-});
+  <!-- floating depth bubbles -->
+  <div class="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
+    <div class="absolute w-80 h-80 rounded-full bg-[var(--accent)] opacity-5 blur-3xl top-1/4 left-1/4"></div>
+    <div class="absolute w-96 h-96 rounded-full bg-[var(--accent)] opacity-10 blur-3xl bottom-10 right-20"></div>
+  </div>
 
-dropzone.addEventListener('dragover', e => {
-  e.preventDefault();
-  dropzone.style.background = '#eee';
-});
-dropzone.addEventListener('dragleave', () => dropzone.style.background = '');
-dropzone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropzone.style.background = '';
-  [...e.dataTransfer.files].forEach(upload);
-});
-</script>
+  <!-- header -->
+  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat</h1>
+
+  <!-- upload card -->
+  <div id="dropzone"
+       class="glass w-11/12 max-w-2xl px-10 py-14 rounded-3xl text-center fade-in
+              flex flex-col items-center gap-6 cursor-pointer
+              transition-transform duration-200 hover:scale-105">
+
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            d="M12 16v-8m0 0-3 3m3-3 3 3m3 6a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+
+    <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
+
+    <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
+  </div>
+
+  <!-- queue -->
+  <div id="queue" class="w-11/12 max-w-2xl flex flex-col gap-4"></div>
+
+  <!-- templates & scripts -->
+  <template id="item-template">
+    <div class="glass rounded-xl px-6 py-4 flex flex-col gap-2">
+      <div class="flex justify-between items-center">
+        <span class="truncate text-[var(--txt-main)] text-sm filename"></span>
+        <span class="text-xs text-[var(--accent-lite)] status">queued</span>
+      </div>
+      <div class="w-full h-2 bg-gray-700 rounded overflow-hidden">
+        <div class="h-full bg-[var(--accent)] progress" style="width:0%"></div>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    /* helpers */
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('file-input');
+    const queue     = document.getElementById('queue');
+    const template  = document.getElementById('item-template');
+
+    // drag-and-drop highlights
+    ['dragenter','dragover'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.add('ring-2','ring-[var(--accent)]');
+      }));
+    ['dragleave','drop'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove('ring-2','ring-[var(--accent)]');
+      }));
+
+    // open file picker on click
+    dropzone.addEventListener('click', () => fileInput.click());
+
+    // handle both dropped and picked files
+    dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+    fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+    /* === upload & progress logic === */
+    async function handleFiles(fileList){
+      [...fileList].forEach(file => {
+        // skip non-audio (extra guard even though accept="audio/*")
+        if(!file.type.startsWith('audio/')) return;
+
+        // clone UI row
+        const node = template.content.cloneNode(true);
+        const li   = node.querySelector('.filename');
+        const bar  = node.querySelector('.progress');
+        const st   = node.querySelector('.status');
+        li.textContent = file.name;
+        queue.appendChild(node);
+
+        // prepare form data
+        const data = new FormData();
+        data.append('file', file);
+
+        // upload (with fetch + progress)
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload', true);
+
+        xhr.upload.onprogress = (evt) => {
+          if(evt.lengthComputable){
+            const pct = Math.round((evt.loaded/evt.total)*100);
+            bar.style.width = pct + '%';
+            st.textContent  = 'upload ' + pct + '%';
+          }
+        };
+
+        xhr.onload = () => {
+          if(xhr.status !== 200){ st.textContent = 'error'; return; }
+          const res = JSON.parse(xhr.responseText);
+          st.textContent = 'processing…';
+          trackProgress(res.task_id, bar, st);
+        };
+        xhr.onerror = () => st.textContent = 'error';
+
+        xhr.send(data);
+      });
+    }
+
+    function trackProgress(id, bar, st){
+      const es = new EventSource(`/progress/${id}`);
+      es.onmessage = (e) => {
+        const pct = parseInt(e.data);
+        bar.style.width = pct + '%';
+        st.textContent  = 'processing ' + pct + '%';
+        if(pct >= 100){ es.close(); st.textContent = 'done'; }
+      };
+      es.onerror = () => { es.close(); st.textContent = 'error'; };
+    }
+  </script>
 </body>
 </html>

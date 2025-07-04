@@ -1,12 +1,41 @@
 # Stemrunner
 
-Self-hosted stem-separation service.
+Self-hosted stem-separation service with real-time progress updates. The
+project now auto-detects NVIDIA GPUs as well as Apple Silicon machines using
+Metal (MPS).
 
 ## Prerequisites
 
-- Python 3.10 or higher, or Docker
-- Working NVIDIA drivers for GPU usage
+- Python 3.10 or higher **or** Docker
+- Working NVIDIA drivers for GPU usage (if using a PC GPU)
 - Internet access on first install to download torch and torchaudio
+
+## Getting the code
+
+**Option A: with Git**
+
+1. [Install Git](https://git-scm.com/) if you don't have it.
+2. Open a terminal or command prompt.
+3. Clone the repository:
+
+   ```bash
+   git clone https://github.com/yourname/stemsplat.git
+   cd stemsplat
+   ```
+
+**Option B: without Git**
+
+1. Visit the project page on GitHub.
+2. Press **Code** → **Download ZIP**.
+3. Extract the archive and open a terminal in the folder.
+
+## Installing dependencies
+
+```bash
+python -m venv venv
+source venv/bin/activate   # on Windows use "venv\Scripts\activate"
+pip install -r requirements.txt
+```
 
 ## Folder layout
 
@@ -17,19 +46,17 @@ stemrunner/
   music/    # optional watch folder
 ```
 
-## Model setup
+## Add the models
 
 Create a `models/` directory at the repo root and drop all checkpoint files there. Place every accompanying `.yaml` file inside `configs/`.
 
-## Quick-start (CLI)
+## Running from the command line
 
 ```bash
-git clone <repo>
-cd stemrunner
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt  # downloads torch + torchaudio
-python -m stemrunner path/to/*.wav --gpu 0
+python -m stemrunner path/to/*.wav   # auto selects CUDA or Metal if available
 ```
+
+The CLI will print progress for each file to the terminal.
 
 ## Quick-start (Docker CPU)
 
@@ -41,11 +68,17 @@ docker run --rm -p 8000:8000 \
   stemrunner
 ```
 
-Point your browser to `http://localhost:8000` and drag files onto the page.
+After running the container point your browser to `http://localhost:8000`.
 
-## Browser GUI usage
+## Browser GUI
 
-Visit `http://localhost:8000` after running the server. Drag-and-drop audio files onto the page to queue them for processing. The page lists the names of the seven expected stem files.
+1. Open `http://localhost:8000` in your browser.
+2. Drag-and-drop audio files onto the card or click it to pick files.
+3. Progress bars update in real time as stems are created using server-sent
+   events.
+
+When processing finishes the interface lists the output stem files (vocals,
+instrumental, drums, bass, other, karaoke and guitar).
 
 ## Troubleshooting
 
