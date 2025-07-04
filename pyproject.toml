@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "stemrunner"
+version = "0.1.0"
+description = "Self-hosted stem separation tool"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = "*"
+torchaudio = "*"
+fastapi = "*"
+uvicorn = {extras = ["standard"], version = "*"}
+click = "*"
+
+[tool.poetry.dev-dependencies]
+pytest = "*"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
