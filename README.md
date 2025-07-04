@@ -41,14 +41,14 @@ pip install -r requirements.txt
 
 ```
 stemrunner/
-  models/   # put .ckpt and .onnx files here (ignored by Git)
+  models/   # put .ckpt and .onnx files here
   configs/  # architecture .yaml files (tracked)
   music/    # optional watch folder
 ```
 
 ## Add the models
 
-Create a `models/` directory at the repo root and drop all checkpoint files there. Place every accompanying `.yaml` file inside `configs/`.
+Drop all checkpoint files inside the pre-made `models/` directory. Place every accompanying `.yaml` file inside `configs/`.
 
 ## Running from the command line
 
