@@ -11,6 +11,7 @@ torchaudio = "*"
 fastapi = "*"
 uvicorn = {extras = ["standard"], version = "*"}
 click = "*"
+sse-starlette = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"

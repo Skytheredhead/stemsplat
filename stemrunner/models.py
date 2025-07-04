@@ -1,7 +1,18 @@
 from pathlib import Path
 from typing import Optional
-
 import torch
+
+def _select_device(gpu: Optional[int]) -> torch.device:
+    """Return best available device. Prefers CUDA when gpu provided,
+    otherwise auto-detects CUDA, then Metal (MPS), else CPU."""
+    if gpu is not None and torch.cuda.is_available():
+        return torch.device(f'cuda:{gpu}')
+    if gpu is None:
+        if torch.cuda.is_available():
+            return torch.device('cuda:0')
+        if getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
+            return torch.device('mps')
+    return torch.device('cpu')
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / 'models'
 CONFIGS_DIR = Path(__file__).resolve().parent.parent / 'configs'
@@ -11,7 +22,7 @@ class ModelManager:
     """Load and manage model checkpoints."""
 
     def __init__(self, gpu: Optional[int] = None):
-        self.device = torch.device(f'cuda:{gpu}' if gpu is not None and torch.cuda.is_available() else 'cpu')
+        self.device = _select_device(gpu)
         self.vocals_model = self._load_model('mel_band_roformer_vocals_becruily.ckpt')
         self.instrumental_model = self._load_model('mel_band_roformer_instrumental_becruily.ckpt')
         self.drums_model = self._load_model('kuielab_a_drums.onnx')
