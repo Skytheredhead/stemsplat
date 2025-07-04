@@ -3,3 +3,4 @@ torchaudio
 fastapi
 uvicorn[standard]
 click
+sse-starlette
