@@ -19,7 +19,7 @@ Metal (MPS).
 3. Clone the repository:
 
    ```bash
-   git clone https://github.com/yourname/stemsplat.git
+   git clone https://github.com/Skytheredhead/stemsplat.git
    cd stemsplat
    ```
 
