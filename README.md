@@ -31,11 +31,19 @@ Metal (MPS).
 
 ## Installing dependencies
 
+The repository includes an interactive installer that sets up a virtual
+environment and installs the Python packages while showing a progress bar in
+your browser. Run it with:
+
 ```bash
-./setup.sh
+python install.py
 ```
 
-Or do it manually:
+Your default browser will open `http://localhost:6060` where a loading bar
+displays each installation step. When the bar reaches 100% the environment is
+ready to use. If a step fails an error message appears on the page.
+
+You can still perform the steps manually if you prefer:
 
 ```bash
 python -m venv venv
