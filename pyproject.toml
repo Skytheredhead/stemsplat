@@ -13,6 +13,7 @@ fastapi = "*"
 uvicorn = {extras = ["standard"], version = "*"}
 click = "*"
 sse-starlette = "*"
+numpy = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"

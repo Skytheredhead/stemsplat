@@ -107,6 +107,8 @@ instrumental, drums, bass, other, karaoke and guitar).
 - Ensure checkpoint files are present in `models/`.
 - Verify `.yaml` configs are in `configs/`.
 - Install `ffmpeg` if uploads fail to convert or load.
+- Ensure Python packages installed correctly; reinstall requirements if the
+  server complains about missing modules like `numpy`.
 
 
 ## Double-click installer
