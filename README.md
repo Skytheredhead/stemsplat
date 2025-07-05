@@ -100,3 +100,14 @@ instrumental, drums, bass, other, karaoke and guitar).
 - Ensure checkpoint files are present in `models/`.
 - Verify `.yaml` configs are in `configs/`.
 
+
+## Standalone launcher
+
+For a click-and-run experience you can bundle the `launch.py` script into an executable using [PyInstaller](https://pyinstaller.org/):
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile launch.py
+```
+
+The resulting binary appears in the `dist/` folder. When run, it opens the web interface at `http://localhost:8000`. If the required Python environment isn't set up yet it automatically runs `install.py` which shows a progress card in your browser.
