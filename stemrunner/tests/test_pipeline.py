@@ -52,7 +52,8 @@ def test_ffmpeg_fallback(tmp_path, monkeypatch):
     def fake_run(cmd, check, stdout=None, stderr=None):
         class R:
             def __init__(self):
-                self.stdout = b''
+                # 2 frames of silence in 16-bit stereo
+                self.stdout = b"\x00\x00\x00\x00\x00\x00\x00\x00"
         return R()
 
     monkeypatch.setattr(subprocess, 'run', fake_run)
@@ -71,3 +72,30 @@ def test_ffmpeg_fallback(tmp_path, monkeypatch):
         'Guitar',
     ]:
         assert (out_dir / f'tone—{name}.wav').exists()
+
+
+def test_convert_mp3(tmp_path, monkeypatch):
+    sample_rate = 44100
+    test_file = tmp_path / 'tone.mp3'
+    tone = torch.zeros(1, sample_rate // 2)
+
+    def fake_save(path, waveform, sample_rate, encoding=None):
+        Path(path).write_bytes(b'')
+
+    monkeypatch.setattr(torchaudio, 'save', fake_save)
+
+    converted = {}
+
+    def fake_convert(path, sr):
+        converted['called'] = True
+        out = tmp_path / 'tone.wav'
+        out.write_bytes(b'')
+        return out
+
+    mod = sys.modules[process_file.__module__]
+    monkeypatch.setattr(mod, '_convert_to_wav', fake_convert)
+    monkeypatch.setattr(mod, '_load_waveform', lambda p, sr: (tone, sample_rate))
+
+    manager = ModelManager(gpu=None)
+    process_file(test_file, manager, outdir=tmp_path)
+    assert converted.get('called')

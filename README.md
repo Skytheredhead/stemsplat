@@ -72,6 +72,12 @@ python -m stemrunner path/to/*.wav   # auto selects CUDA or Metal if available
 
 The CLI will print progress for each file to the terminal.
 
+## Supported audio formats
+
+Uploads can be WAV, MP3, M4A or almost any other common format. Non-WAV files
+are automatically converted to 16‑bit stereo WAV using FFmpeg before
+processing.
+
 ## Quick-start (Docker CPU)
 
 ```bash
