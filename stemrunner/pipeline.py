@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Callable, Optional
 import tempfile
 import subprocess
+import os
 import torchaudio
 
 from .models import ModelManager
@@ -13,7 +14,9 @@ OVERLAP = 8
 
 def _convert_to_wav(path: Path, sample_rate: int) -> Path:
     """Convert an audio file to WAV using ffmpeg and return the new path."""
-    tmp = Path(tempfile.mkstemp(suffix='.wav')[1])
+    fd, tmp_path = tempfile.mkstemp(suffix='.wav')
+    os.close(fd)
+    tmp = Path(tmp_path)
     try:
         subprocess.run(
             [
@@ -58,7 +61,7 @@ def process_file(
     try:
         waveform, sr = torchaudio.load(load_path)
     except Exception as exc:
-        raise RuntimeError(f'failed to load audio file {path.name}') from exc
+        raise RuntimeError(f'failed to load {path.name}: {exc}') from exc
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
     progress_cb(10)

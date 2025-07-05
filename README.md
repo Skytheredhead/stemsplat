@@ -99,6 +99,7 @@ instrumental, drums, bass, other, karaoke and guitar).
 - Check CUDA drivers if GPU inference fails.
 - Ensure checkpoint files are present in `models/`.
 - Verify `.yaml` configs are in `configs/`.
+- Install `ffmpeg` if uploads fail to convert or load.
 
 
 ## Double-click installer
