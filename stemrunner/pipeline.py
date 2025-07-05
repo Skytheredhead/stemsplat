@@ -10,8 +10,8 @@ import torchaudio
 from .models import ModelManager
 
 SEGMENT_STAGE_A = 352800
-SEGMENT_STAGE_B = 4000
-OVERLAP = 8
+SEGMENT_STAGE_B = SEGMENT_STAGE_A
+OVERLAP = 12
 
 
 def _convert_to_wav(path: Path, sample_rate: int) -> Path:
