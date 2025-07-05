@@ -100,3 +100,16 @@ instrumental, drums, bass, other, karaoke and guitar).
 - Ensure checkpoint files are present in `models/`.
 - Verify `.yaml` configs are in `configs/`.
 
+
+## Double-click installer
+
+For convenience the repository ships with scripts you can run without opening a
+terminal:
+
+- **macOS**: `install.command` (may require `chmod +x install.command` once)
+- **Windows**: `install.bat`
+
+Both scripts simply execute `python3 install.py`, which opens
+`http://localhost:6060` in your browser and shows a progress card while the
+dependencies are installed. When installation completes the page stays
+available; press `Ctrl+C` in the terminal to exit.
