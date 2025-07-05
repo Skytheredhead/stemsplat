@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import torch
 import torchaudio
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -32,3 +33,41 @@ def test_process_file(tmp_path, monkeypatch):
     ]
     for name in expected:
         assert (out_dir / name).exists()
+
+
+def test_ffmpeg_fallback(tmp_path, monkeypatch):
+    sample_rate = 44100
+    test_file = tmp_path / 'tone.m4a'
+
+    def fake_save(path, waveform, sample_rate, encoding=None):
+        Path(path).write_bytes(b'')
+
+    monkeypatch.setattr(torchaudio, 'save', fake_save)
+
+    def fail_load(p):
+        raise RuntimeError('no backend')
+
+    monkeypatch.setattr(torchaudio, 'load', fail_load)
+
+    def fake_run(cmd, check, stdout=None, stderr=None):
+        class R:
+            def __init__(self):
+                self.stdout = b''
+        return R()
+
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    manager = ModelManager(gpu=None)
+    process_file(test_file, manager, outdir=tmp_path)
+
+    out_dir = tmp_path / 'tone—stems'
+    for name in [
+        'Vocals',
+        'Instrumental',
+        'Drums',
+        'Bass',
+        'Other',
+        'Karaoke',
+        'Guitar',
+    ]:
+        assert (out_dir / f'tone—{name}.wav').exists()

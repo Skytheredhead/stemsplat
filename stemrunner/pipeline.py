@@ -3,6 +3,7 @@ from typing import Callable, Optional
 import tempfile
 import subprocess
 import os
+import torch
 import torchaudio
 
 from .models import ModelManager
@@ -26,6 +27,10 @@ def _convert_to_wav(path: Path, sample_rate: int) -> Path:
                 str(path),
                 '-ar',
                 str(sample_rate),
+                '-ac',
+                '2',
+                '-sample_fmt',
+                's16',
                 str(tmp),
             ],
             check=True,
@@ -41,6 +46,42 @@ def _convert_to_wav(path: Path, sample_rate: int) -> Path:
     return tmp
 
 
+def _load_waveform(path: Path, sample_rate: int):
+    """Load audio returning (waveform, sample_rate) with ffmpeg fallback."""
+    try:
+        return torchaudio.load(path)
+    except Exception:
+        try:
+            result = subprocess.run(
+                [
+                    'ffmpeg',
+                    '-y',
+                    '-i',
+                    str(path),
+                    '-f',
+                    's16le',
+                    '-ac',
+                    '2',
+                    '-ar',
+                    str(sample_rate),
+                    'pipe:1',
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError('ffmpeg not found') from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError('ffmpeg failed to decode audio') from exc
+        data = torch.frombuffer(result.stdout, dtype=torch.int16)
+        if data.numel() == 0:
+            waveform = torch.zeros(2, 0, dtype=torch.float32)
+        else:
+            waveform = data.view(-1, 2).t().to(torch.float32) / 32768.0
+        return waveform, sample_rate
+
+
 def process_file(
     path: Path,
     manager: ModelManager,
@@ -53,13 +94,12 @@ def process_file(
         progress_cb = lambda x: None
     sample_rate = 44100
     temp_path = None
+    load_path = path
     if path.suffix.lower() != '.wav':
         temp_path = _convert_to_wav(path, sample_rate)
         load_path = temp_path
-    else:
-        load_path = path
     try:
-        waveform, sr = torchaudio.load(load_path, format='wav')
+        waveform, sr = _load_waveform(load_path, sample_rate)
     except Exception as exc:
         msg = (
             f'failed to load {path.name}: {exc}. '\
