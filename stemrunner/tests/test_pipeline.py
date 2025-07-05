@@ -99,3 +99,32 @@ def test_convert_mp3(tmp_path, monkeypatch):
     manager = ModelManager(gpu=None)
     process_file(test_file, manager, outdir=tmp_path)
     assert converted.get('called')
+
+
+def test_save_ffmpeg_fallback(tmp_path, monkeypatch):
+    sample_rate = 44100
+    test_file = tmp_path / 'tone.wav'
+    tone = torch.zeros(2, 2)
+
+    mod = sys.modules[process_file.__module__]
+    monkeypatch.setattr(mod, '_load_waveform', lambda p, sr: (tone, sample_rate))
+
+    def fail_save(path, waveform, sample_rate, encoding=None):
+        raise RuntimeError('no backend')
+
+    monkeypatch.setattr(torchaudio, 'save', fail_save)
+
+    called = {}
+
+    def fake_run(cmd, check, input=None, stdout=None, stderr=None):
+        Path(cmd[-1]).write_bytes(b'')
+        called['ffmpeg'] = True
+        class R:
+            pass
+        return R()
+
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    manager = ModelManager(gpu=None)
+    process_file(test_file, manager, outdir=tmp_path)
+    assert called.get('ffmpeg')

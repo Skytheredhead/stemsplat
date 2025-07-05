@@ -3,6 +3,7 @@ from typing import Callable, Optional
 import tempfile
 import subprocess
 import os
+from array import array
 import torch
 import torchaudio
 
@@ -82,6 +83,40 @@ def _load_waveform(path: Path, sample_rate: int):
         return waveform, sample_rate
 
 
+def _save_waveform(path: Path, waveform: torch.Tensor, sample_rate: int):
+    """Save audio using torchaudio with an FFmpeg fallback."""
+    try:
+        torchaudio.save(path, waveform, sample_rate, encoding='PCM_S24LE')
+        return
+    except Exception:
+        try:
+            data = waveform.t().contiguous().cpu().numpy().astype('float32').tobytes()
+        except Exception:
+            arr = array('f', waveform.t().contiguous().cpu().reshape(-1).tolist())
+            data = arr.tobytes()
+        try:
+            subprocess.run(
+                [
+                    'ffmpeg',
+                    '-y',
+                    '-f', 'f32le',
+                    '-ar', str(sample_rate),
+                    '-ac', str(waveform.shape[0]),
+                    '-i', 'pipe:0',
+                    '-c:a', 'pcm_s24le',
+                    str(path),
+                ],
+                check=True,
+                input=data,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError('ffmpeg not found') from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError('ffmpeg failed to encode audio') from exc
+
+
 def process_file(
     path: Path,
     manager: ModelManager,
@@ -115,17 +150,17 @@ def process_file(
     # Stage A
     vocals, instrumental = manager.split_vocals(waveform, segment or SEGMENT_STAGE_A, OVERLAP)
     progress_cb(40)
-    torchaudio.save(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate, encoding='PCM_S24LE')
-    torchaudio.save(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate, encoding='PCM_S24LE')
+    _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
+    _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
 
     # Stage B
     drums, bass, other, karaoke, guitar = manager.split_instrumental(instrumental, SEGMENT_STAGE_B, OVERLAP)
     progress_cb(70)
-    torchaudio.save(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate, encoding='PCM_S24LE')
-    torchaudio.save(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate, encoding='PCM_S24LE')
-    torchaudio.save(out_dir / f"{path.stem}—Other.wav", other, sample_rate, encoding='PCM_S24LE')
-    torchaudio.save(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate, encoding='PCM_S24LE')
-    torchaudio.save(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate, encoding='PCM_S24LE')
+    _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
+    _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
+    _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)
+    _save_waveform(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate)
+    _save_waveform(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate)
     progress_cb(100)
     if temp_path is not None:
         temp_path.unlink(missing_ok=True)
