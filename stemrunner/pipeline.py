@@ -59,9 +59,13 @@ def process_file(
     else:
         load_path = path
     try:
-        waveform, sr = torchaudio.load(load_path)
+        waveform, sr = torchaudio.load(load_path, format='wav')
     except Exception as exc:
-        raise RuntimeError(f'failed to load {path.name}: {exc}') from exc
+        msg = (
+            f'failed to load {path.name}: {exc}. '\
+            'Ensure ffmpeg and torchaudio are installed with WAV support.'
+        )
+        raise RuntimeError(msg) from exc
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
     progress_cb(10)

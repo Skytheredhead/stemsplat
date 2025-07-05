@@ -69,7 +69,7 @@
 
   <!-- queue -->
   <div id="queue" class="w-11/12 max-w-2xl flex flex-col gap-4"></div>
-  <button id="clear-btn" class="mt-4 text-white underline">clear all</button>
+  <button id="clear-btn" class="mt-4 text-white underline hidden">clear all</button>
 
   <!-- templates & scripts -->
   <template id="item-template">
@@ -94,6 +94,10 @@
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
+    function updateClear(){
+      if(tasks.length) clearBtn.classList.remove('hidden');
+      else clearBtn.classList.add('hidden');
+    }
 
     function createItem(task){
       const node = template.content.cloneNode(true);
@@ -113,6 +117,7 @@
       queue.innerHTML = '';
       tasks = [];
       saveTasks();
+      updateClear();
     });
 
     // restore previous tasks
@@ -122,6 +127,7 @@
         trackProgress(t.id, bar, st, t);
       }
     });
+    updateClear();
 
     // drag-and-drop highlights
     ['dragenter','dragover'].forEach(evt =>
@@ -192,6 +198,7 @@
           const task = {id: res.task_id, name: file.name, pct: 0};
           tasks.push(task);
           saveTasks();
+          updateClear();
           trackProgress(res.task_id, bar, st, task);
         };
         xhr.onerror = () => {
