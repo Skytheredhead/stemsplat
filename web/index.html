@@ -149,7 +149,9 @@
         xhr.onload = () => {
           if(xhr.status !== 200){
             st.textContent = 'error';
-            showError('server responded with status ' + xhr.status);
+            let msg = 'server responded with status ' + xhr.status;
+            try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e) {}
+            showError(msg);
             return;
           }
           const res = JSON.parse(xhr.responseText);
@@ -172,6 +174,7 @@
         bar.style.width = pct + '%';
         st.textContent  = 'processing ' + pct + '%';
         if(pct >= 100){ es.close(); st.textContent = 'done'; }
+        if(pct < 0){ es.close(); st.textContent = 'error'; showError('processing failed'); }
       };
       es.onerror = () => {
         es.close();

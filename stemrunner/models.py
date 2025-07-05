@@ -31,6 +31,18 @@ class ModelManager:
         self.karaoke_model = self._load_model('mel_band_roformer_karaoke_becruily.ckpt')
         self.guitar_model = self._load_model('becruily_guitar.ckpt')
 
+    def missing_models(self):
+        required = {
+            'vocals': self.vocals_model,
+            'instrumental': self.instrumental_model,
+            'drums': self.drums_model,
+            'bass': self.bass_model,
+            'other': self.other_model,
+            'karaoke': self.karaoke_model,
+            'guitar': self.guitar_model,
+        }
+        return [name for name, path in required.items() if path is None]
+
     def _load_model(self, name: str):
         """Return the path to a model checkpoint if it exists."""
         path = MODELS_DIR / name
