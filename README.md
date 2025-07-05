@@ -42,6 +42,7 @@ python install.py
 Your default browser will open `http://localhost:6060` where a loading bar
 displays each installation step. When the bar reaches 100% the environment is
 ready to use. If a step fails an error message appears on the page.
+The server automatically starts at http://localhost:8000 when installation completes.
 
 You can still perform the steps manually if you prefer:
 
