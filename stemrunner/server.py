@@ -12,6 +12,7 @@ from .models import ModelManager
 app = FastAPI()
 manager = ModelManager()
 progress = {}
+errors = {}
 
 
 @app.post('/upload')
@@ -33,9 +34,10 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     def run():
         try:
             process_file(path, manager, progress_cb=cb)
-        except Exception:
+        except Exception as exc:
             logging.exception('processing failed')
             progress[task_id] = -1
+            errors[task_id] = str(exc)
 
     background_tasks.add_task(run)
     progress[task_id] = 0
@@ -51,7 +53,10 @@ async def progress_stream(task_id: str):
         while True:
             pct = progress.get(task_id, 0)
             if pct != last:
-                yield {'event': 'message', 'data': str(pct)}
+                if pct < 0:
+                    yield {'event': 'error', 'data': errors.get(task_id, 'processing failed')}
+                else:
+                    yield {'event': 'message', 'data': str(pct)}
                 last = pct
             if pct >= 100 or pct < 0:
                 break

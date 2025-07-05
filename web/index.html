@@ -214,6 +214,12 @@
         if(pct >= 100){ es.close(); st.textContent = 'done'; saveTasks(); }
         if(pct < 0){ es.close(); st.textContent = 'error'; showError('processing failed'); saveTasks(); }
       };
+      es.addEventListener('error', (e) => {
+        es.close();
+        st.textContent = 'error';
+        showError(e.data || 'processing failed');
+        saveTasks();
+      });
       es.onerror = () => {
         es.close();
         st.textContent = 'error';

@@ -55,7 +55,10 @@ def process_file(
         load_path = temp_path
     else:
         load_path = path
-    waveform, sr = torchaudio.load(load_path)
+    try:
+        waveform, sr = torchaudio.load(load_path)
+    except Exception as exc:
+        raise RuntimeError(f'failed to load audio file {path.name}') from exc
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
     progress_cb(10)
