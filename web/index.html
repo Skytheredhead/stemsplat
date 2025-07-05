@@ -109,6 +109,13 @@
     dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
     fileInput.addEventListener('change', e => handleFiles(e.target.files));
 
+    function showError(msg){
+      alert('Upload failed: ' + msg + '\n\nTroubleshooting steps:\n' +
+            '1. Make sure the server is running.\n' +
+            '2. Verify you selected a valid audio file.\n' +
+            '3. Check the terminal for additional details.');
+    }
+
     /* === upload & progress logic === */
     async function handleFiles(fileList){
       [...fileList].forEach(file => {
@@ -140,12 +147,19 @@
         };
 
         xhr.onload = () => {
-          if(xhr.status !== 200){ st.textContent = 'error'; return; }
+          if(xhr.status !== 200){
+            st.textContent = 'error';
+            showError('server responded with status ' + xhr.status);
+            return;
+          }
           const res = JSON.parse(xhr.responseText);
           st.textContent = 'processing…';
           trackProgress(res.task_id, bar, st);
         };
-        xhr.onerror = () => st.textContent = 'error';
+        xhr.onerror = () => {
+          st.textContent = 'error';
+          showError('network error during upload');
+        };
 
         xhr.send(data);
       });
@@ -159,7 +173,11 @@
         st.textContent  = 'processing ' + pct + '%';
         if(pct >= 100){ es.close(); st.textContent = 'done'; }
       };
-      es.onerror = () => { es.close(); st.textContent = 'error'; };
+      es.onerror = () => {
+        es.close();
+        st.textContent = 'error';
+        showError('processing failed');
+      };
     }
   </script>
 </body>

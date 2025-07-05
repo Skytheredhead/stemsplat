@@ -47,8 +47,16 @@
       const err = document.getElementById('error');
       if(data.pct >= 0){ bar.style.width = data.pct + '%'; }
       status.textContent = data.step;
-      if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
-      if(data.pct >= 100){ return; }
+      if(data.pct === -1){
+        err.textContent = 'installation failed';
+        err.classList.remove('hidden');
+        return;
+      }
+      if(data.pct >= 100){
+        // redirect to running application once setup finishes
+        location.href = 'http://localhost:8000/';
+        return;
+      }
       setTimeout(poll, 1000);
     }
     poll();

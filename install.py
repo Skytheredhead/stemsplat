@@ -49,6 +49,12 @@ def pip_path():
     else:
         return Path('venv') / 'bin' / 'pip'
 
+def python_path():
+    if os.name == 'nt':
+        return Path('venv') / 'Scripts' / 'python'
+    else:
+        return Path('venv') / 'bin' / 'python'
+
 def install():
     steps = [
         ('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']),
@@ -76,6 +82,9 @@ def install():
             return
     progress['pct'] = 100
     progress['step'] = 'done'
+    # launch the web application once installation finishes
+    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'stemrunner.server:app'])
+    webbrowser.open('http://localhost:8000/')
 
 if __name__ == '__main__':
     run_server()
