@@ -223,8 +223,8 @@
 
     function trackProgress(id, bar, st, dl, task){
       const es = new EventSource(`/progress/${id}`);
-      es.onmessage = (e) => {
-        const info = JSON.parse(e.data);
+      es.onmessage = (evt) => {
+        const info = JSON.parse(evt.data);
         bar.style.width = info.pct + '%';
         const [s,e] = STAGE_RANGES[info.stage] || [0,100];
         const sp = Math.round(((info.pct - s) / (e - s)) * 100);
