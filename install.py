@@ -84,7 +84,6 @@ def install():
     progress['step'] = 'done'
     # launch the web application once installation finishes
     subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'stemrunner.server:app'])
-    webbrowser.open('http://localhost:8000/')
 
 if __name__ == '__main__':
     run_server()
