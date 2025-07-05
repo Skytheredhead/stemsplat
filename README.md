@@ -42,6 +42,7 @@ python install.py
 Your default browser will open `http://localhost:6060` where a loading bar
 displays each installation step. When the bar reaches 100% the environment is
 ready to use. If a step fails an error message appears on the page.
+The server automatically starts at http://localhost:8000 when installation completes.
 
 You can still perform the steps manually if you prefer:
 
@@ -105,7 +106,10 @@ instrumental, drums, bass, other, karaoke and guitar).
 - Check CUDA drivers if GPU inference fails.
 - Ensure checkpoint files are present in `models/`.
 - Verify `.yaml` configs are in `configs/`.
+- Ensure model filenames match those listed in `stemrunner/models.py`.
 - Install `ffmpeg` if uploads fail to convert or load.
+- Ensure Python packages installed correctly; reinstall requirements if the
+  server complains about missing modules like `numpy`.
 
 
 ## Double-click installer

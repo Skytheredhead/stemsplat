@@ -5,3 +5,4 @@ uvicorn[standard]
 click
 sse-starlette
 python-multipart
+numpy

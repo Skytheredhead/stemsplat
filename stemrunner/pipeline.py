@@ -10,8 +10,8 @@ import torchaudio
 from .models import ModelManager
 
 SEGMENT_STAGE_A = 352800
-SEGMENT_STAGE_B = 4000
-OVERLAP = 8
+SEGMENT_STAGE_B = SEGMENT_STAGE_A
+OVERLAP = 12
 
 
 def _convert_to_wav(path: Path, sample_rate: int) -> Path:
@@ -122,14 +122,16 @@ def process_file(
     manager: ModelManager,
     segment: int | None = None,
     outdir: str | None = None,
-    progress_cb: Optional[Callable[[int], None]] = None,
+    progress_cb: Optional[Callable[[str, int], None]] = None,
+    delay: float = 0.5,
 ):
     """Process a single audio file and save stems."""
     if progress_cb is None:
-        progress_cb = lambda x: None
+        progress_cb = lambda stage, pct: None
     sample_rate = 44100
     temp_path = None
     load_path = path
+    progress_cb('preparing', 0)
     if path.suffix.lower() != '.wav':
         temp_path = _convert_to_wav(path, sample_rate)
         load_path = temp_path
@@ -143,24 +145,46 @@ def process_file(
         raise RuntimeError(msg) from exc
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
-    progress_cb(10)
+    progress_cb('preparing', 10)
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
     out_dir.mkdir(exist_ok=True)
 
-    # Stage A
-    vocals, instrumental = manager.split_vocals(waveform, segment or SEGMENT_STAGE_A, OVERLAP)
-    progress_cb(40)
+    # Stage A - Vocals (10%-50%)
+    stage_start, stage_end = 10, 50
+    progress_cb('vocals', stage_start)
+    def vocals_cb(pct):
+        total = stage_start + int((stage_end - stage_start) * pct / 100)
+        progress_cb('vocals', total)
+    vocals, instrumental = manager.split_vocals(
+        waveform,
+        segment or SEGMENT_STAGE_A,
+        OVERLAP,
+        progress_cb=vocals_cb,
+        delay=delay,
+    )
+    progress_cb('vocals', stage_end)
     _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
 
-    # Stage B
-    drums, bass, other, karaoke, guitar = manager.split_instrumental(instrumental, SEGMENT_STAGE_B, OVERLAP)
-    progress_cb(70)
+    # Stage B - Stems (50%-100%)
+    stage_start, stage_end = 50, 100
+    progress_cb('stems', stage_start)
+    def stems_cb(pct):
+        total = stage_start + int((stage_end - stage_start) * pct / 100)
+        progress_cb('stems', total)
+    drums, bass, other, karaoke, guitar = manager.split_instrumental(
+        instrumental,
+        SEGMENT_STAGE_B,
+        OVERLAP,
+        progress_cb=stems_cb,
+        delay=delay,
+    )
+    progress_cb('stems', stage_end)
     _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate)
-    progress_cb(100)
+    progress_cb('done', 100)
     if temp_path is not None:
         temp_path.unlink(missing_ok=True)
