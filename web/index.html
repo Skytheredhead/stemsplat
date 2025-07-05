@@ -76,7 +76,10 @@
     <div class="glass rounded-xl px-6 py-4 flex flex-col gap-2">
       <div class="flex justify-between items-center">
         <span class="truncate text-[var(--txt-main)] text-sm filename"></span>
-        <span class="text-xs text-[var(--accent-lite)] status">queued</span>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-[var(--accent-lite)] status">queued</span>
+          <a class="download hidden text-xs underline text-[var(--accent-lite)]" href="#">download</a>
+        </div>
       </div>
       <div class="w-full h-2 bg-gray-700 rounded overflow-hidden">
         <div class="h-full bg-[var(--accent)] progress" style="width:0%"></div>
@@ -104,13 +107,14 @@
       const li   = node.querySelector('.filename');
       const bar  = node.querySelector('.progress');
       const st   = node.querySelector('.status');
+      const dl   = node.querySelector('.download');
       li.textContent = task.name;
       bar.style.width = (task.pct||0) + '%';
-      if(task.pct >= 100) st.textContent = 'done';
+      if(task.pct >= 100){ st.textContent = 'done'; dl.classList.remove('hidden'); dl.href = '/download/' + task.id; }
       else if(task.pct < 0) st.textContent = 'error';
       else st.textContent = task.pct ? ('processing ' + task.pct + '%') : 'queued';
       queue.appendChild(node);
-      return {bar, st};
+      return {bar, st, dl};
     }
 
     clearBtn.addEventListener('click', () => {
@@ -122,9 +126,9 @@
 
     // restore previous tasks
     tasks.forEach(t => {
-      const {bar, st} = createItem(t);
+      const {bar, st, dl} = createItem(t);
       if(t.pct < 100 && t.pct >= 0){
-        trackProgress(t.id, bar, st, t);
+        trackProgress(t.id, bar, st, dl, t);
       }
     });
     updateClear();
@@ -195,11 +199,11 @@
           }
           const res = JSON.parse(xhr.responseText);
           st.textContent = 'processing…';
-          const task = {id: res.task_id, name: file.name, pct: 0};
+          const task = {id: res.task_id, name: file.name, pct: 0, stems: res.stems};
           tasks.push(task);
           saveTasks();
           updateClear();
-          trackProgress(res.task_id, bar, st, task);
+          trackProgress(res.task_id, bar, st, node.querySelector('.download'), task);
         };
         xhr.onerror = () => {
           st.textContent = 'error';
@@ -210,7 +214,7 @@
       });
     }
 
-    function trackProgress(id, bar, st, task){
+    function trackProgress(id, bar, st, dl, task){
       const es = new EventSource(`/progress/${id}`);
       es.onmessage = (e) => {
         const pct = parseInt(e.data);
@@ -218,7 +222,7 @@
         st.textContent  = 'processing ' + pct + '%';
         task.pct = pct;
         saveTasks();
-        if(pct >= 100){ es.close(); st.textContent = 'done'; saveTasks(); }
+        if(pct >= 100){ es.close(); st.textContent = 'done'; dl.classList.remove('hidden'); dl.href = '/download/' + id; saveTasks(); }
         if(pct < 0){ es.close(); st.textContent = 'error'; showError('processing failed'); saveTasks(); }
       };
       es.addEventListener('error', (e) => {

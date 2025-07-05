@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional
 import torch
+import torchaudio
 
 def _select_device(gpu: Optional[int]) -> torch.device:
     """Return best available device. Prefers CUDA when gpu provided,
@@ -58,16 +59,16 @@ class ModelManager:
         return None
 
     def split_vocals(self, waveform, segment: int, overlap: int):
-        # Placeholder: implement real inference here
-        vocals = waveform.clone()
-        instrumental = waveform.clone()
+        sr = 44100
+        vocals = torch.clone(torchaudio.functional.highpass_biquad(waveform, sr, 1000))
+        instrumental = waveform - vocals
         return vocals, instrumental
 
     def split_instrumental(self, waveform, segment: int, overlap: int):
-        """Placeholder secondary split producing five stems."""
-        drums = waveform.clone()
-        bass = waveform.clone()
-        other = waveform.clone()
+        sr = 44100
+        drums = torchaudio.functional.highpass_biquad(waveform, sr, 1500)
+        bass = torchaudio.functional.lowpass_biquad(waveform, sr, 250)
+        other = waveform - drums - bass
         karaoke = waveform.clone()
-        guitar = waveform.clone()
+        guitar = torchaudio.functional.bandpass_biquad(waveform, sr, 600, 0.707)
         return drums, bass, other, karaoke, guitar
