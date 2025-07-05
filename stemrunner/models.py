@@ -2,8 +2,15 @@ from pathlib import Path
 from typing import Callable, Optional
 import time
 import math
+import yaml
+import numpy as np
 import torch
 import torchaudio
+
+try:
+    import onnxruntime as ort
+except Exception:  # pragma: no cover - optional dependency
+    ort = None
 
 def _select_device(gpu: Optional[int]) -> torch.device:
     """Return best available device. Prefers CUDA when gpu provided,
@@ -19,6 +26,43 @@ def _select_device(gpu: Optional[int]) -> torch.device:
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / 'models'
 CONFIGS_DIR = Path(__file__).resolve().parent.parent / 'configs'
+
+
+class StemModel:
+    """Wrapper that loads either a TorchScript or ONNX model."""
+
+    def __init__(self, path: Path | None, device: torch.device):
+        self.device = device
+        self.kind = 'none'
+        self.session = None
+        self.net = None
+        if path is None:
+            return
+        if path.suffix.lower() == '.onnx' and ort is not None:
+            try:
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if device.type == 'cuda' else ['CPUExecutionProvider']
+                self.session = ort.InferenceSession(str(path), providers=providers)
+                self.kind = 'onnx'
+            except Exception:
+                self.session = None
+        else:
+            try:
+                self.net = torch.jit.load(str(path), map_location=device)
+                self.net.eval()
+                self.kind = 'torchscript'
+            except Exception:
+                self.net = None
+
+    def __call__(self, mag: torch.Tensor) -> torch.Tensor:
+        if self.kind == 'onnx' and self.session is not None:
+            inp_name = self.session.get_inputs()[0].name
+            out = self.session.run(None, {inp_name: mag.detach().cpu().numpy()})[0]
+            return torch.from_numpy(out).to(mag.device)
+        if self.kind == 'torchscript' and self.net is not None:
+            with torch.no_grad():
+                return self.net(mag)
+        # fallback mask: all-pass
+        return mag.new_ones(mag.shape)
 
 
 class ModelManager:
@@ -40,7 +84,8 @@ class ModelManager:
     def refresh_models(self):
         """Reload any missing model checkpoints from disk."""
         for name, (model_fname, cfg_fname) in self.model_info.items():
-            setattr(self, f"{name}_model", self._load_path(MODELS_DIR / model_fname))
+            path = self._load_path(MODELS_DIR / model_fname)
+            setattr(self, name, StemModel(path, self.device))
             if cfg_fname:
                 setattr(self, f"{name}_config", self._load_path(CONFIGS_DIR / cfg_fname))
 
@@ -48,7 +93,8 @@ class ModelManager:
         self.refresh_models()
         missing = []
         for name, (model_fname, cfg_fname) in self.model_info.items():
-            if getattr(self, f"{name}_model") is None:
+            model_obj = getattr(self, name)
+            if model_obj.kind == 'none':
                 missing.append(model_fname)
             elif cfg_fname and getattr(self, f"{name}_config") is None:
                 missing.append(cfg_fname)
@@ -75,13 +121,32 @@ class ModelManager:
         step = max(1, segment - overlap)
         vocals = torch.zeros_like(waveform, device=device)
         instrumental = torch.zeros_like(waveform, device=device)
+        n_fft = 2048
+        hop = 441
+        win = torch.hann_window(n_fft, device=device)
         for start in range(0, length, step):
             end = min(start + segment, length)
             seg = waveform[:, start:end]
-            v = torchaudio.functional.highpass_biquad(seg, sr, 1000)
-            i = seg - v
-            vocals[:, start:end] += v
-            instrumental[:, start:end] += i
+            if seg.shape[1] < n_fft:
+                vocals[:, start:end] += seg
+                instrumental[:, start:end] += seg * 0
+                pct = int((end / length) * 100)
+                if progress_cb:
+                    progress_cb(pct)
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                if delay:
+                    time.sleep(delay)
+                continue
+            spec = torch.stft(seg, n_fft=n_fft, hop_length=hop, win_length=n_fft,
+                               window=win, return_complex=True)
+            mag = spec.abs().unsqueeze(0)
+            mask = self.vocals(mag)[0]
+            voc_spec = spec * mask
+            voc = torch.istft(voc_spec, n_fft=n_fft, hop_length=hop,
+                              win_length=n_fft, window=win, length=seg.shape[1])
+            vocals[:, start:start + voc.shape[1]] += voc
+            instrumental[:, start:start + voc.shape[1]] += seg[:, :voc.shape[1]] - voc
             pct = int((end / length) * 100)
             if progress_cb:
                 progress_cb(pct)
@@ -109,19 +174,54 @@ class ModelManager:
         other = torch.zeros_like(waveform, device=device)
         karaoke = torch.zeros_like(waveform, device=device)
         guitar = torch.zeros_like(waveform, device=device)
+        n_fft = 2048
+        hop = 441
+        win = torch.hann_window(n_fft, device=device)
         for start in range(0, length, step):
             end = min(start + segment, length)
             seg = waveform[:, start:end]
-            d = torchaudio.functional.highpass_biquad(seg, sr, 1500)
-            b = torchaudio.functional.lowpass_biquad(seg, sr, 250)
-            o = seg - d - b
-            k = seg.clone()
-            g = torchaudio.functional.bandpass_biquad(seg, sr, 600, 0.707)
-            drums[:, start:end] += d
-            bass[:, start:end] += b
-            other[:, start:end] += o
-            karaoke[:, start:end] += k
-            guitar[:, start:end] += g
+            if seg.shape[1] < n_fft:
+                drums[:, start:end] += seg * 0
+                bass[:, start:end] += seg * 0
+                other[:, start:end] += seg * 0
+                karaoke[:, start:end] += seg * 0
+                guitar[:, start:end] += seg * 0
+                pct = int((end / length) * 100)
+                if progress_cb:
+                    progress_cb(pct)
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                if delay:
+                    time.sleep(delay)
+                continue
+            spec = torch.stft(seg, n_fft=n_fft, hop_length=hop, win_length=n_fft,
+                               window=win, return_complex=True)
+            mag = spec.abs().unsqueeze(0)
+            d_mask = self.drums(mag)[0]
+            b_mask = self.bass(mag)[0]
+            o_mask = self.other(mag)[0]
+            k_mask = self.karaoke(mag)[0]
+            g_mask = self.guitar(mag)[0]
+            drums_spec = spec * d_mask
+            bass_spec = spec * b_mask
+            other_spec = spec * o_mask
+            karaoke_spec = spec * k_mask
+            guitar_spec = spec * g_mask
+            drums_seg = torch.istft(drums_spec, n_fft=n_fft, hop_length=hop,
+                                   win_length=n_fft, window=win, length=seg.shape[1])
+            bass_seg = torch.istft(bass_spec, n_fft=n_fft, hop_length=hop,
+                                  win_length=n_fft, window=win, length=seg.shape[1])
+            other_seg = torch.istft(other_spec, n_fft=n_fft, hop_length=hop,
+                                   win_length=n_fft, window=win, length=seg.shape[1])
+            karaoke_seg = torch.istft(karaoke_spec, n_fft=n_fft, hop_length=hop,
+                                     win_length=n_fft, window=win, length=seg.shape[1])
+            guitar_seg = torch.istft(guitar_spec, n_fft=n_fft, hop_length=hop,
+                                    win_length=n_fft, window=win, length=seg.shape[1])
+            drums[:, start:start + drums_seg.shape[1]] += drums_seg
+            bass[:, start:start + bass_seg.shape[1]] += bass_seg
+            other[:, start:start + other_seg.shape[1]] += other_seg
+            karaoke[:, start:start + karaoke_seg.shape[1]] += karaoke_seg
+            guitar[:, start:start + guitar_seg.shape[1]] += guitar_seg
             pct = int((end / length) * 100)
             if progress_cb:
                 progress_cb(pct)
