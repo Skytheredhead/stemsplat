@@ -1,9 +1,10 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 from pathlib import Path
 import uuid
 import asyncio
+import logging
 
 from .pipeline import process_file
 from .models import ModelManager
@@ -21,10 +22,22 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
+    missing = manager.missing_models()
+    if missing:
+        msg = 'missing model files: ' + ', '.join(missing)
+        return JSONResponse({'detail': msg}, status_code=400)
+
     def cb(pct: int):
         progress[task_id] = pct
 
-    background_tasks.add_task(process_file, path, manager, progress_cb=cb)
+    def run():
+        try:
+            process_file(path, manager, progress_cb=cb)
+        except Exception:
+            logging.exception('processing failed')
+            progress[task_id] = -1
+
+    background_tasks.add_task(run)
     progress[task_id] = 0
     stems = [f"{Path(file.filename).stem}—{name}.wav" for name in [
         'Vocals', 'Instrumental', 'Drums', 'Bass', 'Other', 'Karaoke', 'Guitar']]
@@ -40,7 +53,7 @@ async def progress_stream(task_id: str):
             if pct != last:
                 yield {'event': 'message', 'data': str(pct)}
                 last = pct
-            if pct >= 100:
+            if pct >= 100 or pct < 0:
                 break
             await asyncio.sleep(0.5)
     return EventSourceResponse(event_generator())

@@ -23,13 +23,25 @@ class ModelManager:
 
     def __init__(self, gpu: Optional[int] = None):
         self.device = _select_device(gpu)
-        self.vocals_model = self._load_model('mel_band_roformer_vocals_becruily.ckpt')
-        self.instrumental_model = self._load_model('mel_band_roformer_instrumental_becruily.ckpt')
-        self.drums_model = self._load_model('kuielab_a_drums.onnx')
-        self.bass_model = self._load_model('kuielab_a_bass.onnx')
-        self.other_model = self._load_model('kuielab_a_other.onnx')
-        self.karaoke_model = self._load_model('mel_band_roformer_karaoke_becruily.ckpt')
-        self.guitar_model = self._load_model('becruily_guitar.ckpt')
+        self.model_files = {
+            'vocals': 'mel_band_roformer_vocals_becruily.ckpt',
+            'instrumental': 'mel_band_roformer_instrumental_becruily.ckpt',
+            'drums': 'kuielab_a_drums.onnx',
+            'bass': 'kuielab_a_bass.onnx',
+            'other': 'kuielab_a_other.onnx',
+            'karaoke': 'mel_band_roformer_karaoke_becruily.ckpt',
+            'guitar': 'becruily_guitar.ckpt',
+        }
+        self.refresh_models()
+
+    def refresh_models(self):
+        """Reload any missing model checkpoints from disk."""
+        for attr, fname in self.model_files.items():
+            setattr(self, f"{attr}_model", self._load_model(fname))
+
+    def missing_models(self):
+        self.refresh_models()
+        return [name for name in self.model_files if getattr(self, f"{name}_model") is None]
 
     def _load_model(self, name: str):
         """Return the path to a model checkpoint if it exists."""
