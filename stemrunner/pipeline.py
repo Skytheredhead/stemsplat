@@ -123,7 +123,7 @@ def process_file(
     segment: int | None = None,
     outdir: str | None = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
-    delay: float = 0.5,
+    delay: float = 0.0,
 ):
     """Process a single audio file and save stems."""
     if progress_cb is None:
@@ -149,12 +149,19 @@ def process_file(
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
     out_dir.mkdir(exist_ok=True)
 
-    # Stage A - Vocals (10%-50%)
-    stage_start, stage_end = 10, 50
-    progress_cb('vocals', stage_start)
-    def vocals_cb(pct):
-        total = stage_start + int((stage_end - stage_start) * pct / 100)
-        progress_cb('vocals', total)
+    # progress tracking like UVR: 2 models per file
+    total_models = 2
+    iteration = 1
+    base = 100 / total_models
+
+    def calc_progress(step: float) -> int:
+        progress = base * iteration - base
+        progress += base * step
+        return int(progress)
+
+    progress_cb('vocals', calc_progress(0.0))
+    def vocals_cb(frac: float):
+        progress_cb('vocals', calc_progress(frac))
     vocals, instrumental = manager.split_vocals(
         waveform,
         segment or SEGMENT_STAGE_A,
@@ -162,16 +169,14 @@ def process_file(
         progress_cb=vocals_cb,
         delay=delay,
     )
-    progress_cb('vocals', stage_end)
+    progress_cb('vocals', calc_progress(1.0))
+    iteration += 1
     _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
 
-    # Stage B - Stems (50%-100%)
-    stage_start, stage_end = 50, 100
-    progress_cb('stems', stage_start)
-    def stems_cb(pct):
-        total = stage_start + int((stage_end - stage_start) * pct / 100)
-        progress_cb('stems', total)
+    progress_cb('stems', calc_progress(0.0))
+    def stems_cb(frac: float):
+        progress_cb('stems', calc_progress(frac))
     drums, bass, other, karaoke, guitar = manager.split_instrumental(
         instrumental,
         SEGMENT_STAGE_B,
@@ -179,7 +184,7 @@ def process_file(
         progress_cb=stems_cb,
         delay=delay,
     )
-    progress_cb('stems', stage_end)
+    progress_cb('stems', calc_progress(1.0))
     _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)
