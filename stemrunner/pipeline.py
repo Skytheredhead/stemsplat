@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Callable, Optional
+import tempfile
 import torchaudio
 
 from .models import ModelManager
@@ -20,9 +21,14 @@ def process_file(
     if progress_cb is None:
         progress_cb = lambda x: None
     sample_rate = 44100
+    temp_path = None
     waveform, sr = torchaudio.load(path)
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
+    if path.suffix.lower() != '.wav':
+        temp_path = Path(tempfile.mkstemp(suffix='.wav')[1])
+        torchaudio.save(temp_path, waveform, sample_rate, encoding='PCM_S24LE')
+        path = temp_path
     progress_cb(10)
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
     out_dir.mkdir(exist_ok=True)
@@ -42,3 +48,5 @@ def process_file(
     torchaudio.save(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate, encoding='PCM_S24LE')
     torchaudio.save(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate, encoding='PCM_S24LE')
     progress_cb(100)
+    if temp_path is not None:
+        temp_path.unlink(missing_ok=True)

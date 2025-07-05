@@ -23,29 +23,36 @@ class ModelManager:
 
     def __init__(self, gpu: Optional[int] = None):
         self.device = _select_device(gpu)
-        self.model_files = {
-            'vocals': 'mel_band_roformer_vocals_becruily.ckpt',
-            'instrumental': 'mel_band_roformer_instrumental_becruily.ckpt',
-            'drums': 'kuielab_a_drums.onnx',
-            'bass': 'kuielab_a_bass.onnx',
-            'other': 'kuielab_a_other.onnx',
-            'karaoke': 'mel_band_roformer_karaoke_becruily.ckpt',
-            'guitar': 'becruily_guitar.ckpt',
+        self.model_info = {
+            'vocals': ('Mel Band Roformer Vocals.ckpt', 'Mel Band Roformer Vocals Config.yaml'),
+            'instrumental': ('Mel Band Roformer Instrumental.ckpt', 'Mel Band Roformer Instrumental Config.yaml'),
+            'drums': ('kuielab_a_drums.onnx', None),
+            'bass': ('kuielab_a_bass.onnx', None),
+            'other': ('kuielab_a_other.onnx', None),
+            'karaoke': ('mel_band_roformer_karaoke_becruily.ckpt', None),
+            'guitar': ('becruily_guitar.ckpt', 'config_guitar_becruily.yaml'),
         }
         self.refresh_models()
 
     def refresh_models(self):
         """Reload any missing model checkpoints from disk."""
-        for attr, fname in self.model_files.items():
-            setattr(self, f"{attr}_model", self._load_model(fname))
+        for name, (model_fname, cfg_fname) in self.model_info.items():
+            setattr(self, f"{name}_model", self._load_path(MODELS_DIR / model_fname))
+            if cfg_fname:
+                setattr(self, f"{name}_config", self._load_path(CONFIGS_DIR / cfg_fname))
 
     def missing_models(self):
         self.refresh_models()
-        return [name for name in self.model_files if getattr(self, f"{name}_model") is None]
+        missing = []
+        for name, (model_fname, cfg_fname) in self.model_info.items():
+            if getattr(self, f"{name}_model") is None:
+                missing.append(model_fname)
+            elif cfg_fname and getattr(self, f"{name}_config") is None:
+                missing.append(cfg_fname)
+        return missing
 
-    def _load_model(self, name: str):
-        """Return the path to a model checkpoint if it exists."""
-        path = MODELS_DIR / name
+    def _load_path(self, path: Path):
+        """Return the path if it exists."""
         if path.exists():
             return path
         return None
