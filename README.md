@@ -111,4 +111,5 @@ terminal:
 
 Both scripts simply execute `python3 install.py`, which opens
 `http://localhost:6060` in your browser and shows a progress card while the
-dependencies are installed.
+dependencies are installed. When installation completes the page stays
+available; press `Ctrl+C` in the terminal to exit.
