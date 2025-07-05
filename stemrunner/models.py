@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+import time
 import torch
 import torchaudio
 
@@ -58,17 +59,64 @@ class ModelManager:
             return path
         return None
 
-    def split_vocals(self, waveform, segment: int, overlap: int):
+    def split_vocals(
+        self,
+        waveform,
+        segment: int,
+        overlap: int,
+        progress_cb: Optional[Callable[[int], None]] = None,
+        delay: float = 0.0,
+    ):
         sr = 44100
-        vocals = torch.clone(torchaudio.functional.highpass_biquad(waveform, sr, 1000))
-        instrumental = waveform - vocals
+        length = waveform.shape[1]
+        chunk = max(1, length // 10)
+        vocals = torch.empty_like(waveform)
+        instrumental = torch.empty_like(waveform)
+        for i in range(0, length, chunk):
+            end = min(i + chunk, length)
+            seg = waveform[:, i:end]
+            v = torchaudio.functional.highpass_biquad(seg, sr, 1000)
+            vocals[:, i:end] = v
+            instrumental[:, i:end] = seg - v
+            pct = int((end / length) * 100)
+            if progress_cb:
+                progress_cb(pct)
+            if delay:
+                time.sleep(delay)
         return vocals, instrumental
 
-    def split_instrumental(self, waveform, segment: int, overlap: int):
+    def split_instrumental(
+        self,
+        waveform,
+        segment: int,
+        overlap: int,
+        progress_cb: Optional[Callable[[int], None]] = None,
+        delay: float = 0.0,
+    ):
         sr = 44100
-        drums = torchaudio.functional.highpass_biquad(waveform, sr, 1500)
-        bass = torchaudio.functional.lowpass_biquad(waveform, sr, 250)
-        other = waveform - drums - bass
-        karaoke = waveform.clone()
-        guitar = torchaudio.functional.bandpass_biquad(waveform, sr, 600, 0.707)
+        length = waveform.shape[1]
+        chunk = max(1, length // 10)
+        drums = torch.empty_like(waveform)
+        bass = torch.empty_like(waveform)
+        other = torch.empty_like(waveform)
+        karaoke = torch.empty_like(waveform)
+        guitar = torch.empty_like(waveform)
+        for i in range(0, length, chunk):
+            end = min(i + chunk, length)
+            seg = waveform[:, i:end]
+            d = torchaudio.functional.highpass_biquad(seg, sr, 1500)
+            b = torchaudio.functional.lowpass_biquad(seg, sr, 250)
+            o = seg - d - b
+            k = seg.clone()
+            g = torchaudio.functional.bandpass_biquad(seg, sr, 600, 0.707)
+            drums[:, i:end] = d
+            bass[:, i:end] = b
+            other[:, i:end] = o
+            karaoke[:, i:end] = k
+            guitar[:, i:end] = g
+            pct = int((end / length) * 100)
+            if progress_cb:
+                progress_cb(pct)
+            if delay:
+                time.sleep(delay)
         return drums, bass, other, karaoke, guitar

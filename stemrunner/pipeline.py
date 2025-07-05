@@ -123,6 +123,7 @@ def process_file(
     segment: int | None = None,
     outdir: str | None = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
+    delay: float = 0.0,
 ):
     """Process a single audio file and save stems."""
     if progress_cb is None:
@@ -144,21 +145,41 @@ def process_file(
         raise RuntimeError(msg) from exc
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
-    progress_cb('preparing', 100)
+    progress_cb('preparing', 10)
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
     out_dir.mkdir(exist_ok=True)
 
-    # Stage A - Vocals
-    progress_cb('vocals', 0)
-    vocals, instrumental = manager.split_vocals(waveform, segment or SEGMENT_STAGE_A, OVERLAP)
-    progress_cb('vocals', 100)
+    # Stage A - Vocals (10%-50%)
+    stage_start, stage_end = 10, 50
+    progress_cb('vocals', stage_start)
+    def vocals_cb(pct):
+        total = stage_start + int((stage_end - stage_start) * pct / 100)
+        progress_cb('vocals', total)
+    vocals, instrumental = manager.split_vocals(
+        waveform,
+        segment or SEGMENT_STAGE_A,
+        OVERLAP,
+        progress_cb=vocals_cb,
+        delay=delay,
+    )
+    progress_cb('vocals', stage_end)
     _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
 
-    # Stage B - Stems
-    progress_cb('stems', 0)
-    drums, bass, other, karaoke, guitar = manager.split_instrumental(instrumental, SEGMENT_STAGE_B, OVERLAP)
-    progress_cb('stems', 100)
+    # Stage B - Stems (50%-100%)
+    stage_start, stage_end = 50, 100
+    progress_cb('stems', stage_start)
+    def stems_cb(pct):
+        total = stage_start + int((stage_end - stage_start) * pct / 100)
+        progress_cb('stems', total)
+    drums, bass, other, karaoke, guitar = manager.split_instrumental(
+        instrumental,
+        SEGMENT_STAGE_B,
+        OVERLAP,
+        progress_cb=stems_cb,
+        delay=delay,
+    )
+    progress_cb('stems', stage_end)
     _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)

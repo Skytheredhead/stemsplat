@@ -96,6 +96,7 @@
     const template  = document.getElementById('item-template');
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
+    const STAGE_RANGES = {preparing:[0,10], vocals:[10,50], stems:[50,100], done:[100,100]};
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
     function updateClear(){
       if(tasks.length) clearBtn.classList.remove('hidden');
@@ -112,7 +113,11 @@
       bar.style.width = (task.pct||0) + '%';
       if(task.pct >= 100){ st.textContent = 'done'; dl.classList.remove('hidden'); dl.href = '/download/' + task.id; }
       else if(task.pct < 0) st.textContent = 'error';
-      else st.textContent = task.stage ? `${task.stage} (${task.pct}%)` : 'queued';
+      else {
+        const [s,e] = STAGE_RANGES[task.stage] || [0,100];
+        const sp = Math.round(((task.pct - s) / (e - s)) * 100);
+        st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
+      }
       queue.appendChild(node);
       return {bar, st, dl};
     }
@@ -221,7 +226,9 @@
       es.onmessage = (e) => {
         const info = JSON.parse(e.data);
         bar.style.width = info.pct + '%';
-        st.textContent  = info.stage ? `${info.stage} (${info.pct}%)` : `${info.pct}%`;
+        const [s,e] = STAGE_RANGES[info.stage] || [0,100];
+        const sp = Math.round(((info.pct - s) / (e - s)) * 100);
+        st.textContent  = info.stage ? `${info.stage} (${sp}%)` : `${info.pct}%`;
         task.pct = info.pct;
         task.stage = info.stage;
         saveTasks();
