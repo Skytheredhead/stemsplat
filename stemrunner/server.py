@@ -5,12 +5,15 @@ from pathlib import Path
 import uuid
 import asyncio
 import logging
+import json
+from urllib.parse import quote
 
 from .pipeline import process_file
 from .models import ModelManager
 
 app = FastAPI()
 manager = ModelManager()
+# map task_id -> {'stage': str, 'pct': int}
 progress = {}
 errors = {}
 tasks = {}
@@ -29,19 +32,19 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         msg = 'missing model files: ' + ', '.join(missing)
         return JSONResponse({'detail': msg}, status_code=400)
 
-    def cb(pct: int):
-        progress[task_id] = pct
+    def cb(stage: str, pct: int):
+        progress[task_id] = {'stage': stage, 'pct': pct}
 
     def run():
         try:
             process_file(path, manager, progress_cb=cb)
         except Exception as exc:
             logging.exception('processing failed')
-            progress[task_id] = -1
+            progress[task_id] = {'stage': 'error', 'pct': -1}
             errors[task_id] = str(exc)
 
     background_tasks.add_task(run)
-    progress[task_id] = 0
+    progress[task_id] = {'stage': 'queued', 'pct': 0}
     stems = [f"{Path(file.filename).stem}—{name}.wav" for name in [
         'Vocals', 'Instrumental', 'Drums', 'Bass', 'Other', 'Karaoke', 'Guitar']]
     out_dir = Path('uploads') / f"{Path(file.filename).stem}—stems"
@@ -52,16 +55,20 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 @app.get('/progress/{task_id}')
 async def progress_stream(task_id: str):
     async def event_generator():
-        last = -1
+        last = None
         while True:
-            pct = progress.get(task_id, 0)
-            if pct != last:
-                if pct < 0:
+            info = progress.get(task_id, {'stage': 'queued', 'pct': 0})
+            current = (info['stage'], info['pct'])
+            if current != last:
+                if info['pct'] < 0:
                     yield {'event': 'error', 'data': errors.get(task_id, 'processing failed')}
                 else:
-                    yield {'event': 'message', 'data': str(pct)}
-                last = pct
-            if pct >= 100 or pct < 0:
+                    yield {
+                        'event': 'message',
+                        'data': json.dumps({'stage': info['stage'], 'pct': info['pct']})
+                    }
+                last = current
+            if info['pct'] >= 100 or info['pct'] < 0:
                 break
             await asyncio.sleep(0.5)
     return EventSourceResponse(event_generator())
@@ -82,8 +89,10 @@ async def download(task_id: str):
             if fp.exists():
                 zf.write(fp, arcname=name)
     buf.seek(0)
+    fname = f"{info['dir'].name}.zip"
+    header = f"attachment; filename*=UTF-8''{quote(fname)}"
     return StreamingResponse(buf, media_type='application/zip', headers={
-        'Content-Disposition': f'attachment; filename="{info["dir"].name}.zip"'
+        'Content-Disposition': header
     })
 
 

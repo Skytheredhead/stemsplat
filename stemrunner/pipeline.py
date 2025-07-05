@@ -122,14 +122,15 @@ def process_file(
     manager: ModelManager,
     segment: int | None = None,
     outdir: str | None = None,
-    progress_cb: Optional[Callable[[int], None]] = None,
+    progress_cb: Optional[Callable[[str, int], None]] = None,
 ):
     """Process a single audio file and save stems."""
     if progress_cb is None:
-        progress_cb = lambda x: None
+        progress_cb = lambda stage, pct: None
     sample_rate = 44100
     temp_path = None
     load_path = path
+    progress_cb('preparing', 0)
     if path.suffix.lower() != '.wav':
         temp_path = _convert_to_wav(path, sample_rate)
         load_path = temp_path
@@ -143,24 +144,26 @@ def process_file(
         raise RuntimeError(msg) from exc
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
-    progress_cb(10)
+    progress_cb('preparing', 100)
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
     out_dir.mkdir(exist_ok=True)
 
-    # Stage A
+    # Stage A - Vocals
+    progress_cb('vocals', 0)
     vocals, instrumental = manager.split_vocals(waveform, segment or SEGMENT_STAGE_A, OVERLAP)
-    progress_cb(40)
+    progress_cb('vocals', 100)
     _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
 
-    # Stage B
+    # Stage B - Stems
+    progress_cb('stems', 0)
     drums, bass, other, karaoke, guitar = manager.split_instrumental(instrumental, SEGMENT_STAGE_B, OVERLAP)
-    progress_cb(70)
+    progress_cb('stems', 100)
     _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate)
     _save_waveform(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate)
-    progress_cb(100)
+    progress_cb('done', 100)
     if temp_path is not None:
         temp_path.unlink(missing_ok=True)
