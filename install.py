@@ -52,9 +52,18 @@ def pip_path():
 def install():
     steps = [
         ('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']),
-        ('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip']),
-        ('installing requirements', [str(pip_path()), 'install', '-r', 'requirements.txt'])
+        ('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip'])
     ]
+    reqs = []
+    req_file = Path('requirements.txt')
+    if req_file.exists():
+        for line in req_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith('#'):
+                reqs.append(line)
+    steps.extend([
+        (f'installing {pkg}', [str(pip_path()), 'install', pkg]) for pkg in reqs
+    ])
     total = len(steps)
     for i, (msg, cmd) in enumerate(steps, start=1):
         progress['step'] = msg
