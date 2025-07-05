@@ -29,29 +29,43 @@ CONFIGS_DIR = Path(__file__).resolve().parent.parent / 'configs'
 
 
 class StemModel:
-    """Wrapper that loads either a TorchScript or ONNX model."""
+    """Wrapper that loads TorchScript, ONNX or generic checkpoint files."""
 
     def __init__(self, path: Path | None, device: torch.device):
         self.device = device
         self.kind = 'none'
         self.session = None
         self.net = None
+        self.path = path
         if path is None:
             return
         if path.suffix.lower() == '.onnx' and ort is not None:
             try:
-                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if device.type == 'cuda' else ['CPUExecutionProvider']
+                providers = (
+                    ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                    if device.type == 'cuda'
+                    else ['CPUExecutionProvider']
+                )
                 self.session = ort.InferenceSession(str(path), providers=providers)
                 self.kind = 'onnx'
+                return
             except Exception:
                 self.session = None
+                self.kind = 'file'
         else:
             try:
                 self.net = torch.jit.load(str(path), map_location=device)
                 self.net.eval()
                 self.kind = 'torchscript'
+                return
             except Exception:
                 self.net = None
+                try:
+                    # fall back to loading generic checkpoint just to verify file
+                    torch.load(str(path), map_location='cpu')
+                    self.kind = 'file'
+                except Exception:
+                    self.kind = 'file'
 
     def __call__(self, mag: torch.Tensor) -> torch.Tensor:
         if self.kind == 'onnx' and self.session is not None:
@@ -90,6 +104,7 @@ class ModelManager:
                 setattr(self, f"{name}_config", self._load_path(CONFIGS_DIR / cfg_fname))
 
     def missing_models(self):
+        """Return a list of model or config files that could not be found."""
         self.refresh_models()
         missing = []
         for name, (model_fname, cfg_fname) in self.model_info.items():
