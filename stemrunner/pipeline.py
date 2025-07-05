@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Callable, Optional
 import tempfile
+import subprocess
 import torchaudio
 
 from .models import ModelManager
@@ -8,6 +9,33 @@ from .models import ModelManager
 SEGMENT_STAGE_A = 352800
 SEGMENT_STAGE_B = 4000
 OVERLAP = 8
+
+
+def _convert_to_wav(path: Path, sample_rate: int) -> Path:
+    """Convert an audio file to WAV using ffmpeg and return the new path."""
+    tmp = Path(tempfile.mkstemp(suffix='.wav')[1])
+    try:
+        subprocess.run(
+            [
+                'ffmpeg',
+                '-y',
+                '-i',
+                str(path),
+                '-ar',
+                str(sample_rate),
+                str(tmp),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError('ffmpeg not found') from exc
+    except subprocess.CalledProcessError as exc:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError('ffmpeg failed to convert audio') from exc
+    return tmp
 
 
 def process_file(
@@ -22,13 +50,14 @@ def process_file(
         progress_cb = lambda x: None
     sample_rate = 44100
     temp_path = None
-    waveform, sr = torchaudio.load(path)
+    if path.suffix.lower() != '.wav':
+        temp_path = _convert_to_wav(path, sample_rate)
+        load_path = temp_path
+    else:
+        load_path = path
+    waveform, sr = torchaudio.load(load_path)
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
-    if path.suffix.lower() != '.wav':
-        temp_path = Path(tempfile.mkstemp(suffix='.wav')[1])
-        torchaudio.save(temp_path, waveform, sample_rate, encoding='PCM_S24LE')
-        path = temp_path
     progress_cb(10)
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
     out_dir.mkdir(exist_ok=True)
