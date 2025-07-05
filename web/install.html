@@ -53,8 +53,8 @@
         return;
       }
       if(data.pct >= 100){
-        // redirect to running application once setup finishes
-        location.href = 'http://localhost:8000/';
+        // slight delay so the server has time to start
+        setTimeout(() => { location.href = 'http://localhost:8000/'; }, 2000);
         return;
       }
       setTimeout(poll, 1000);

@@ -69,6 +69,7 @@
 
   <!-- queue -->
   <div id="queue" class="w-11/12 max-w-2xl flex flex-col gap-4"></div>
+  <button id="clear-btn" class="mt-4 text-white underline">clear all</button>
 
   <!-- templates & scripts -->
   <template id="item-template">
@@ -88,7 +89,39 @@
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
     const queue     = document.getElementById('queue');
+    const clearBtn  = document.getElementById('clear-btn');
     const template  = document.getElementById('item-template');
+
+    let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
+    function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
+
+    function createItem(task){
+      const node = template.content.cloneNode(true);
+      const li   = node.querySelector('.filename');
+      const bar  = node.querySelector('.progress');
+      const st   = node.querySelector('.status');
+      li.textContent = task.name;
+      bar.style.width = (task.pct||0) + '%';
+      if(task.pct >= 100) st.textContent = 'done';
+      else if(task.pct < 0) st.textContent = 'error';
+      else st.textContent = task.pct ? ('processing ' + task.pct + '%') : 'queued';
+      queue.appendChild(node);
+      return {bar, st};
+    }
+
+    clearBtn.addEventListener('click', () => {
+      queue.innerHTML = '';
+      tasks = [];
+      saveTasks();
+    });
+
+    // restore previous tasks
+    tasks.forEach(t => {
+      const {bar, st} = createItem(t);
+      if(t.pct < 100 && t.pct >= 0){
+        trackProgress(t.id, bar, st, t);
+      }
+    });
 
     // drag-and-drop highlights
     ['dragenter','dragover'].forEach(evt =>
@@ -156,7 +189,10 @@
           }
           const res = JSON.parse(xhr.responseText);
           st.textContent = 'processing…';
-          trackProgress(res.task_id, bar, st);
+          const task = {id: res.task_id, name: file.name, pct: 0};
+          tasks.push(task);
+          saveTasks();
+          trackProgress(res.task_id, bar, st, task);
         };
         xhr.onerror = () => {
           st.textContent = 'error';
@@ -167,14 +203,16 @@
       });
     }
 
-    function trackProgress(id, bar, st){
+    function trackProgress(id, bar, st, task){
       const es = new EventSource(`/progress/${id}`);
       es.onmessage = (e) => {
         const pct = parseInt(e.data);
         bar.style.width = pct + '%';
         st.textContent  = 'processing ' + pct + '%';
-        if(pct >= 100){ es.close(); st.textContent = 'done'; }
-        if(pct < 0){ es.close(); st.textContent = 'error'; showError('processing failed'); }
+        task.pct = pct;
+        saveTasks();
+        if(pct >= 100){ es.close(); st.textContent = 'done'; saveTasks(); }
+        if(pct < 0){ es.close(); st.textContent = 'error'; showError('processing failed'); saveTasks(); }
       };
       es.onerror = () => {
         es.close();

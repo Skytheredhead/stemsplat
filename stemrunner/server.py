@@ -24,7 +24,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     missing = manager.missing_models()
     if missing:
-        return JSONResponse({'detail': 'models not uploaded', 'missing': missing}, status_code=400)
+        msg = 'missing model files: ' + ', '.join(missing)
+        return JSONResponse({'detail': msg}, status_code=400)
 
     def cb(pct: int):
         progress[task_id] = pct
