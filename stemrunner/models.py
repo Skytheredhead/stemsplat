@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Callable, Optional
 import time
+import math
 import torch
 import torchaudio
 
@@ -68,22 +69,27 @@ class ModelManager:
         delay: float = 0.0,
     ):
         sr = 44100
+        device = self.device
+        waveform = waveform.to(device)
         length = waveform.shape[1]
-        chunk = max(1, length // 10)
-        vocals = torch.empty_like(waveform)
-        instrumental = torch.empty_like(waveform)
-        for i in range(0, length, chunk):
-            end = min(i + chunk, length)
-            seg = waveform[:, i:end]
+        step = max(1, segment - overlap)
+        vocals = torch.zeros_like(waveform, device=device)
+        instrumental = torch.zeros_like(waveform, device=device)
+        for start in range(0, length, step):
+            end = min(start + segment, length)
+            seg = waveform[:, start:end]
             v = torchaudio.functional.highpass_biquad(seg, sr, 1000)
-            vocals[:, i:end] = v
-            instrumental[:, i:end] = seg - v
+            i = seg - v
+            vocals[:, start:end] += v
+            instrumental[:, start:end] += i
             pct = int((end / length) * 100)
             if progress_cb:
                 progress_cb(pct)
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
             if delay:
                 time.sleep(delay)
-        return vocals, instrumental
+        return vocals.cpu(), instrumental.cpu()
 
     def split_instrumental(
         self,
@@ -94,29 +100,39 @@ class ModelManager:
         delay: float = 0.0,
     ):
         sr = 44100
+        device = self.device
+        waveform = waveform.to(device)
         length = waveform.shape[1]
-        chunk = max(1, length // 10)
-        drums = torch.empty_like(waveform)
-        bass = torch.empty_like(waveform)
-        other = torch.empty_like(waveform)
-        karaoke = torch.empty_like(waveform)
-        guitar = torch.empty_like(waveform)
-        for i in range(0, length, chunk):
-            end = min(i + chunk, length)
-            seg = waveform[:, i:end]
+        step = max(1, segment - overlap)
+        drums = torch.zeros_like(waveform, device=device)
+        bass = torch.zeros_like(waveform, device=device)
+        other = torch.zeros_like(waveform, device=device)
+        karaoke = torch.zeros_like(waveform, device=device)
+        guitar = torch.zeros_like(waveform, device=device)
+        for start in range(0, length, step):
+            end = min(start + segment, length)
+            seg = waveform[:, start:end]
             d = torchaudio.functional.highpass_biquad(seg, sr, 1500)
             b = torchaudio.functional.lowpass_biquad(seg, sr, 250)
             o = seg - d - b
             k = seg.clone()
             g = torchaudio.functional.bandpass_biquad(seg, sr, 600, 0.707)
-            drums[:, i:end] = d
-            bass[:, i:end] = b
-            other[:, i:end] = o
-            karaoke[:, i:end] = k
-            guitar[:, i:end] = g
+            drums[:, start:end] += d
+            bass[:, start:end] += b
+            other[:, start:end] += o
+            karaoke[:, start:end] += k
+            guitar[:, start:end] += g
             pct = int((end / length) * 100)
             if progress_cb:
                 progress_cb(pct)
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
             if delay:
                 time.sleep(delay)
-        return drums, bass, other, karaoke, guitar
+        return (
+            drums.cpu(),
+            bass.cpu(),
+            other.cpu(),
+            karaoke.cpu(),
+            guitar.cpu(),
+        )

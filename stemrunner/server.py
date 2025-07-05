@@ -37,7 +37,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     def run():
         try:
-            process_file(path, manager, progress_cb=cb, delay=0.1)
+            process_file(path, manager, progress_cb=cb, delay=0.5)
         except Exception as exc:
             logging.exception('processing failed')
             progress[task_id] = {'stage': 'error', 'pct': -1}

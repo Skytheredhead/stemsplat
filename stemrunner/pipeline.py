@@ -123,7 +123,7 @@ def process_file(
     segment: int | None = None,
     outdir: str | None = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
-    delay: float = 0.0,
+    delay: float = 0.5,
 ):
     """Process a single audio file and save stems."""
     if progress_cb is None:
