@@ -202,7 +202,7 @@
     function showError(msg){
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
+      overlay.innerHTML = `<div class="solid-card p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
       document.body.appendChild(overlay);
       overlay.querySelector('button').onclick = () => overlay.remove();
     }

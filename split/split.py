@@ -13,11 +13,36 @@ Example
 python split.py --wav /path/to/song.wav          # uses built‑in defaults
 python split.py --ckpt other.ckpt --config other.yaml --wav song.wav
 """
-import argparse, os, yaml, importlib
+import argparse, os, importlib
 from pathlib import Path
-import numpy as np
-import torch, torchaudio, soundfile as sf
-from tqdm import tqdm
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - allows running tests without numpy
+    np = None
+import torch, torchaudio
+try:
+    import soundfile as sf
+except Exception:  # pragma: no cover - allows running tests without soundfile
+    sf = None
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover - allows running tests without tqdm
+    def tqdm(iterable=None, total=None, unit=None):
+        class Dummy:
+            def __init__(self, iterable):
+                self.iterable = iterable or []
+                self.n = 0
+                self.total = total or len(self.iterable)
+            def __iter__(self):
+                for item in self.iterable:
+                    yield item
+            def update(self, n):
+                self.n += n
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                pass
+        return Dummy(iterable)
 
 # --------------------------------------------------------------------------
 # Hard‑wired defaults so you don’t need to pass --ckpt / --config each run
@@ -28,6 +53,7 @@ DEFAULT_YAML = Path(__file__).resolve().parents[1] / "configs" / "Mel Band Rofor
 # --------------------------------------------------------------------------
 def load_model(ckpt_path: str, yaml_path: str, device: torch.device):
     """Build model object from a UVR‑style YAML + CKPT pair."""
+    import yaml
     with open(yaml_path, "r") as f:
         # Use the unsafe loader so PyYAML can handle tags like !!python/tuple
         cfg_root = yaml.unsafe_load(f)
@@ -56,7 +82,7 @@ def load_model(ckpt_path: str, yaml_path: str, device: torch.device):
     return model.to(device).eval()
 
 
-def overlap_add(dst: np.ndarray, seg: np.ndarray, start: int, fade: int):
+def overlap_add(dst: 'np.ndarray', seg: 'np.ndarray', start: int, fade: int):
     """Overlap-add helper for (stems, channels, time)."""
     end = start + seg.shape[-1]
 
