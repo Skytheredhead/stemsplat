@@ -1,57 +1,26 @@
+try:
+    from packaging import version  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - packaging optional
+    from distutils.version import LooseVersion as _LooseVersion  # type: ignore
+
+    class _CompatVersion:
+        @staticmethod
+        def parse(v):
+            return _LooseVersion(v)
+
+    version = _CompatVersion()  # type: ignore
+
 from pathlib import Path
 from typing import Callable, Optional
-import tempfile
-import subprocess
-import os
-from array import array
 
-from split.split import main as split_main
+try:
+    from split import main as split_main
+except Exception as _exc:  # pragma: no cover - missing heavy splitter
+    split_main = None
+    _import_error = _exc
 
-SEGMENT = 352800
+SEGMENT = 352_800
 OVERLAP = 18
-
-
-def _convert_to_wav(path: Path, sample_rate: int) -> Path:
-    """Convert an audio file to WAV using ffmpeg and return the new path."""
-    fd, tmp_path = tempfile.mkstemp(suffix='.wav')
-    os.close(fd)
-    tmp = Path(tmp_path)
-    try:
-        subprocess.run(
-            [
-                'ffmpeg',
-                '-y',
-                '-i',
-                str(path),
-                '-ar',
-                str(sample_rate),
-                '-ac',
-                '2',
-                '-sample_fmt',
-                's16',
-                str(tmp),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError as exc:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError('ffmpeg not found') from exc
-    except subprocess.CalledProcessError as exc:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError('ffmpeg failed to convert audio') from exc
-    return tmp
-
-
-def _load_waveform(path: Path, sample_rate: int):
-    """Placeholder load helper (overridden in tests)."""
-    raise RuntimeError('not implemented')
-
-
-def _save_waveform(path: Path, waveform, sample_rate: int):
-    """Placeholder save helper (overridden in tests)."""
-    raise RuntimeError('not implemented')
 
 
 def process_file(
@@ -60,28 +29,33 @@ def process_file(
     outdir: str | None = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
 ):
-    """Run the Roformer splitter and output only the vocal stem."""
-    if progress_cb is None:
-        progress_cb = lambda stage, pct: None
+    """Run the vocal splitter on ``path`` and write stems to ``outdir``."""
 
-    out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
-    tmp = None
-    wav_path = path
-    if path.suffix.lower() != ".wav":
-        tmp = _convert_to_wav(path, 44100)
-        wav_path = tmp
+    if split_main is None:
+        raise RuntimeError(f"split.main could not be imported:\n{_import_error}")
+
+    if progress_cb is None:
+        progress_cb = lambda stage, pct: None  # noqa: E731
+
+    out_root = Path(outdir) if outdir else path.parent
+    out_dir = out_root / f"{path.stem}—stems"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     device = "cpu"
     try:
-        import torch
-        if getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
-            device = 'mps'
+        import torch  # local import so dependency is optional
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            device = "mps"
+        elif hasattr(torch, "cuda") and torch.cuda.is_available():
+            device = "cuda"
     except Exception:
         pass
 
     args = [
         "--ckpt", str(ckpt),
-        "--config", str(Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"),
-        "--wav", str(wav_path),
+        "--config",
+        str(Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"),
+        "--wav", str(path),
         "--out", str(out_dir),
         "--segment", str(SEGMENT),
         "--overlap", str(OVERLAP),
@@ -89,11 +63,9 @@ def process_file(
         "--vocals-only",
     ]
 
-    def cb(frac: float):
+    def _cb(frac: float) -> None:
         progress_cb("vocals", int(frac * 100))
 
     progress_cb("preparing", 0)
-    split_main(args, progress_cb=cb)
-    if tmp is not None:
-        Path(tmp).unlink(missing_ok=True)
+    split_main(args, progress_cb=_cb)
     progress_cb("done", 100)
