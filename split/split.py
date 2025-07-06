@@ -16,8 +16,29 @@ python split.py --ckpt other.ckpt --config other.yaml --wav song.wav
 import argparse, os, yaml, importlib
 from pathlib import Path
 import numpy as np
+
+# --------------------------------------------------------------------------
+# Make sure we import the *real* PyTorch package, not the local stub
+# “torch.py” that lives at the project root and shadows the real library.
+import sys as _sys, pathlib as _pathlib
+_PROJECT_ROOT = _pathlib.Path(__file__).resolve().parents[1]
+if (_PROJECT_ROOT / "torch.py").exists():
+    # Remove the project root (“”) and the absolute root path from sys.path
+    _sys.path = [p for p in _sys.path if p not in ("", str(_PROJECT_ROOT))]
+# --------------------------------------------------------------------------
+
 import torch, torchaudio, soundfile as sf
 from tqdm import tqdm
+
+# --------------------------------------------------------------------------
+# Ensure the directory that holds this script (split/) is on sys.path so
+# that a sibling file “mel_band_roformer.py” can be imported with
+# `import mel_band_roformer`.
+import sys as _sys
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in map(str, _sys.path):
+    _sys.path.append(str(_THIS_DIR))
+# --------------------------------------------------------------------------
 
 # --------------------------------------------------------------------------
 # Hard‑wired defaults so you don’t need to pass --ckpt / --config each run
@@ -82,9 +103,12 @@ def main(argv=None, progress_cb=None):
     parser.add_argument("--vocals-only", action="store_true", help="only save vocals")
     parser.add_argument(
         "--device",
-        default=("mps" if torch.backends.mps.is_available()
-                 else ("cuda" if torch.cuda.is_available() else "cpu")),
-        help="compute device: 'mps' (Apple Metal), 'cuda', or 'cpu'"
+        default=(
+            "mps"
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
+            else "cpu"
+        ),
+        help="compute device: 'mps' (Apple Metal) or 'cpu' (fallback)",
     )
     args = parser.parse_args(argv)
 
@@ -93,7 +117,17 @@ def main(argv=None, progress_cb=None):
     if sr != 44_100:
         wav = torchaudio.functional.resample(wav, sr, 44_100)
         sr = 44_100
-    wav = wav.numpy()                              # (channels, T)
+    # Convert to NumPy only if torchaudio returned a genuine torch.Tensor.
+    # Avoid referencing `torch.Tensor` directly, because a shadowed `torch`
+    # module may not define it (leading to AttributeError).
+    is_tensor = getattr(torch, "is_tensor", lambda _: False)
+    if is_tensor(wav):
+        # Detach (if needed) and move to CPU before NumPy conversion.
+        if hasattr(wav, "detach"):
+            wav = wav.detach().cpu().numpy()
+        else:
+            wav = wav.cpu().numpy() if hasattr(wav, "cpu") else wav.numpy()
+    # If `wav` is already an np.ndarray, leave it unchanged.
 
     n_channels = wav.shape[0]
     n_samples  = wav.shape[1]
