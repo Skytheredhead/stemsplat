@@ -47,10 +47,8 @@
   </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center gap-10" style="background: var(--bg-deep); font-family: 'Nunito Sans', sans-serif;">
-  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat setup</h1>
   <div id="card" class="glass w-11/12 max-w-xl px-8 py-6 rounded-xl flex flex-col gap-4 fade-in">
-    <span id="status" class="text-[var(--txt-main)]">starting…</span>
-    <div id="log" class="text-xs text-[var(--txt-main)] h-4"></div>
+    <div id="log" class="text-2xl text-[var(--txt-main)] min-h-6">starting…</div>
     <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
     <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%; transition:width 0.3s ease"></div>
     </div>
@@ -66,11 +64,9 @@
       const res = await fetch('/progress');
       const data = await res.json();
       const bar = document.getElementById('bar');
-      const status = document.getElementById('status');
       const log = document.getElementById('log');
       const err = document.getElementById('error');
       if(data.pct >= 0){ bar.style.width = data.pct + '%'; }
-      status.textContent = data.step;
       if(data.step && data.step !== lastStep && data.step !== 'waiting for model choice'){
         log.textContent = data.step;
         log.classList.remove('drop-in');

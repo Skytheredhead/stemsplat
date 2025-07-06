@@ -91,10 +91,15 @@ def python_path():
         return Path('venv') / 'bin' / 'python'
 
 
+def _model_exists(name: str) -> bool:
+    locations = [Path('/models') / name, Path('models') / name,
+                 Path.home() / 'Library/Application Support/stems' / name]
+    return any(p.exists() for p in locations)
+
+
 def _models_missing():
-    models_dir = Path('/models')
     for name, _ in MODEL_URLS:
-        if not (models_dir / name).exists():
+        if not _model_exists(name):
             return True
     return False
 
@@ -108,21 +113,28 @@ def _download_models():
     models_dir.mkdir(exist_ok=True)
     downloaded = 0
     for name, url in MODEL_URLS:
+        if _model_exists(name):
+            continue
         progress['step'] = f'downloading {name}'
         dest = models_dir / name
-        with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
-            t0 = time.time()
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                now = time.time()
-                speed = len(chunk) / 1024 / 1024 / max(now - t0, 1e-6)
-                progress['pct'] = int(downloaded / TOTAL_BYTES * 100)
-                progress['step'] = f'downloading {name} ({speed:.1f} MB/s)'
-                t0 = now
+        try:
+            with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
+                t0 = time.time()
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    now = time.time()
+                    speed = len(chunk) / 1024 / 1024 / max(now - t0, 1e-6)
+                    progress['pct'] = int(downloaded / TOTAL_BYTES * 100)
+                    progress['step'] = f'downloading {name} ({speed:.1f} MB/s)'
+                    t0 = now
+        except Exception as exc:
+            progress['step'] = f'failed to download {name}'
+            progress['pct'] = -1
+            return
     progress['pct'] = 100
     progress['step'] = 'done'
     _start_server()

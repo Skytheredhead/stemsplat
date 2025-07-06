@@ -39,6 +39,12 @@ MODEL_URLS = [
 TOTAL_BYTES = int(3.68 * 1024**3)
 
 
+def _model_exists(name: str) -> bool:
+    locations = [Path('/models') / name, Path('models') / name,
+                 Path.home() / 'Library/Application Support/stems' / name]
+    return any(p.exists() for p in locations)
+
+
 def _download_models():
     global downloading
     with download_lock:
@@ -50,6 +56,8 @@ def _download_models():
     downloaded = 0
     for name, url in MODEL_URLS:
         dest = models_dir / name
+        if _model_exists(name):
+            continue
         try:
             with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
                 t0 = time.time()
@@ -76,13 +84,12 @@ async def download_models():
 
 @app.get('/model_status')
 async def model_status():
-    models_dir = Path('/models')
     return {
-        'vocals': (models_dir / 'Mel Band Roformer Vocals.ckpt').exists(),
-        'instrumental': (models_dir / 'Mel Band Roformer Instrumental.ckpt').exists(),
-        'drums': (models_dir / 'kuielab_a_drums.onnx').exists(),
-        'bass': (models_dir / 'kuielab_a_bass.onnx').exists(),
-        'other': (models_dir / 'kuielab_a_other.onnx').exists(),
+        'vocals': _model_exists('Mel Band Roformer Vocals.ckpt'),
+        'instrumental': _model_exists('Mel Band Roformer Instrumental.ckpt'),
+        'drums': _model_exists('kuielab_a_drums.onnx'),
+        'bass': _model_exists('kuielab_a_bass.onnx'),
+        'other': _model_exists('kuielab_a_other.onnx'),
     }
 
 
@@ -94,11 +101,14 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
-    ckpt_path = Path('/models') / 'Mel Band Roformer Vocals.ckpt'
-    if not ckpt_path.exists():
-        ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
+    ckpt_candidates = [
+        Path('/models') / 'Mel Band Roformer Vocals.ckpt',
+        Path('models') / 'Mel Band Roformer Vocals.ckpt',
+        Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
+    ]
+    ckpt_path = next((p for p in ckpt_candidates if p.exists()), None)
 
-    if not ckpt_path.exists():
+    if ckpt_path is None:
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
 
 
