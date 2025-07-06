@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from .pipeline import process_file
 import threading
+import queue
 import urllib.request
 import time
 
@@ -30,6 +31,17 @@ app = FastAPI()
 progress = {}
 errors = {}
 tasks = {}
+
+process_queue: queue.Queue[callable] = queue.Queue()
+def _worker():
+    while True:
+        fn = process_queue.get()
+        try:
+            fn()
+        finally:
+            process_queue.task_done()
+
+threading.Thread(target=_worker, daemon=True).start()
 
 download_lock = threading.Lock()
 downloading = False
@@ -149,6 +161,12 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             # Now run the splitter on the (possibly converted) WAV
             process_file(audio_path, ckpt_path, progress_cb=cb)
 
+            stem_file = out_dir / 'vocals.wav'
+            new_name = f"{audio_path.stem} - vocals.wav"
+            if stem_file.exists():
+                stem_file.rename(out_dir / new_name)
+                stems[0] = new_name
+
             # ── Pre‑compress stems so /download is instant ────────────────
             import zipfile
             zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
@@ -165,9 +183,9 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             progress[task_id] = {"stage": "error", "pct": -1}
             errors[task_id] = str(exc)
 
-    background_tasks.add_task(run)
+    process_queue.put(run)
     progress[task_id] = {'stage': 'queued', 'pct': 0}
-    stems = ['vocals.wav']
+    stems = [f"{Path(file.filename).stem} - vocals.wav"]
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     tasks[task_id] = {'dir': out_dir, 'stems': stems}
     return {'task_id': task_id, 'stems': stems}
