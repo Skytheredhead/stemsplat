@@ -1,8 +1,5 @@
 from pathlib import Path
 from typing import Callable, Optional
-import tempfile
-import subprocess
-import os
 from array import array
 
 from split.split import main as split_main
@@ -11,37 +8,6 @@ SEGMENT = 352800
 OVERLAP = 18
 
 
-def _convert_to_wav(path: Path, sample_rate: int) -> Path:
-    """Convert an audio file to WAV using ffmpeg and return the new path."""
-    fd, tmp_path = tempfile.mkstemp(suffix='.wav')
-    os.close(fd)
-    tmp = Path(tmp_path)
-    try:
-        subprocess.run(
-            [
-                'ffmpeg',
-                '-y',
-                '-i',
-                str(path),
-                '-ar',
-                str(sample_rate),
-                '-ac',
-                '2',
-                '-sample_fmt',
-                's16',
-                str(tmp),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError as exc:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError('ffmpeg not found') from exc
-    except subprocess.CalledProcessError as exc:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError('ffmpeg failed to convert audio') from exc
-    return tmp
 
 
 def _load_waveform(path: Path, sample_rate: int):
@@ -65,11 +31,7 @@ def process_file(
         progress_cb = lambda stage, pct: None
 
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
-    tmp = None
     wav_path = path
-    if path.suffix.lower() != ".wav":
-        tmp = _convert_to_wav(path, 44100)
-        wav_path = tmp
     device = "cpu"
     try:
         import torch
@@ -94,6 +56,4 @@ def process_file(
 
     progress_cb("preparing", 0)
     split_main(args, progress_cb=cb)
-    if tmp is not None:
-        Path(tmp).unlink(missing_ok=True)
     progress_cb("done", 100)

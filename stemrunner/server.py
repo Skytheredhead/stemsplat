@@ -9,6 +9,7 @@ import json
 from urllib.parse import quote
 
 from .pipeline import process_file
+from converter import convert_to_wav
 import threading
 import urllib.request
 import time
@@ -82,6 +83,11 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
+    conv_dir = Path('uploads_converted')
+    conv_dir.mkdir(exist_ok=True)
+    conv_path = conv_dir / Path(file.filename).with_suffix('.wav')
+    convert_to_wav(path, conv_path)
+
     ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
     if not ckpt_path.exists():
         ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
@@ -95,7 +101,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     def run():
         try:
-            process_file(path, ckpt_path, progress_cb=cb)
+            process_file(conv_path, ckpt_path, progress_cb=cb)
         except Exception as exc:
             logging.exception('processing failed')
             progress[task_id] = {'stage': 'error', 'pct': -1}
@@ -104,7 +110,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     background_tasks.add_task(run)
     progress[task_id] = {'stage': 'queued', 'pct': 0}
     stems = [f"{Path(file.filename).stem}—Vocals.wav"]
-    out_dir = Path('uploads') / f"{Path(file.filename).stem}—stems"
+    out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     tasks[task_id] = {'dir': out_dir, 'stems': stems}
     return {'task_id': task_id, 'stems': stems}
 
