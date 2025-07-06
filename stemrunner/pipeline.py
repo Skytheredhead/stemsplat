@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 try:
-    from split import main as split_main
+    # “split” is a package; main() lives in split/split.py
+    from split.split import main as split_main
 except Exception as _exc:  # pragma: no cover - missing heavy splitter
     split_main = None
     _import_error = _exc
