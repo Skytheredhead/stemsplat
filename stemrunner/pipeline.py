@@ -134,7 +134,7 @@ def process_file(
         wav_path = tmp
     args = [
         "--ckpt", str(ckpt),
-        "--config", str(Path(__file__).resolve().parents[1] / "split" / "config/Mel Band Roformer Vocals Config.yaml"),
+        "--config", str(Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"),
         "--wav", str(wav_path),
         "--out", str(out_dir),
         "--segment", str(SEGMENT),

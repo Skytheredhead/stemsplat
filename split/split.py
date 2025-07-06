@@ -22,8 +22,8 @@ from tqdm import tqdm
 # --------------------------------------------------------------------------
 # Hard‑wired defaults so you don’t need to pass --ckpt / --config each run
 # --------------------------------------------------------------------------
-DEFAULT_CKPT = Path.home() / "Library/Application Support/stems/Mel Band Roformer Vocals.ckpt"
-DEFAULT_YAML = Path(__file__).resolve().parent / "config/Mel Band Roformer Vocals Config.yaml"
+DEFAULT_CKPT = Path(__file__).resolve().parents[1] / "models" / "Mel Band Roformer Vocals.ckpt"
+DEFAULT_YAML = Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"
 
 # --------------------------------------------------------------------------
 def load_model(ckpt_path: str, yaml_path: str, device: torch.device):

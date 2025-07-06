@@ -52,7 +52,9 @@
   <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat</h1>  <!-- controls -->
   <div class="w-11/12 max-w-3xl flex gap-6">
     <div id="dropzone" class="glass flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16v-8m0 0-3 3m3-3 3 3m3 6a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5V18.75C3 19.9926 4.00736 21 5.25 21H18.75C19.9926 21 21 19.9926 21 18.75V16.5M7.5 7.5L12 3M12 3L16.5 7.5M12 3L12 16.5" />
+      </svg>
       <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
       <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
     </div>
@@ -60,7 +62,7 @@
       <label class="text-sm text-[var(--txt-main)]" for="ckpt-input">checkpoint path</label>
       <input id="ckpt-input" type="text" class="text-black px-2 py-1 rounded" placeholder="~/.../Vocals.ckpt">
       <p class="text-sm text-[var(--txt-main)] mt-4">stems</p>
-      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input type="checkbox" checked disabled class="accent-[var(--accent)]">vocals</label>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="accent-[var(--accent)]" checked>vocals</label>
       <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>instrumental</label>
       <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>drums</label>
       <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>bass</label>
@@ -93,6 +95,7 @@
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
     const ckptInput = document.getElementById('ckpt-input');
+    const vocalsBox = document.getElementById('vocals-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const template  = document.getElementById('item-template');
@@ -172,11 +175,23 @@
             '5. Check the terminal for additional details.');
     }
 
+    function showPopup(msg){
+      const card = document.createElement('div');
+      card.textContent = msg;
+      card.className = 'fixed top-4 right-4 glass px-4 py-2 rounded text-[var(--txt-main)]';
+      document.body.appendChild(card);
+      setTimeout(() => card.remove(), 3000);
+    }
+
     /* === upload & progress logic === */
     async function handleFiles(fileList){
       [...fileList].forEach(file => {
         // skip non-audio (extra guard even though accept="audio/*")
         if(!file.type.startsWith('audio/')) return;
+        if(!vocalsBox.checked){
+          showPopup('you have no stems selected! please select at least one and try again!');
+          return;
+        }
 
         // clone UI row
         const node = template.content.cloneNode(true);

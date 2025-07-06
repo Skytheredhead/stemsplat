@@ -25,7 +25,17 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
-    ckpt_path = Path(ckpt or Path.home() / "Library/Application Support/stems/Mel Band Roformer Vocals.ckpt")
+    if ckpt:
+        ckpt_path = Path(ckpt)
+        if not ckpt_path.is_absolute():
+            alt = Path('models') / ckpt_path.name
+            if alt.exists():
+                ckpt_path = alt
+    else:
+        ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
+        if not ckpt_path.exists():
+            ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
+
     if not ckpt_path.exists():
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
 
