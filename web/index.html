@@ -15,6 +15,7 @@
     :root {
       --bg-deep: #0f0f11;
       --bg-card: rgba(40,40,48,0.55);   /* glass-blur card */
+      --bg-solid: #282830;
       --txt-main: #e5e5e5;
       --accent:  #2ec7f8;               /* dulled aqua */
       --accent-lite: #47d6ff;
@@ -25,6 +26,11 @@
       background: var(--bg-card);
       backdrop-filter: blur(18px) saturate(120%);
       -webkit-backdrop-filter: blur(18px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .solid-card {
+      background: var(--bg-solid);
       border: 1px solid rgba(255,255,255,0.08);
     }
 
@@ -185,7 +191,7 @@
       const yes = declined ? 'download' : 'yes please';
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
+      overlay.innerHTML = `<div class="solid-card p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
       document.body.appendChild(overlay);
       overlay.querySelector('#no-btn').onclick = () => { localStorage.setItem('declinedModels','1'); overlay.remove(); if(onCancel) onCancel(); updateClear(); };
       overlay.querySelector('#yes-btn').onclick = () => { localStorage.removeItem('declinedModels'); fetch('/download_models', {method:'POST'}); overlay.remove(); };

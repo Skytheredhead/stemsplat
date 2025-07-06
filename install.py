@@ -92,7 +92,7 @@ def python_path():
 
 
 def _models_missing():
-    models_dir = Path('models')
+    models_dir = Path('/models')
     for name, _ in MODEL_URLS:
         if not (models_dir / name).exists():
             return True
@@ -104,7 +104,7 @@ def _start_server():
 
 
 def _download_models():
-    models_dir = Path('models')
+    models_dir = Path('/models')
     models_dir.mkdir(exist_ok=True)
     downloaded = 0
     for name, url in MODEL_URLS:

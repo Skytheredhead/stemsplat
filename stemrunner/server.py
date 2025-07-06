@@ -45,7 +45,7 @@ def _download_models():
         if downloading:
             return
         downloading = True
-    models_dir = Path('models')
+    models_dir = Path('/models')
     models_dir.mkdir(exist_ok=True)
     downloaded = 0
     for name, url in MODEL_URLS:
@@ -82,7 +82,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
-    ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
+    ckpt_path = Path('/models') / 'Mel Band Roformer Vocals.ckpt'
     if not ckpt_path.exists():
         ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
 
