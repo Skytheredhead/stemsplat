@@ -1,11 +1,11 @@
-### This is in ALPHA!! 
-## BUGS/SUGGESTIONS: https://forms.gle/wSpe2nyFgcmuxSr28
-
 # stemsplat
 
 A lil stem splitter than runs locally on your machine. Basically just a easier-to-use version of UVR. 
 I made this just to make my own "ensemble mode" layout where it splits vocals and instrumentals, then uses the instrumental
 to derive other instruments.
+
+# This is currently in ALPHA!! 
+# BUGS/SUGGESTIONS: https://forms.gle/wSpe2nyFgcmuxSr28
 
 ## Prerequisites
 
