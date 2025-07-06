@@ -80,13 +80,13 @@ def load_model(ckpt_path: str, yaml_path: str, device: torch.device):
 def overlap_add(dst: np.ndarray, seg: np.ndarray, start: int, fade: int):
     """Overlap-add helper for (stems, channels, time)."""
     end = start + seg.shape[-1]
-
-    if fade:
-        win   = np.ones(seg.shape[-1], dtype=np.float32)
-        ramp  = np.linspace(0, 1, fade, dtype=np.float32)
-        win[:fade]  = ramp
+    fade = min(fade, seg.shape[-1] // 2)
+    if fade > 0:
+        win = np.ones(seg.shape[-1], dtype=np.float32)
+        ramp = np.linspace(0, 1, fade, dtype=np.float32)
+        win[:fade] = ramp
         win[-fade:] = ramp[::-1]
-        dst[..., start:end] += seg * win          # win broadcasts
+        dst[..., start:end] += seg * win  # apply cross‑fade window
     else:
         dst[..., start:end] += seg
 

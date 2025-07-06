@@ -65,7 +65,8 @@ def process_file(
     ]
 
     def _cb(frac: float) -> None:
-        progress_cb("vocals", int(frac * 100))
+        # Map 0‑100 into the “vocals” stage range (10‑100)
+        progress_cb("vocals", 10 + int(frac * 90))
 
     progress_cb("preparing", 0)
     split_main(args, progress_cb=_cb)
