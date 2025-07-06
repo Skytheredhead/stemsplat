@@ -1,3 +1,15 @@
+try:
+    from packaging import version  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - packaging optional
+    from distutils.version import LooseVersion as _LooseVersion  # type: ignore
+
+    class _CompatVersion:
+        @staticmethod
+        def parse(v):
+            return _LooseVersion(v)
+
+    version = _CompatVersion()  # type: ignore
+
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
@@ -15,12 +27,14 @@ import urllib.request
 import time
 
 app = FastAPI()
-# map task_id -> {'stage': str, 'pct': int}
+
 progress = {}
 errors = {}
 tasks = {}
+
 download_lock = threading.Lock()
 downloading = False
+
 MODEL_URLS = [
     ("Mel Band Roformer Vocals.ckpt",
      "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
@@ -37,6 +51,7 @@ MODEL_URLS = [
     ("kuielab_a_other.onnx",
      "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true"),
 ]
+
 TOTAL_BYTES = int(3.68 * 1024**3)
 
 
@@ -61,7 +76,7 @@ def _download_models():
                     out.write(chunk)
                     downloaded += len(chunk)
                     t1 = time.time()
-                    speed = len(chunk) / 1024 / 1024 / max(t1 - t0, 1e-6)
+                    _ = len(chunk) / 1024 / 1024 / max(t1 - t0, 1e-6)
                     t0 = t1
         except Exception:
             pass
@@ -95,7 +110,6 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     if not ckpt_path.exists():
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
 
-
     def cb(stage: str, pct: int):
         progress[task_id] = {'stage': stage, 'pct': pct}
 
@@ -109,7 +123,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     background_tasks.add_task(run)
     progress[task_id] = {'stage': 'queued', 'pct': 0}
-    stems = [f"{Path(file.filename).stem}—Vocals.wav"]
+    stems = ['vocals.wav']
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     tasks[task_id] = {'dir': out_dir, 'stems': stems}
     return {'task_id': task_id, 'stems': stems}
