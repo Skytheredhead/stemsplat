@@ -33,6 +33,11 @@
       from { opacity: 1; }
       to   { opacity: 0; }
     }
+    @keyframes drop {
+      from { opacity:0; transform:translateY(-8px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    .drop-in { animation: drop 0.3s ease forwards; }
   </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center gap-10" style="background: var(--bg-deep); font-family: 'Nunito Sans', sans-serif;">
@@ -40,21 +45,31 @@
   <div id="card" class="glass w-11/12 max-w-xl px-8 py-6 rounded-xl flex flex-col gap-4 fade-in">
     <span id="status" class="text-[var(--txt-main)]">starting…</span>
     <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
-      <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%"></div>
+    <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%; transition:width 0.3s ease"></div>
     </div>
-    <div id="note" class="text-gray-400 text-sm">This step may take a few minutes…</div>
+    <div id="note" class="text-gray-400 text-sm">this might take a minute (it'll probably take way less)</div>
+    <div id="log" class="text-xs text-[var(--txt-main)] flex flex-col gap-1"></div>
     <div id="error" class="hidden text-red-400 text-sm"></div>
   </div>
   <div id="loading" class="hidden text-[var(--txt-main)]">starting server…</div>
   <script>
+    let lastStep = '';
     async function poll(){
       const res = await fetch('/progress');
       const data = await res.json();
       const bar = document.getElementById('bar');
       const status = document.getElementById('status');
+      const log = document.getElementById('log');
       const err = document.getElementById('error');
       if(data.pct >= 0){ bar.style.width = data.pct + '%'; }
       status.textContent = data.step;
+      if(data.step && data.step !== lastStep){
+        const div = document.createElement('div');
+        div.textContent = data.step;
+        div.className = 'drop-in';
+        log.appendChild(div);
+        lastStep = data.step;
+      }
       if(data.pct === -1){
         err.textContent = 'installation failed';
         err.classList.remove('hidden');

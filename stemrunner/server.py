@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from pathlib import Path
@@ -18,23 +18,16 @@ tasks = {}
 
 
 @app.post('/upload')
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), ckpt: str = Form(None)):
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     task_id = str(uuid.uuid4())
     path = Path('uploads') / file.filename
     path.parent.mkdir(exist_ok=True)
     with path.open('wb') as f:
         f.write(await file.read())
 
-    if ckpt:
-        ckpt_path = Path(ckpt)
-        if not ckpt_path.is_absolute():
-            alt = Path('models') / ckpt_path.name
-            if alt.exists():
-                ckpt_path = alt
-    else:
-        ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
-        if not ckpt_path.exists():
-            ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
+    ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
+    if not ckpt_path.exists():
+        ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
 
     if not ckpt_path.exists():
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)

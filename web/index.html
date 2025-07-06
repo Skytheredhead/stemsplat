@@ -59,8 +59,6 @@
       <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
     </div>
     <div class="glass w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in">
-      <label class="text-sm text-[var(--txt-main)]" for="ckpt-input">checkpoint path</label>
-      <input id="ckpt-input" type="text" class="text-black px-2 py-1 rounded" placeholder="~/.../Vocals.ckpt">
       <p class="text-sm text-[var(--txt-main)] mt-4">stems</p>
       <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="accent-[var(--accent)]" checked>vocals</label>
       <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>instrumental</label>
@@ -94,7 +92,6 @@
     /* helpers */
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
-    const ckptInput = document.getElementById('ckpt-input');
     const vocalsBox = document.getElementById('vocals-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
@@ -183,6 +180,15 @@
       setTimeout(() => card.remove(), 3000);
     }
 
+    function showModelsPopup(){
+      const card = document.createElement('div');
+      card.className = 'fixed top-4 right-4 glass px-4 py-4 rounded flex flex-col gap-2 text-[var(--txt-main)]';
+      card.innerHTML = `models not found! would you like me to download them?<div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">yes please</button></div>`;
+      document.body.appendChild(card);
+      card.querySelector('#no-btn').onclick = () => card.remove();
+      card.querySelector('#yes-btn').onclick = () => card.remove();
+    }
+
     /* === upload & progress logic === */
     async function handleFiles(fileList){
       [...fileList].forEach(file => {
@@ -204,7 +210,6 @@
         // prepare form data
         const data = new FormData();
         data.append('file', file);
-        data.append('ckpt', ckptInput.value);
 
         // upload (with fetch + progress)
         const xhr = new XMLHttpRequest();
@@ -223,7 +228,9 @@
             st.textContent = 'error';
             let msg = 'server responded with status ' + xhr.status;
             try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e) {}
-            showError(msg);
+            if(msg.includes('checkpoint not found')) showModelsPopup();
+            else showError(msg);
+            updateClear();
             return;
           }
           const res = JSON.parse(xhr.responseText);
@@ -237,6 +244,7 @@
         xhr.onerror = () => {
           st.textContent = 'error';
           showError('network error during upload');
+          updateClear();
         };
 
         xhr.send(data);

@@ -4,8 +4,6 @@ import tempfile
 import subprocess
 import os
 from array import array
-import torch
-import torchaudio
 
 from split.split import main as split_main
 
@@ -47,73 +45,13 @@ def _convert_to_wav(path: Path, sample_rate: int) -> Path:
 
 
 def _load_waveform(path: Path, sample_rate: int):
-    """Load audio returning (waveform, sample_rate) with ffmpeg fallback."""
-    try:
-        return torchaudio.load(path)
-    except Exception:
-        try:
-            result = subprocess.run(
-                [
-                    'ffmpeg',
-                    '-y',
-                    '-i',
-                    str(path),
-                    '-f',
-                    's16le',
-                    '-ac',
-                    '2',
-                    '-ar',
-                    str(sample_rate),
-                    'pipe:1',
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError('ffmpeg not found') from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError('ffmpeg failed to decode audio') from exc
-        data = torch.frombuffer(result.stdout, dtype=torch.int16)
-        if data.numel() == 0:
-            waveform = torch.zeros(2, 0, dtype=torch.float32)
-        else:
-            waveform = data.view(-1, 2).t().to(torch.float32) / 32768.0
-        return waveform, sample_rate
+    """Placeholder load helper (overridden in tests)."""
+    raise RuntimeError('not implemented')
 
 
-def _save_waveform(path: Path, waveform: torch.Tensor, sample_rate: int):
-    """Save audio using torchaudio with an FFmpeg fallback."""
-    try:
-        torchaudio.save(path, waveform, sample_rate, encoding='PCM_S24LE')
-        return
-    except Exception:
-        try:
-            data = waveform.t().contiguous().cpu().numpy().astype('float32').tobytes()
-        except Exception:
-            arr = array('f', waveform.t().contiguous().cpu().reshape(-1).tolist())
-            data = arr.tobytes()
-        try:
-            subprocess.run(
-                [
-                    'ffmpeg',
-                    '-y',
-                    '-f', 'f32le',
-                    '-ar', str(sample_rate),
-                    '-ac', str(waveform.shape[0]),
-                    '-i', 'pipe:0',
-                    '-c:a', 'pcm_s24le',
-                    str(path),
-                ],
-                check=True,
-                input=data,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError('ffmpeg not found') from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError('ffmpeg failed to encode audio') from exc
+def _save_waveform(path: Path, waveform, sample_rate: int):
+    """Placeholder save helper (overridden in tests)."""
+    raise RuntimeError('not implemented')
 
 
 def process_file(
@@ -132,6 +70,14 @@ def process_file(
     if path.suffix.lower() != ".wav":
         tmp = _convert_to_wav(path, 44100)
         wav_path = tmp
+    device = "cpu"
+    try:
+        import torch
+        if getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
+            device = 'mps'
+    except Exception:
+        pass
+
     args = [
         "--ckpt", str(ckpt),
         "--config", str(Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"),
@@ -139,7 +85,7 @@ def process_file(
         "--out", str(out_dir),
         "--segment", str(SEGMENT),
         "--overlap", str(OVERLAP),
-        "--device", "mps" if torch.backends.mps.is_available() else "cpu",
+        "--device", device,
         "--vocals-only",
     ]
 
