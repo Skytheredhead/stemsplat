@@ -36,5 +36,5 @@ to derive other instruments.
 
 - Add different models for pc specs, like a low/med/high quality toggle that will use different models.
 - Improve the UI
-
+- video support??
 
