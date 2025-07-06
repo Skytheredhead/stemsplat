@@ -20,8 +20,6 @@ import logging
 import json
 from urllib.parse import quote
 
-from converter import convert_to_wav  # local utility for audio conversion
-
 from .pipeline import process_file
 import threading
 import urllib.request
@@ -99,22 +97,13 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
-    # Convert to WAV so the splitter can consume the file.
+    # For now we assume uploads are already WAV.  Just copy the file into
+    # uploads_converted/ (keeping the original name) so later steps find it.
     conv_dir = Path('uploads_converted')
     conv_dir.mkdir(exist_ok=True)
-    conv_path = conv_dir / f"{path.stem}.wav"
-
-    if path.suffix.lower() == '.wav':
-        # Simple copy when already WAV
-        import shutil
-        shutil.copy2(path, conv_path)
-    else:
-        # Use FFmpeg via converter.py to handle formats like m4a
-        try:
-            convert_to_wav(path, conv_path)
-        except Exception as exc:
-            logging.exception('conversion failed')
-            return JSONResponse({'detail': f'conversion failed: {exc}'}, status_code=400)
+    conv_path = conv_dir / path.name
+    import shutil
+    shutil.copy2(path, conv_path)
 
     ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
     if not ckpt_path.exists():
@@ -124,18 +113,56 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
 
     def cb(stage: str, pct: int):
-        scaled = pct
-        if stage == 'vocals':
-            # map 0-100 -> 10-100 to match UI expectations
-            scaled = 10 + int(pct * 0.9)
-        progress[task_id] = {'stage': stage, 'pct': scaled}
+        progress[task_id] = {'stage': stage, 'pct': pct}
 
     def run():
         try:
-            process_file(conv_path, ckpt_path, progress_cb=cb)
+            audio_path = conv_path
+
+            # ── Convert to WAV if the upload isn't already WAV ─────────────────
+            if audio_path.suffix.lower() not in (".wav", ".wave"):
+                cb("converting", 0)
+
+                # ffmpeg command: re‑encode to 44.1 kHz, stereo PCM WAV
+                wav_path = audio_path.with_suffix(".wav")
+                import subprocess, os  # local import to keep globals clean
+
+                cmd = [
+                    "ffmpeg",
+                    "-y",               # overwrite without prompt
+                    "-i", str(audio_path),
+                    "-ar", "44100",     # 44.1 kHz
+                    "-ac", "2",         # stereo
+                    "-vn",              # drop any video streams
+                    str(wav_path),
+                ]
+
+                try:
+                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except FileNotFoundError:
+                    raise RuntimeError("ffmpeg not found – please install ffmpeg and ensure it is on your PATH")
+
+                cb("converting", 100)
+                audio_path = wav_path
+            # ────────────────────────────────────────────────────────────────────
+
+            # Now run the splitter on the (possibly converted) WAV
+            process_file(audio_path, ckpt_path, progress_cb=cb)
+
+            # ── Pre‑compress stems so /download is instant ────────────────
+            import zipfile
+            zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                for name in stems:
+                    fp = out_dir / name
+                    if fp.exists():
+                        zf.write(fp, arcname=name)
+            tasks[task_id]["zip"] = zip_path
+            # ───────────────────────────────────────────────────────────────
+
         except Exception as exc:
-            logging.exception('processing failed')
-            progress[task_id] = {'stage': 'error', 'pct': -1}
+            logging.exception("processing failed")
+            progress[task_id] = {"stage": "error", "pct": -1}
             errors[task_id] = str(exc)
 
     background_tasks.add_task(run)
@@ -171,6 +198,12 @@ async def progress_stream(task_id: str):
 @app.get('/download/{task_id}')
 async def download(task_id: str):
     info = tasks.get(task_id)
+    zip_path = info.get("zip") if info else None
+    if zip_path and Path(zip_path).exists():
+        header = f"attachment; filename*=UTF-8''{quote(Path(zip_path).name)}"
+        return StreamingResponse(open(zip_path, "rb"),
+                                 media_type="application/zip",
+                                 headers={"Content-Disposition": header})
     if not info:
         raise HTTPException(status_code=404, detail='invalid task id')
     if not info['dir'].exists():
