@@ -68,11 +68,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+class LaunchHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/' or self.path == '/index.html':
+            html = (Path(__file__).resolve().parent / 'web' / 'launch.html').read_text()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(html.encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def _installed():
+    return Path('venv').exists()
+
 def run_server():
-    with socketserver.TCPServer(('localhost', 6060), Handler) as httpd:
+    if _installed():
+        handler = LaunchHandler
+        thread = threading.Thread(target=_start_server, daemon=True)
+        thread.start()
+    else:
+        handler = Handler
+        thread = threading.Thread(target=install, daemon=True)
+        thread.start()
+    with socketserver.TCPServer(('localhost', 6060), handler) as httpd:
         webbrowser.open('http://localhost:6060/')
-        install_thread = threading.Thread(target=install, daemon=True)
-        install_thread.start()
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

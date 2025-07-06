@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from .pipeline import process_file
 import threading
+import queue
 import urllib.request
 import time
 
@@ -30,6 +31,18 @@ app = FastAPI()
 progress = {}
 errors = {}
 tasks = {}
+controls = {}
+
+process_queue: queue.Queue[callable] = queue.Queue()
+def _worker():
+    while True:
+        fn = process_queue.get()
+        try:
+            fn()
+        finally:
+            process_queue.task_done()
+
+threading.Thread(target=_worker, daemon=True).start()
 
 download_lock = threading.Lock()
 downloading = False
@@ -92,6 +105,9 @@ async def download_models():
 @app.post('/upload')
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     task_id = str(uuid.uuid4())
+    pause_evt = threading.Event()
+    stop_evt = threading.Event()
+    controls[task_id] = {'pause': pause_evt, 'stop': stop_evt}
     path = Path('uploads') / file.filename
     path.parent.mkdir(exist_ok=True)
     with path.open('wb') as f:
@@ -112,7 +128,17 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     if not ckpt_path.exists():
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
 
+    config_path = Path('configs') / 'Mel Band Roformer Vocals Config.yaml'
+    if not config_path.exists():
+        return JSONResponse({'detail': 'config file not found'}, status_code=400)
+
     def cb(stage: str, pct: int):
+        while pause_evt.is_set():
+            progress[task_id] = {'stage': 'paused', 'pct': pct}
+            time.sleep(0.5)
+        if stop_evt.is_set():
+            progress[task_id] = {'stage': 'stopped', 'pct': -1}
+            raise RuntimeError('stopped')
         progress[task_id] = {'stage': stage, 'pct': pct}
 
     def run():
@@ -149,6 +175,12 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             # Now run the splitter on the (possibly converted) WAV
             process_file(audio_path, ckpt_path, progress_cb=cb)
 
+            stem_file = out_dir / 'vocals.wav'
+            new_name = f"{audio_path.stem} - vocals.wav"
+            if stem_file.exists():
+                stem_file.rename(out_dir / new_name)
+                stems[0] = new_name
+
             # ── Pre‑compress stems so /download is instant ────────────────
             import zipfile
             zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
@@ -162,14 +194,18 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
         except Exception as exc:
             logging.exception("processing failed")
-            progress[task_id] = {"stage": "error", "pct": -1}
-            errors[task_id] = str(exc)
+            if stop_evt.is_set():
+                progress[task_id] = {"stage": "stopped", "pct": -1}
+                errors[task_id] = 'stopped'
+            else:
+                progress[task_id] = {"stage": "error", "pct": -1}
+                errors[task_id] = str(exc)
 
-    background_tasks.add_task(run)
+    process_queue.put(run)
     progress[task_id] = {'stage': 'queued', 'pct': 0}
-    stems = ['vocals.wav']
+    stems = [f"{Path(file.filename).stem} - vocals.wav"]
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
-    tasks[task_id] = {'dir': out_dir, 'stems': stems}
+    tasks[task_id] = {'dir': out_dir, 'stems': stems, 'controls': controls[task_id]}
     return {'task_id': task_id, 'stems': stems}
 
 
@@ -221,6 +257,33 @@ async def download(task_id: str):
     return StreamingResponse(buf, media_type='application/zip', headers={
         'Content-Disposition': header
     })
+
+
+@app.post('/pause/{task_id}')
+async def pause_task(task_id: str):
+    ctrl = controls.get(task_id)
+    if not ctrl:
+        raise HTTPException(status_code=404, detail='invalid task')
+    ctrl['pause'].set()
+    return {'status': 'paused'}
+
+
+@app.post('/resume/{task_id}')
+async def resume_task(task_id: str):
+    ctrl = controls.get(task_id)
+    if not ctrl:
+        raise HTTPException(status_code=404, detail='invalid task')
+    ctrl['pause'].clear()
+    return {'status': 'resumed'}
+
+
+@app.post('/stop/{task_id}')
+async def stop_task(task_id: str):
+    ctrl = controls.get(task_id)
+    if not ctrl:
+        raise HTTPException(status_code=404, detail='invalid task')
+    ctrl['stop'].set()
+    return {'status': 'stopped'}
 
 
 @app.get('/', response_class=HTMLResponse)

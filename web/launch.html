@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>stemsplat</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg-deep: #0f0f11;
+      --txt-main: #e5e5e5;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center gap-6" style="background:var(--bg-deep); font-family:'Nunito Sans', sans-serif;">
+  <h1 class="text-4xl font-light text-[var(--txt-main)] select-none">stemsplat</h1>
+  <div class="text-[var(--txt-main)]">starting server…</div>
+  <script>
+    async function wait(){
+      while(true){
+        try{ await fetch('http://localhost:8000/', {mode:'no-cors'}); location.href='http://localhost:8000/'; return; }catch(e){}
+        await new Promise(r=>setTimeout(r,1000));
+      }
+    }
+    localStorage.setItem('playIntro','1');
+    wait();
+  </script>
+</body>
+</html>
