@@ -21,17 +21,16 @@ to derive other instruments.
 
 ## Current Models (thx Becruily and KUIELab)
 
-Becruily:
-Vocals - https://huggingface.co/becruily/mel-band-roformer-vocals/tree/main
-Instrumental - https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main
-Guitar - https://huggingface.co/becruily/mel-band-roformer-guitar/tree/main
-Karaoke - https://huggingface.co/becruily/mel-band-roformer-karaoke/tree/main
+**Becruily:**
+- Vocals - https://huggingface.co/becruily/mel-band-roformer-vocals/tree/main
+- Instrumental - https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main
+- Guitar - https://huggingface.co/becruily/mel-band-roformer-guitar/tree/main
+- Karaoke - https://huggingface.co/becruily/mel-band-roformer-karaoke/tree/main
 
-KUIELab:
-https://huggingface.co/Politrees/UVR_resources/tree/main/models/MDXNet:
-kuielab_a_bass.onnx
-kuielab_a_drums.onnx
-kuielab_a_other.onnx
+**KUIELab — https://huggingface.co/Politrees/UVR_resources/tree/main/models/MDXNet:**
+- kuielab_a_bass.onnx
+- kuielab_a_drums.onnx
+- kuielab_a_other.onnx
 
 ## Future Plans
 
