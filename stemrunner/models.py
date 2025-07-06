@@ -126,7 +126,7 @@ class ModelManager:
         waveform,
         segment: int,
         overlap: int,
-        progress_cb: Optional[Callable[[int], None]] = None,
+        progress_cb: Optional[Callable[[float], None]] = None,
         delay: float = 0.0,
     ):
         sr = 44100
@@ -145,9 +145,9 @@ class ModelManager:
             if seg.shape[1] < n_fft:
                 vocals[:, start:end] += seg
                 instrumental[:, start:end] += seg * 0
-                pct = int((end / length) * 100)
+                frac = end / length
                 if progress_cb:
-                    progress_cb(pct)
+                    progress_cb(frac)
                 if device.type == 'cuda':
                     torch.cuda.synchronize()
                 if delay:
@@ -162,9 +162,9 @@ class ModelManager:
                               win_length=n_fft, window=win, length=seg.shape[1])
             vocals[:, start:start + voc.shape[1]] += voc
             instrumental[:, start:start + voc.shape[1]] += seg[:, :voc.shape[1]] - voc
-            pct = int((end / length) * 100)
+            frac = end / length
             if progress_cb:
-                progress_cb(pct)
+                progress_cb(frac)
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             if delay:
@@ -176,7 +176,7 @@ class ModelManager:
         waveform,
         segment: int,
         overlap: int,
-        progress_cb: Optional[Callable[[int], None]] = None,
+        progress_cb: Optional[Callable[[float], None]] = None,
         delay: float = 0.0,
     ):
         sr = 44100
@@ -201,9 +201,9 @@ class ModelManager:
                 other[:, start:end] += seg * 0
                 karaoke[:, start:end] += seg * 0
                 guitar[:, start:end] += seg * 0
-                pct = int((end / length) * 100)
+                frac = end / length
                 if progress_cb:
-                    progress_cb(pct)
+                    progress_cb(frac)
                 if device.type == 'cuda':
                     torch.cuda.synchronize()
                 if delay:
@@ -237,9 +237,9 @@ class ModelManager:
             other[:, start:start + other_seg.shape[1]] += other_seg
             karaoke[:, start:start + karaoke_seg.shape[1]] += karaoke_seg
             guitar[:, start:start + guitar_seg.shape[1]] += guitar_seg
-            pct = int((end / length) * 100)
+            frac = end / length
             if progress_cb:
-                progress_cb(pct)
+                progress_cb(frac)
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             if delay:
