@@ -1,4 +1,4 @@
-# stemsplat
+# stemsplat - ❗❗NOT WORKING YET❗❗
 
 A lil stem splitter than runs locally on your machine. Basically just a easier-to-use version of UVR. 
 I made this just to make my own "ensemble mode" layout where it splits vocals and instrumentals, then uses the instrumental
@@ -36,6 +36,5 @@ to derive other instruments.
 
 - Add different models for pc specs, like a low/med/high quality toggle that will use different models.
 - Improve the UI
-
 
 
