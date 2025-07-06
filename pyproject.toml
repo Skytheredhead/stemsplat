@@ -14,6 +14,10 @@ uvicorn = {extras = ["standard"], version = "*"}
 click = "*"
 sse-starlette = "*"
 numpy = "*"
+soundfile = "*"
+tqdm = "*"
+einops = "*"
+rotary_embedding_torch = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"
