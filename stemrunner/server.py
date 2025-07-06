@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from pathlib import Path
@@ -9,10 +9,8 @@ import json
 from urllib.parse import quote
 
 from .pipeline import process_file
-from .models import ModelManager
 
 app = FastAPI()
-manager = ModelManager()
 # map task_id -> {'stage': str, 'pct': int}
 progress = {}
 errors = {}
@@ -20,25 +18,24 @@ tasks = {}
 
 
 @app.post('/upload')
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), ckpt: str = Form(None)):
     task_id = str(uuid.uuid4())
     path = Path('uploads') / file.filename
     path.parent.mkdir(exist_ok=True)
     with path.open('wb') as f:
         f.write(await file.read())
 
-    missing = manager.missing_models()
-    if missing:
-        msg = 'missing model files: ' + ', '.join(missing)
-        return JSONResponse({'detail': msg}, status_code=400)
+    ckpt_path = Path(ckpt or Path.home() / "Library/Application Support/stems/Mel Band Roformer Vocals.ckpt")
+    if not ckpt_path.exists():
+        return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
+
 
     def cb(stage: str, pct: int):
         progress[task_id] = {'stage': stage, 'pct': pct}
 
     def run():
         try:
-            # run as fast as possible; the pipeline manages its own pacing
-            process_file(path, manager, progress_cb=cb, delay=0.0)
+            process_file(path, ckpt_path, progress_cb=cb)
         except Exception as exc:
             logging.exception('processing failed')
             progress[task_id] = {'stage': 'error', 'pct': -1}
@@ -46,8 +43,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     background_tasks.add_task(run)
     progress[task_id] = {'stage': 'queued', 'pct': 0}
-    stems = [f"{Path(file.filename).stem}—{name}.wav" for name in [
-        'Vocals', 'Instrumental', 'Drums', 'Bass', 'Other', 'Karaoke', 'Guitar']]
+    stems = [f"{Path(file.filename).stem}—Vocals.wav"]
     out_dir = Path('uploads') / f"{Path(file.filename).stem}—stems"
     tasks[task_id] = {'dir': out_dir, 'stems': stems}
     return {'task_id': task_id, 'stems': stems}

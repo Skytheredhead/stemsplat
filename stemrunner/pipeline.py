@@ -7,11 +7,10 @@ from array import array
 import torch
 import torchaudio
 
-from .models import ModelManager
+from split.split import main as split_main
 
-SEGMENT_STAGE_A = 352800
-SEGMENT_STAGE_B = SEGMENT_STAGE_A
-OVERLAP = 12
+SEGMENT = 352800
+OVERLAP = 18
 
 
 def _convert_to_wav(path: Path, sample_rate: int) -> Path:
@@ -119,77 +118,36 @@ def _save_waveform(path: Path, waveform: torch.Tensor, sample_rate: int):
 
 def process_file(
     path: Path,
-    manager: ModelManager,
-    segment: int | None = None,
+    ckpt: Path,
     outdir: str | None = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
-    delay: float = 0.0,
 ):
-    """Process a single audio file and save stems."""
+    """Run the Roformer splitter and output only the vocal stem."""
     if progress_cb is None:
         progress_cb = lambda stage, pct: None
-    sample_rate = 44100
-    temp_path = None
-    load_path = path
-    progress_cb('preparing', 0)
-    if path.suffix.lower() != '.wav':
-        temp_path = _convert_to_wav(path, sample_rate)
-        load_path = temp_path
-    try:
-        waveform, sr = _load_waveform(load_path, sample_rate)
-    except Exception as exc:
-        msg = (
-            f'failed to load {path.name}: {exc}. '\
-            'Ensure ffmpeg and torchaudio are installed with WAV support.'
-        )
-        raise RuntimeError(msg) from exc
-    if sr != sample_rate:
-        waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
-    progress_cb('preparing', 10)
+
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
-    out_dir.mkdir(exist_ok=True)
+    tmp = None
+    wav_path = path
+    if path.suffix.lower() != ".wav":
+        tmp = _convert_to_wav(path, 44100)
+        wav_path = tmp
+    args = [
+        "--ckpt", str(ckpt),
+        "--config", str(Path(__file__).resolve().parents[1] / "split" / "config/Mel Band Roformer Vocals Config.yaml"),
+        "--wav", str(wav_path),
+        "--out", str(out_dir),
+        "--segment", str(SEGMENT),
+        "--overlap", str(OVERLAP),
+        "--device", "mps" if torch.backends.mps.is_available() else "cpu",
+        "--vocals-only",
+    ]
 
-    # progress tracking like UVR: 2 models per file
-    total_models = 2
-    iteration = 1
-    base = 100 / total_models
+    def cb(frac: float):
+        progress_cb("vocals", int(frac * 100))
 
-    def calc_progress(step: float) -> int:
-        progress = base * iteration - base
-        progress += base * step
-        return int(progress)
-
-    progress_cb('vocals', calc_progress(0.0))
-    def vocals_cb(frac: float):
-        progress_cb('vocals', calc_progress(frac))
-    vocals, instrumental = manager.split_vocals(
-        waveform,
-        segment or SEGMENT_STAGE_A,
-        OVERLAP,
-        progress_cb=vocals_cb,
-        delay=delay,
-    )
-    progress_cb('vocals', calc_progress(1.0))
-    iteration += 1
-    _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
-
-    progress_cb('stems', calc_progress(0.0))
-    def stems_cb(frac: float):
-        progress_cb('stems', calc_progress(frac))
-    drums, bass, other, karaoke, guitar = manager.split_instrumental(
-        instrumental,
-        SEGMENT_STAGE_B,
-        OVERLAP,
-        progress_cb=stems_cb,
-        delay=delay,
-    )
-    progress_cb('stems', calc_progress(1.0))
-    _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate)
-    progress_cb('done', 100)
-    if temp_path is not None:
-        temp_path.unlink(missing_ok=True)
+    progress_cb("preparing", 0)
+    split_main(args, progress_cb=cb)
+    if tmp is not None:
+        Path(tmp).unlink(missing_ok=True)
+    progress_cb("done", 100)

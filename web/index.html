@@ -49,22 +49,23 @@
   </div>
 
   <!-- header -->
-  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat</h1>
-
-  <!-- upload card -->
-  <div id="dropzone"
-       class="glass w-11/12 max-w-2xl px-10 py-14 rounded-3xl text-center fade-in
-              flex flex-col items-center gap-6 cursor-pointer
-              transition-transform duration-200 hover:scale-105">
-
-    <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
-      <path stroke-linecap="round" stroke-linejoin="round"
-            d="M12 16v-8m0 0-3 3m3-3 3 3m3 6a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-
-    <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
-
-    <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
+  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat</h1>  <!-- controls -->
+  <div class="w-11/12 max-w-3xl flex gap-6">
+    <div id="dropzone" class="glass flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16v-8m0 0-3 3m3-3 3 3m3 6a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
+      <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
+    </div>
+    <div class="glass w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in">
+      <label class="text-sm text-[var(--txt-main)]" for="ckpt-input">checkpoint path</label>
+      <input id="ckpt-input" type="text" class="text-black px-2 py-1 rounded" placeholder="~/.../Vocals.ckpt">
+      <p class="text-sm text-[var(--txt-main)] mt-4">stems</p>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input type="checkbox" checked disabled class="accent-[var(--accent)]">vocals</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>instrumental</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>drums</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>bass</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>other</label>
+    </div>
   </div>
 
   <!-- queue -->
@@ -91,12 +92,13 @@
     /* helpers */
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
+    const ckptInput = document.getElementById('ckpt-input');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const template  = document.getElementById('item-template');
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
-    const STAGE_RANGES = {preparing:[0,10], vocals:[0,50], stems:[50,100], done:[100,100]};
+    const STAGE_RANGES = {preparing:[0,10], vocals:[10,100], done:[100,100]};
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
     function updateClear(){
       if(tasks.length) clearBtn.classList.remove('hidden');
@@ -187,6 +189,7 @@
         // prepare form data
         const data = new FormData();
         data.append('file', file);
+        data.append('ckpt', ckptInput.value);
 
         // upload (with fetch + progress)
         const xhr = new XMLHttpRequest();
