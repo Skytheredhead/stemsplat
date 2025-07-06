@@ -9,12 +9,69 @@ import json
 from urllib.parse import quote
 
 from .pipeline import process_file
+import threading
+import urllib.request
+import time
 
 app = FastAPI()
 # map task_id -> {'stage': str, 'pct': int}
 progress = {}
 errors = {}
 tasks = {}
+download_lock = threading.Lock()
+downloading = False
+MODEL_URLS = [
+    ("Mel Band Roformer Vocals.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
+    ("Mel Band Roformer Instrumental.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true"),
+    ("mel_band_roformer_karaoke_becruily.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true"),
+    ("becruily_guitar.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true"),
+    ("kuielab_a_bass.onnx",
+     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true"),
+    ("kuielab_a_drums.onnx",
+     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true"),
+    ("kuielab_a_other.onnx",
+     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true"),
+]
+TOTAL_BYTES = int(3.68 * 1024**3)
+
+
+def _download_models():
+    global downloading
+    with download_lock:
+        if downloading:
+            return
+        downloading = True
+    models_dir = Path('models')
+    models_dir.mkdir(exist_ok=True)
+    downloaded = 0
+    for name, url in MODEL_URLS:
+        dest = models_dir / name
+        try:
+            with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
+                t0 = time.time()
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    t1 = time.time()
+                    speed = len(chunk) / 1024 / 1024 / max(t1 - t0, 1e-6)
+                    t0 = t1
+        except Exception:
+            pass
+    downloading = False
+
+
+@app.post('/download_models')
+async def download_models():
+    thread = threading.Thread(target=_download_models, daemon=True)
+    thread.start()
+    return {'status': 'started'}
 
 
 @app.post('/upload')

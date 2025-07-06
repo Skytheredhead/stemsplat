@@ -164,12 +164,11 @@
     fileInput.addEventListener('change', e => handleFiles(e.target.files));
 
     function showError(msg){
-      alert('Upload failed: ' + msg + '\n\nTroubleshooting steps:\n' +
-            '1. Make sure the server is running.\n' +
-            '2. Verify you selected a valid audio file.\n' +
-            '3. Check that required model files are downloaded.\n' +
-            '4. Try processing a shorter clip.\n' +
-            '5. Check the terminal for additional details.');
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('button').onclick = () => overlay.remove();
     }
 
     function showPopup(msg){
@@ -180,13 +179,16 @@
       setTimeout(() => card.remove(), 3000);
     }
 
-    function showModelsPopup(){
-      const card = document.createElement('div');
-      card.className = 'fixed top-4 right-4 glass px-4 py-4 rounded flex flex-col gap-2 text-[var(--txt-main)]';
-      card.innerHTML = `models not found! would you like me to download them?<div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">yes please</button></div>`;
-      document.body.appendChild(card);
-      card.querySelector('#no-btn').onclick = () => card.remove();
-      card.querySelector('#yes-btn').onclick = () => card.remove();
+    function showModelsPopup(onCancel){
+      const declined = localStorage.getItem('declinedModels');
+      const msg = declined ? "you didn't put the models in :(" : 'models not found! would you like me to download them?';
+      const yes = declined ? 'download' : 'yes please';
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#no-btn').onclick = () => { localStorage.setItem('declinedModels','1'); overlay.remove(); if(onCancel) onCancel(); updateClear(); };
+      overlay.querySelector('#yes-btn').onclick = () => { localStorage.removeItem('declinedModels'); fetch('/download_models', {method:'POST'}); overlay.remove(); };
     }
 
     /* === upload & progress logic === */
@@ -200,12 +202,13 @@
         }
 
         // clone UI row
-        const node = template.content.cloneNode(true);
-        const li   = node.querySelector('.filename');
-        const bar  = node.querySelector('.progress');
-        const st   = node.querySelector('.status');
+        const frag = template.content.cloneNode(true);
+        const item = frag.firstElementChild;
+        const li   = item.querySelector('.filename');
+        const bar  = item.querySelector('.progress');
+        const st   = item.querySelector('.status');
         li.textContent = file.name;
-        queue.appendChild(node);
+        queue.appendChild(item);
 
         // prepare form data
         const data = new FormData();
@@ -228,7 +231,7 @@
             st.textContent = 'error';
             let msg = 'server responded with status ' + xhr.status;
             try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e) {}
-            if(msg.includes('checkpoint not found')) showModelsPopup();
+            if(msg.includes('checkpoint not found')) showModelsPopup(() => item.remove());
             else showError(msg);
             updateClear();
             return;
@@ -239,7 +242,7 @@
           tasks.push(task);
           saveTasks();
           updateClear();
-          trackProgress(res.task_id, bar, st, node.querySelector('.download'), task);
+          trackProgress(res.task_id, bar, st, item.querySelector('.download'), task);
         };
         xhr.onerror = () => {
           st.textContent = 'error';
