@@ -21,7 +21,6 @@ import json
 from urllib.parse import quote
 
 from .pipeline import process_file
-from converter import convert_to_wav
 import threading
 import urllib.request
 import time
@@ -98,10 +97,13 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     with path.open('wb') as f:
         f.write(await file.read())
 
+    # For now we assume uploads are already WAV.  Just copy the file into
+    # uploads_converted/ (keeping the original name) so later steps find it.
     conv_dir = Path('uploads_converted')
     conv_dir.mkdir(exist_ok=True)
-    conv_path = conv_dir / Path(file.filename).with_suffix('.wav')
-    convert_to_wav(path, conv_path)
+    conv_path = conv_dir / path.name
+    import shutil
+    shutil.copy2(path, conv_path)
 
     ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
     if not ckpt_path.exists():
