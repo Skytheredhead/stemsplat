@@ -54,13 +54,14 @@
     <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
     <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%; transition:width 0.3s ease"></div>
     </div>
-    <div id="note" class="text-gray-400 text-sm">this will take a while</div>
+    <div id="note" class="text-gray-400 text-sm">this might take a while (probably not tho)</div>
     <div id="error" class="hidden text-red-400 text-sm"></div>
   </div>
   <div id="loading" class="hidden text-[var(--txt-main)]">starting server…</div>
   <script>
     let lastStep = '';
     let prompted = false;
+    const note = document.getElementById('note');
     async function poll(){
       const res = await fetch('/progress');
       const data = await res.json();
@@ -70,12 +71,17 @@
       const err = document.getElementById('error');
       if(data.pct >= 0){ bar.style.width = data.pct + '%'; }
       status.textContent = data.step;
-      if(data.step && data.step !== lastStep){
+      if(data.step && data.step !== lastStep && data.step !== 'waiting for model choice'){
         log.textContent = data.step;
         log.classList.remove('drop-in');
         void log.offsetWidth;
         log.classList.add('drop-in');
         lastStep = data.step;
+      }
+      if(data.step && data.step.startsWith('downloading')){
+        note.textContent = 'this will take a while';
+      } else {
+        note.textContent = 'this might take a while (probably not tho)';
       }
       if(data.step === 'waiting for model choice' && !prompted){
         showPrompt();

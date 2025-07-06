@@ -74,6 +74,18 @@ async def download_models():
     return {'status': 'started'}
 
 
+@app.get('/model_status')
+async def model_status():
+    models_dir = Path('/models')
+    return {
+        'vocals': (models_dir / 'Mel Band Roformer Vocals.ckpt').exists(),
+        'instrumental': (models_dir / 'Mel Band Roformer Instrumental.ckpt').exists(),
+        'drums': (models_dir / 'kuielab_a_drums.onnx').exists(),
+        'bass': (models_dir / 'kuielab_a_bass.onnx').exists(),
+        'other': (models_dir / 'kuielab_a_other.onnx').exists(),
+    }
+
+
 @app.post('/upload')
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     task_id = str(uuid.uuid4())

@@ -65,12 +65,12 @@
       <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
     </div>
     <div class="glass w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in">
-      <p class="text-sm text-[var(--txt-main)] mt-4">stems</p>
-      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="accent-[var(--accent)]" checked>vocals</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>instrumental</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>drums</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>bass</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>other</label>
+      <p class="text-base text-[var(--txt-main)] mt-2 mb-1">stems</p>
+      <label class="flex items-center gap-2 text-gray-500"><input id="vocals-box" type="checkbox" class="accent-[var(--accent)]" checked>vocals</label>
+      <label class="flex items-center gap-2 text-gray-500"><input id="instrumental-box" type="checkbox" disabled>instrumental</label>
+      <label class="flex items-center gap-2 text-gray-500"><input id="drums-box" type="checkbox" disabled>drums</label>
+      <label class="flex items-center gap-2 text-gray-500"><input id="bass-box" type="checkbox" disabled>bass</label>
+      <label class="flex items-center gap-2 text-gray-500"><input id="other-box" type="checkbox" disabled>other</label>
     </div>
   </div>
 
@@ -99,6 +99,10 @@
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
     const vocalsBox = document.getElementById('vocals-box');
+    const instrumentalBox = document.getElementById('instrumental-box');
+    const drumsBox = document.getElementById('drums-box');
+    const bassBox = document.getElementById('bass-box');
+    const otherBox = document.getElementById('other-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const template  = document.getElementById('item-template');
@@ -149,6 +153,32 @@
       }
     });
     updateClear();
+    function updateModelStatus(){
+      fetch('/model_status')
+        .then(r => r.json())
+        .then(st => {
+          const map = {
+            vocals: vocalsBox,
+            instrumental: instrumentalBox,
+            drums: drumsBox,
+            bass: bassBox,
+            other: otherBox,
+          };
+          for(const [key, box] of Object.entries(map)){
+            const enabled = st[key];
+            box.disabled = !enabled;
+            const label = box.parentElement;
+            if(enabled){
+              label.classList.remove('text-gray-500');
+              label.classList.add('text-[var(--txt-main)]');
+            } else {
+              label.classList.add('text-gray-500');
+              label.classList.remove('text-[var(--txt-main)]');
+            }
+          }
+        });
+    }
+    updateModelStatus();
 
     // drag-and-drop highlights
     ['dragenter','dragover'].forEach(evt =>
@@ -194,7 +224,11 @@
       overlay.innerHTML = `<div class="solid-card p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
       document.body.appendChild(overlay);
       overlay.querySelector('#no-btn').onclick = () => { localStorage.setItem('declinedModels','1'); overlay.remove(); if(onCancel) onCancel(); updateClear(); };
-      overlay.querySelector('#yes-btn').onclick = () => { localStorage.removeItem('declinedModels'); fetch('/download_models', {method:'POST'}); overlay.remove(); };
+      overlay.querySelector('#yes-btn').onclick = () => {
+        localStorage.removeItem('declinedModels');
+        fetch('/download_models', {method:'POST'}).then(() => setTimeout(updateModelStatus, 1000));
+        overlay.remove();
+      };
     }
 
     /* === upload & progress logic === */
