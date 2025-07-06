@@ -1,4 +1,4 @@
-# stemsplat - ❗❗NOT WORKING YET❗❗
+# stemsplat - ❗❗ONLY VOCALS WORKING❗❗
 
 A lil stem splitter than runs locally on your machine. Basically just a easier-to-use version of UVR. 
 I made this just to make my own "ensemble mode" layout where it splits vocals and instrumentals, then uses the instrumental
@@ -17,7 +17,7 @@ to derive other instruments.
 1. Download the zip of the project (green code button at the top right ish -> download zip) or use git. 
 2. Open a terminal (mac) or command prompt (pc).
 3. Type "python3 install.py" This will open localhost:6060 and start the setup, then redirect you to 8000 (the main page) after setup is completed.
-6. You'll then be prompted to download the models or add them yourself (downloads below).
+6. You'll then be prompted to download the models or add them yourself (downloads below). [currently you need to download them]
 
 ## Current Models (thx Becruily and KUIELab)
 
