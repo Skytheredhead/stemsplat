@@ -10,7 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - packaging optional
 
     version = _CompatVersion()  # type: ignore
 
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from pathlib import Path
@@ -20,7 +20,12 @@ import logging
 import json
 from urllib.parse import quote
 
-from .pipeline import process_file
+from .models import ModelManager
+import torchaudio
+import soundfile as sf
+import torch
+import tempfile
+import os
 import threading
 import queue
 import urllib.request
@@ -66,6 +71,9 @@ MODEL_URLS = [
 
 TOTAL_BYTES = int(3.68 * 1024**3)
 
+SEGMENT = 352_800
+OVERLAP = 18
+
 
 def _download_models():
     global downloading
@@ -103,11 +111,16 @@ async def download_models():
 
 
 @app.post('/upload')
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_file(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    stems: str = Form('vocals'),
+):
     task_id = str(uuid.uuid4())
     pause_evt = threading.Event()
     stop_evt = threading.Event()
     controls[task_id] = {'pause': pause_evt, 'stop': stop_evt}
+    stem_list = [s for s in stems.split(',') if s]
     path = Path('uploads') / file.filename
     path.parent.mkdir(exist_ok=True)
     with path.open('wb') as f:
@@ -142,55 +155,89 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         progress[task_id] = {'stage': stage, 'pct': pct}
 
     def run():
-        try:
             audio_path = conv_path
 
-            # ── Convert to WAV if the upload isn't already WAV ─────────────────
+            # ── Convert to WAV if needed ───────────────────────────────────
             if audio_path.suffix.lower() not in (".wav", ".wave"):
                 cb("converting", 0)
-
-                # ffmpeg command: re‑encode to 44.1 kHz, stereo PCM WAV
                 wav_path = audio_path.with_suffix(".wav")
-                import subprocess, os  # local import to keep globals clean
-
-                cmd = [
-                    "ffmpeg",
-                    "-y",               # overwrite without prompt
-                    "-i", str(audio_path),
-                    "-ar", "44100",     # 44.1 kHz
-                    "-ac", "2",         # stereo
-                    "-vn",              # drop any video streams
-                    str(wav_path),
-                ]
-
+                import subprocess, os
+                cmd = ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
                 try:
                     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except FileNotFoundError:
                     raise RuntimeError("ffmpeg not found – please install ffmpeg and ensure it is on your PATH")
-
                 cb("converting", 100)
                 audio_path = wav_path
-            # ────────────────────────────────────────────────────────────────────
 
-            # Now run the splitter on the (possibly converted) WAV
-            process_file(audio_path, ckpt_path, progress_cb=cb)
+            # ── Load audio ─────────────────────────────────────────────────
+            waveform, sr = torchaudio.load(str(audio_path))
+            if sr != 44100:
+                waveform = torchaudio.functional.resample(waveform, sr, 44100)
+                sr = 44100
 
-            stem_file = out_dir / 'vocals.wav'
-            new_name = f"{audio_path.stem} - vocals.wav"
-            if stem_file.exists():
-                stem_file.rename(out_dir / new_name)
-                stems[0] = new_name
+            manager = ModelManager()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            temp_dir = Path(tempfile.gettempdir())
+            stems_out: list[str] = []
 
-            # ── Pre‑compress stems so /download is instant ────────────────
+            if any(s in stem_list for s in ["vocals", "instrumental", "drums", "bass", "other", "guitar"]):
+                def _cb(frac: float) -> None:
+                    cb("vocals", 1 + int(frac * 99))
+
+                voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
+                if "vocals" in stem_list:
+                    fname = f"{audio_path.stem} - vocals.wav"
+                    sf.write(out_dir / fname, voc.T.numpy(), sr)
+                    stems_out.append(fname)
+
+                need_inst = any(s in stem_list for s in ["instrumental", "drums", "bass", "other", "guitar"])
+                inst_path = None
+                if need_inst:
+                    inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
+                    sf.write(inst_path, inst.T.numpy(), sr)
+                    if "instrumental" in stem_list:
+                        fname = f"{audio_path.stem} - instrumental.wav"
+                        sf.write(out_dir / fname, inst.T.numpy(), sr)
+                        stems_out.append(fname)
+
+                del voc, inst
+                torch.cuda.empty_cache()
+            else:
+                inst_path = None
+
+            if inst_path and any(s in stem_list for s in ["drums", "bass", "other", "guitar"]):
+                inst_wave, sr2 = torchaudio.load(str(inst_path))
+                if sr2 != 44100:
+                    inst_wave = torchaudio.functional.resample(inst_wave, sr2, 44100)
+
+                def _cb2(frac: float) -> None:
+                    cb("instrumental", 1 + int(frac * 99))
+
+                d, b, o, k, g = manager.split_instrumental(inst_wave, SEGMENT, OVERLAP, progress_cb=_cb2)
+                mapping = {"drums": d, "bass": b, "other": o, "guitar": g}
+                for name, tensor in mapping.items():
+                    if name in stem_list:
+                        fname = f"{audio_path.stem} - {name}.wav"
+                        sf.write(out_dir / fname, tensor.T.numpy(), sr)
+                        stems_out.append(fname)
+
+                del d, b, o, k, g, inst_wave
+                torch.cuda.empty_cache()
+                try:
+                    os.remove(inst_path)
+                except OSError:
+                    pass
+
             import zipfile
             zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
             with zipfile.ZipFile(zip_path, "w") as zf:
-                for name in stems:
+                for name in stems_out:
                     fp = out_dir / name
                     if fp.exists():
                         zf.write(fp, arcname=name)
             tasks[task_id]["zip"] = zip_path
-            # ───────────────────────────────────────────────────────────────
+            tasks[task_id]["stems"] = stems_out
 
         except Exception as exc:
             logging.exception("processing failed")
@@ -203,10 +250,10 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     process_queue.put(run)
     progress[task_id] = {'stage': 'queued', 'pct': 0}
-    stems = [f"{Path(file.filename).stem} - vocals.wav"]
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
-    tasks[task_id] = {'dir': out_dir, 'stems': stems, 'controls': controls[task_id]}
-    return {'task_id': task_id, 'stems': stems}
+    expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
+    tasks[task_id] = {'dir': out_dir, 'stems': expected, 'controls': controls[task_id]}
+    return {'task_id': task_id, 'stems': expected}
 
 
 @app.get('/progress/{task_id}')
