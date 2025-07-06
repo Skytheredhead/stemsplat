@@ -12,3 +12,4 @@ tqdm
 einops
 rotary_embedding_torch
 packaging
+beartype>=0.17
