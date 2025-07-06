@@ -49,22 +49,23 @@
   </div>
 
   <!-- header -->
-  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat</h1>
-
-  <!-- upload card -->
-  <div id="dropzone"
-       class="glass w-11/12 max-w-2xl px-10 py-14 rounded-3xl text-center fade-in
-              flex flex-col items-center gap-6 cursor-pointer
-              transition-transform duration-200 hover:scale-105">
-
-    <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
-      <path stroke-linecap="round" stroke-linejoin="round"
-            d="M12 16v-8m0 0-3 3m3-3 3 3m3 6a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-
-    <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
-
-    <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
+  <h1 class="text-4xl font-light text-[var(--txt-main)] fade-in select-none">stemsplat</h1>  <!-- controls -->
+  <div class="w-11/12 max-w-3xl flex gap-6">
+    <div id="dropzone" class="glass flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--accent)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
+      </svg>
+      <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
+      <input id="file-input" type="file" accept="audio/*" multiple class="hidden" />
+    </div>
+    <div class="glass w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in">
+      <p class="text-sm text-[var(--txt-main)] mt-4">stems</p>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="accent-[var(--accent)]" checked>vocals</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>instrumental</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>drums</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>bass</label>
+      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>other</label>
+    </div>
   </div>
 
   <!-- queue -->
@@ -91,12 +92,13 @@
     /* helpers */
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
+    const vocalsBox = document.getElementById('vocals-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const template  = document.getElementById('item-template');
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
-    const STAGE_RANGES = {preparing:[0,10], vocals:[0,50], stems:[50,100], done:[100,100]};
+    const STAGE_RANGES = {preparing:[0,10], vocals:[10,100], done:[100,100]};
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
     function updateClear(){
       if(tasks.length) clearBtn.classList.remove('hidden');
@@ -162,12 +164,31 @@
     fileInput.addEventListener('change', e => handleFiles(e.target.files));
 
     function showError(msg){
-      alert('Upload failed: ' + msg + '\n\nTroubleshooting steps:\n' +
-            '1. Make sure the server is running.\n' +
-            '2. Verify you selected a valid audio file.\n' +
-            '3. Check that required model files are downloaded.\n' +
-            '4. Try processing a shorter clip.\n' +
-            '5. Check the terminal for additional details.');
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('button').onclick = () => overlay.remove();
+    }
+
+    function showPopup(msg){
+      const card = document.createElement('div');
+      card.textContent = msg;
+      card.className = 'fixed top-4 right-4 glass px-4 py-2 rounded text-[var(--txt-main)]';
+      document.body.appendChild(card);
+      setTimeout(() => card.remove(), 3000);
+    }
+
+    function showModelsPopup(onCancel){
+      const declined = localStorage.getItem('declinedModels');
+      const msg = declined ? "you didn't put the models in :(" : 'models not found! would you like me to download them?';
+      const yes = declined ? 'download' : 'yes please';
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#no-btn').onclick = () => { localStorage.setItem('declinedModels','1'); overlay.remove(); if(onCancel) onCancel(); updateClear(); };
+      overlay.querySelector('#yes-btn').onclick = () => { localStorage.removeItem('declinedModels'); fetch('/download_models', {method:'POST'}); overlay.remove(); };
     }
 
     /* === upload & progress logic === */
@@ -175,14 +196,19 @@
       [...fileList].forEach(file => {
         // skip non-audio (extra guard even though accept="audio/*")
         if(!file.type.startsWith('audio/')) return;
+        if(!vocalsBox.checked){
+          showPopup('you have no stems selected! please select at least one and try again!');
+          return;
+        }
 
         // clone UI row
-        const node = template.content.cloneNode(true);
-        const li   = node.querySelector('.filename');
-        const bar  = node.querySelector('.progress');
-        const st   = node.querySelector('.status');
+        const frag = template.content.cloneNode(true);
+        const item = frag.firstElementChild;
+        const li   = item.querySelector('.filename');
+        const bar  = item.querySelector('.progress');
+        const st   = item.querySelector('.status');
         li.textContent = file.name;
-        queue.appendChild(node);
+        queue.appendChild(item);
 
         // prepare form data
         const data = new FormData();
@@ -205,7 +231,9 @@
             st.textContent = 'error';
             let msg = 'server responded with status ' + xhr.status;
             try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e) {}
-            showError(msg);
+            if(msg.includes('checkpoint not found')) showModelsPopup(() => item.remove());
+            else showError(msg);
+            updateClear();
             return;
           }
           const res = JSON.parse(xhr.responseText);
@@ -214,11 +242,12 @@
           tasks.push(task);
           saveTasks();
           updateClear();
-          trackProgress(res.task_id, bar, st, node.querySelector('.download'), task);
+          trackProgress(res.task_id, bar, st, item.querySelector('.download'), task);
         };
         xhr.onerror = () => {
           st.textContent = 'error';
           showError('network error during upload');
+          updateClear();
         };
 
         xhr.send(data);

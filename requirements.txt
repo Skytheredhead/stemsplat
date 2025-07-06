@@ -6,3 +6,8 @@ click
 sse-starlette
 python-multipart
 numpy
+pyyaml
+soundfile
+tqdm
+einops
+rotary_embedding_torch

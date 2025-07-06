@@ -4,14 +4,11 @@ import tempfile
 import subprocess
 import os
 from array import array
-import torch
-import torchaudio
 
-from .models import ModelManager
+from split.split import main as split_main
 
-SEGMENT_STAGE_A = 352800
-SEGMENT_STAGE_B = SEGMENT_STAGE_A
-OVERLAP = 12
+SEGMENT = 352800
+OVERLAP = 18
 
 
 def _convert_to_wav(path: Path, sample_rate: int) -> Path:
@@ -48,148 +45,55 @@ def _convert_to_wav(path: Path, sample_rate: int) -> Path:
 
 
 def _load_waveform(path: Path, sample_rate: int):
-    """Load audio returning (waveform, sample_rate) with ffmpeg fallback."""
-    try:
-        return torchaudio.load(path)
-    except Exception:
-        try:
-            result = subprocess.run(
-                [
-                    'ffmpeg',
-                    '-y',
-                    '-i',
-                    str(path),
-                    '-f',
-                    's16le',
-                    '-ac',
-                    '2',
-                    '-ar',
-                    str(sample_rate),
-                    'pipe:1',
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError('ffmpeg not found') from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError('ffmpeg failed to decode audio') from exc
-        data = torch.frombuffer(result.stdout, dtype=torch.int16)
-        if data.numel() == 0:
-            waveform = torch.zeros(2, 0, dtype=torch.float32)
-        else:
-            waveform = data.view(-1, 2).t().to(torch.float32) / 32768.0
-        return waveform, sample_rate
+    """Placeholder load helper (overridden in tests)."""
+    raise RuntimeError('not implemented')
 
 
-def _save_waveform(path: Path, waveform: torch.Tensor, sample_rate: int):
-    """Save audio using torchaudio with an FFmpeg fallback."""
-    try:
-        torchaudio.save(path, waveform, sample_rate, encoding='PCM_S24LE')
-        return
-    except Exception:
-        try:
-            data = waveform.t().contiguous().cpu().numpy().astype('float32').tobytes()
-        except Exception:
-            arr = array('f', waveform.t().contiguous().cpu().reshape(-1).tolist())
-            data = arr.tobytes()
-        try:
-            subprocess.run(
-                [
-                    'ffmpeg',
-                    '-y',
-                    '-f', 'f32le',
-                    '-ar', str(sample_rate),
-                    '-ac', str(waveform.shape[0]),
-                    '-i', 'pipe:0',
-                    '-c:a', 'pcm_s24le',
-                    str(path),
-                ],
-                check=True,
-                input=data,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError('ffmpeg not found') from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError('ffmpeg failed to encode audio') from exc
+def _save_waveform(path: Path, waveform, sample_rate: int):
+    """Placeholder save helper (overridden in tests)."""
+    raise RuntimeError('not implemented')
 
 
 def process_file(
     path: Path,
-    manager: ModelManager,
-    segment: int | None = None,
+    ckpt: Path,
     outdir: str | None = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
-    delay: float = 0.0,
 ):
-    """Process a single audio file and save stems."""
+    """Run the Roformer splitter and output only the vocal stem."""
     if progress_cb is None:
         progress_cb = lambda stage, pct: None
-    sample_rate = 44100
-    temp_path = None
-    load_path = path
-    progress_cb('preparing', 0)
-    if path.suffix.lower() != '.wav':
-        temp_path = _convert_to_wav(path, sample_rate)
-        load_path = temp_path
-    try:
-        waveform, sr = _load_waveform(load_path, sample_rate)
-    except Exception as exc:
-        msg = (
-            f'failed to load {path.name}: {exc}. '\
-            'Ensure ffmpeg and torchaudio are installed with WAV support.'
-        )
-        raise RuntimeError(msg) from exc
-    if sr != sample_rate:
-        waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
-    progress_cb('preparing', 10)
+
     out_dir = Path(outdir or path.parent) / f"{path.stem}—stems"
-    out_dir.mkdir(exist_ok=True)
+    tmp = None
+    wav_path = path
+    if path.suffix.lower() != ".wav":
+        tmp = _convert_to_wav(path, 44100)
+        wav_path = tmp
+    device = "cpu"
+    try:
+        import torch
+        if getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
+            device = 'mps'
+    except Exception:
+        pass
 
-    # progress tracking like UVR: 2 models per file
-    total_models = 2
-    iteration = 1
-    base = 100 / total_models
+    args = [
+        "--ckpt", str(ckpt),
+        "--config", str(Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"),
+        "--wav", str(wav_path),
+        "--out", str(out_dir),
+        "--segment", str(SEGMENT),
+        "--overlap", str(OVERLAP),
+        "--device", device,
+        "--vocals-only",
+    ]
 
-    def calc_progress(step: float) -> int:
-        progress = base * iteration - base
-        progress += base * step
-        return int(progress)
+    def cb(frac: float):
+        progress_cb("vocals", int(frac * 100))
 
-    progress_cb('vocals', calc_progress(0.0))
-    def vocals_cb(frac: float):
-        progress_cb('vocals', calc_progress(frac))
-    vocals, instrumental = manager.split_vocals(
-        waveform,
-        segment or SEGMENT_STAGE_A,
-        OVERLAP,
-        progress_cb=vocals_cb,
-        delay=delay,
-    )
-    progress_cb('vocals', calc_progress(1.0))
-    iteration += 1
-    _save_waveform(out_dir / f"{path.stem}—Vocals.wav", vocals, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Instrumental.wav", instrumental, sample_rate)
-
-    progress_cb('stems', calc_progress(0.0))
-    def stems_cb(frac: float):
-        progress_cb('stems', calc_progress(frac))
-    drums, bass, other, karaoke, guitar = manager.split_instrumental(
-        instrumental,
-        SEGMENT_STAGE_B,
-        OVERLAP,
-        progress_cb=stems_cb,
-        delay=delay,
-    )
-    progress_cb('stems', calc_progress(1.0))
-    _save_waveform(out_dir / f"{path.stem}—Drums.wav", drums, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Bass.wav", bass, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Other.wav", other, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Karaoke.wav", karaoke, sample_rate)
-    _save_waveform(out_dir / f"{path.stem}—Guitar.wav", guitar, sample_rate)
-    progress_cb('done', 100)
-    if temp_path is not None:
-        temp_path.unlink(missing_ok=True)
+    progress_cb("preparing", 0)
+    split_main(args, progress_cb=cb)
+    if tmp is not None:
+        Path(tmp).unlink(missing_ok=True)
+    progress_cb("done", 100)

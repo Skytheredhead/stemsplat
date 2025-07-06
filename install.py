@@ -8,8 +8,28 @@ import os
 import json
 import webbrowser
 from pathlib import Path
+import time
+import urllib.request
 
 progress = {"pct": 0, "step": "starting"}
+choice_event = threading.Event()
+MODEL_URLS = [
+    ("Mel Band Roformer Vocals.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
+    ("Mel Band Roformer Instrumental.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true"),
+    ("mel_band_roformer_karaoke_becruily.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true"),
+    ("becruily_guitar.ckpt",
+     "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true"),
+    ("kuielab_a_bass.onnx",
+     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true"),
+    ("kuielab_a_drums.onnx",
+     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true"),
+    ("kuielab_a_other.onnx",
+     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true"),
+]
+TOTAL_BYTES = int(3.68 * 1024**3)
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -33,6 +53,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
 
+    def do_POST(self):
+        if self.path == '/download_models':
+            progress['choice'] = 'download'
+            choice_event.set()
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == '/skip_models':
+            progress['choice'] = 'skip'
+            choice_event.set()
+            self.send_response(200)
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
 def run_server():
     with socketserver.TCPServer(('localhost', 6060), Handler) as httpd:
         webbrowser.open('http://localhost:6060/')
@@ -54,6 +89,43 @@ def python_path():
         return Path('venv') / 'Scripts' / 'python'
     else:
         return Path('venv') / 'bin' / 'python'
+
+
+def _models_missing():
+    models_dir = Path('models')
+    for name, _ in MODEL_URLS:
+        if not (models_dir / name).exists():
+            return True
+    return False
+
+
+def _start_server():
+    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'stemrunner.server:app'])
+
+
+def _download_models():
+    models_dir = Path('models')
+    models_dir.mkdir(exist_ok=True)
+    downloaded = 0
+    for name, url in MODEL_URLS:
+        progress['step'] = f'downloading {name}'
+        dest = models_dir / name
+        with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
+            t0 = time.time()
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                out.write(chunk)
+                downloaded += len(chunk)
+                now = time.time()
+                speed = len(chunk) / 1024 / 1024 / max(now - t0, 1e-6)
+                progress['pct'] = int(downloaded / TOTAL_BYTES * 100)
+                progress['step'] = f'downloading {name} ({speed:.1f} MB/s)'
+                t0 = now
+    progress['pct'] = 100
+    progress['step'] = 'done'
+    _start_server()
 
 def install():
     steps = [
@@ -80,10 +152,22 @@ def install():
             progress['step'] = f'error during {msg}'
             progress['pct'] = -1
             return
+    if _models_missing():
+        progress['step'] = 'waiting for model choice'
+        progress['pct'] = 99
+        choice_event.wait()
+        choice_event.clear()
+        if progress.get('choice') == 'download':
+            _download_models()
+            return
+        else:
+            progress['pct'] = 100
+            progress['step'] = 'done'
+            _start_server()
+            return
     progress['pct'] = 100
     progress['step'] = 'done'
-    # launch the web application once installation finishes
-    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'stemrunner.server:app'])
+    _start_server()
 
 if __name__ == '__main__':
     run_server()

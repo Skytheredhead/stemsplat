@@ -22,8 +22,8 @@ from tqdm import tqdm
 # --------------------------------------------------------------------------
 # Hard‑wired defaults so you don’t need to pass --ckpt / --config each run
 # --------------------------------------------------------------------------
-DEFAULT_CKPT = Path("/Users/skylarenns/Documents/split/Mel Band Roformer Vocals.ckpt")
-DEFAULT_YAML = Path("/Users/skylarenns/Documents/split/Mel Band Roformer Vocals Config.yaml")
+DEFAULT_CKPT = Path(__file__).resolve().parents[1] / "models" / "Mel Band Roformer Vocals.ckpt"
+DEFAULT_YAML = Path(__file__).resolve().parents[1] / "configs" / "Mel Band Roformer Vocals Config.yaml"
 
 # --------------------------------------------------------------------------
 def load_model(ckpt_path: str, yaml_path: str, device: torch.device):
@@ -71,21 +71,22 @@ def overlap_add(dst: np.ndarray, seg: np.ndarray, start: int, fade: int):
 
 
 # --------------------------------------------------------------------------
-def main():
+def main(argv=None, progress_cb=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt",   default=str(DEFAULT_CKPT),   help=".ckpt weights")
     parser.add_argument("--config", default=str(DEFAULT_YAML),   help=".yaml model def")
     parser.add_argument("--wav",    required=True,               help="input WAV")
     parser.add_argument("--out",    default="stems_out",         help="output dir")
     parser.add_argument("--segment",type=int, default=352_800,   help="segment size")
-    parser.add_argument("--overlap",type=int, default=12,        help="overlap percent")
+    parser.add_argument("--overlap",type=int, default=18,        help="overlap percent")
+    parser.add_argument("--vocals-only", action="store_true", help="only save vocals")
     parser.add_argument(
         "--device",
         default=("mps" if torch.backends.mps.is_available()
                  else ("cuda" if torch.cuda.is_available() else "cpu")),
         help="compute device: 'mps' (Apple Metal), 'cuda', or 'cpu'"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # --- Load audio --------------------------------------------------------
     wav, sr = torchaudio.load(args.wav)
@@ -109,6 +110,8 @@ def main():
     model  = load_model(args.ckpt, args.config, device)
 
     # --- Process -----------------------------------------------------------
+    if progress_cb:
+        progress_cb(0.0)
     with torch.no_grad(), tqdm(total=n_samples, unit="sample") as bar:
         for start in range(0, n_samples, hop_size):
             end = min(start + seg_size, n_samples)
@@ -148,6 +151,8 @@ def main():
 
             overlap_add(stems, pred, start, fade_len)
             bar.update(min(hop_size, n_samples - start))
+            if progress_cb:
+                progress_cb(bar.n / bar.total)
 
     # --- Normalise windowing ----------------------------------------------
     window_sum = np.ones(n_samples, dtype=np.float32)
@@ -165,7 +170,10 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     sf.write(out_dir / "vocals.wav",       stems[0].T, sr)   # (samples, channels)
-    sf.write(out_dir / "instrumental.wav", stems[1].T, sr)
+    if not args.vocals_only:
+        sf.write(out_dir / "instrumental.wav", stems[1].T, sr)
+    if progress_cb:
+        progress_cb(1.0)
     print(f"✓ Done – stems saved to “{out_dir}”")
 
 

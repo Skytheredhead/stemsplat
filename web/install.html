@@ -33,6 +33,11 @@
       from { opacity: 1; }
       to   { opacity: 0; }
     }
+    @keyframes drop {
+      from { opacity:0; transform:translateY(-8px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    .drop-in { animation: drop 0.3s ease forwards; }
   </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center gap-10" style="background: var(--bg-deep); font-family: 'Nunito Sans', sans-serif;">
@@ -40,21 +45,36 @@
   <div id="card" class="glass w-11/12 max-w-xl px-8 py-6 rounded-xl flex flex-col gap-4 fade-in">
     <span id="status" class="text-[var(--txt-main)]">starting…</span>
     <div class="w-full h-3 bg-gray-700 rounded overflow-hidden">
-      <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%"></div>
+    <div id="bar" class="h-full bg-[var(--accent)]" style="width:0%; transition:width 0.3s ease"></div>
     </div>
-    <div id="note" class="text-gray-400 text-sm">This step may take a few minutes…</div>
+    <div id="note" class="text-gray-400 text-sm">this might take a minute (it'll probably take way less)</div>
+    <div id="log" class="text-xs text-[var(--txt-main)] h-4"></div>
     <div id="error" class="hidden text-red-400 text-sm"></div>
   </div>
   <div id="loading" class="hidden text-[var(--txt-main)]">starting server…</div>
   <script>
+    let lastStep = '';
+    let prompted = false;
     async function poll(){
       const res = await fetch('/progress');
       const data = await res.json();
       const bar = document.getElementById('bar');
       const status = document.getElementById('status');
+      const log = document.getElementById('log');
       const err = document.getElementById('error');
       if(data.pct >= 0){ bar.style.width = data.pct + '%'; }
       status.textContent = data.step;
+      if(data.step && data.step !== lastStep){
+        log.textContent = data.step;
+        log.classList.remove('drop-in');
+        void log.offsetWidth;
+        log.classList.add('drop-in');
+        lastStep = data.step;
+      }
+      if(data.step === 'waiting for model choice' && !prompted){
+        showPrompt();
+        prompted = true;
+      }
       if(data.pct === -1){
         err.textContent = 'installation failed';
         err.classList.remove('hidden');
@@ -65,6 +85,14 @@
         return;
       }
       setTimeout(poll, 1000);
+    }
+    function showPrompt(){
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>models not found! would you like me to download them?</p><div class="flex justify-end gap-2"><button id="skip" class="px-3 py-1 bg-gray-500 rounded">nah i got it</button><button id="dl" class="px-3 py-1 bg-[var(--accent)] rounded text-black">yes please</button></div></div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#dl').onclick = async () => { await fetch('/download_models', {method:'POST'}); overlay.remove(); };
+      overlay.querySelector('#skip').onclick = async () => { await fetch('/skip_models', {method:'POST'}); overlay.remove(); };
     }
     async function waitForServer(){
       const card = document.getElementById('card');
