@@ -38,3 +38,4 @@ to derive other instruments.
 - Improve the UI
 - Running your own models
 - Model Training
+- video support??
