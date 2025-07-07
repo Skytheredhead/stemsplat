@@ -4,6 +4,11 @@ import time
 import math
 import yaml
 import numpy as np
+# Remove project root from sys.path if local torch.py stub exists
+import sys, pathlib as _pathlib
+_PROJECT_ROOT = _pathlib.Path(__file__).resolve().parents[1]
+if (_PROJECT_ROOT / "torch.py").exists():
+    sys.path = [p for p in sys.path if p not in ("", str(_PROJECT_ROOT))]
 import torch
 import torchaudio
 
@@ -13,15 +18,9 @@ except Exception:  # pragma: no cover - optional dependency
     ort = None
 
 def _select_device(gpu: Optional[int]) -> torch.device:
-    """Return best available device. Prefers CUDA when gpu provided,
-    otherwise auto-detects CUDA, then Metal (MPS), else CPU."""
-    if gpu is not None and torch.cuda.is_available():
-        return torch.device(f'cuda:{gpu}')
-    if gpu is None:
-        if torch.cuda.is_available():
-            return torch.device('cuda:0')
-        if getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
-            return torch.device('mps')
+    """Return best available device. Prefers Metal (MPS), else CPU."""
+    if getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
+        return torch.device('mps')
     return torch.device('cpu')
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / 'models'
@@ -67,7 +66,7 @@ class StemModel:
                 except Exception:
                     self.kind = 'file'
 
-    def __call__(self, mag: torch.Tensor) -> torch.Tensor:
+    def __call__(self, mag: 'torch.Tensor') -> 'torch.Tensor':
         if self.kind == 'onnx' and self.session is not None:
             inp_name = self.session.get_inputs()[0].name
             out = self.session.run(None, {inp_name: mag.detach().cpu().numpy()})[0]
@@ -131,6 +130,9 @@ class ModelManager:
     ):
         sr = 44100
         device = self.device
+        # Ensure tensor input (server may pass NumPy array)
+        if isinstance(waveform, np.ndarray):
+            waveform = torch.tensor(waveform, dtype=torch.float32)
         waveform = waveform.to(device)
         length = waveform.shape[1]
         step = max(1, segment - overlap)
@@ -181,6 +183,8 @@ class ModelManager:
     ):
         sr = 44100
         device = self.device
+        if isinstance(waveform, np.ndarray):
+            waveform = torch.tensor(waveform, dtype=torch.float32)
         waveform = waveform.to(device)
         length = waveform.shape[1]
         step = max(1, segment - overlap)
