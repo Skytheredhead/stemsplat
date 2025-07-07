@@ -44,6 +44,17 @@ def _worker():
 
 threading.Thread(target=_worker, daemon=True).start()
 
+process_queue: queue.Queue[callable] = queue.Queue()
+def _worker():
+    while True:
+        fn = process_queue.get()
+        try:
+            fn()
+        finally:
+            process_queue.task_done()
+
+threading.Thread(target=_worker, daemon=True).start()
+
 download_lock = threading.Lock()
 downloading = False
 
