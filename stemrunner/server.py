@@ -155,6 +155,7 @@ async def upload_file(
         progress[task_id] = {'stage': stage, 'pct': pct}
 
     def run():
+        try:
             audio_path = conv_path
 
             # ── Convert to WAV if needed ───────────────────────────────────
