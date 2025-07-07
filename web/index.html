@@ -90,6 +90,12 @@
       <div class="flex justify-between items-center">
         <span class="truncate text-[var(--txt-main)] text-sm filename"></span>
         <div class="flex items-center gap-3">
+          <button class="pause hidden w-6 h-6 bg-white rounded flex items-center justify-center">
+            <svg class="w-3 h-3 text-gray-800" viewBox="0 0 24 24" fill="currentColor"><path d="M5 4h4v16H5zm10 0h4v16h-4z"/></svg>
+          </button>
+          <button class="stop hidden w-6 h-6 bg-white rounded flex items-center justify-center">
+            <svg class="w-3 h-3 text-gray-800" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5h14v14H5z"/></svg>
+          </button>
           <span class="text-xs text-[var(--accent-lite)] status">queued</span>
           <a class="download hidden px-3 py-1 rounded bg-[var(--accent-lite)] text-black text-xs" href="#">download</a>
         </div>
@@ -154,28 +160,51 @@
       updateVigs();
     }
 
+    function setupControls(pauseBtn, stopBtn, id){
+      const icon = pauseBtn.querySelector('path');
+      pauseBtn.onclick = () => {
+        if(pauseBtn.dataset.state === 'paused'){
+          fetch('/resume/' + id, {method:'POST'});
+          pauseBtn.dataset.state = 'running';
+          icon.setAttribute('d','M5 4h4v16H5zm10 0h4v16h-4z');
+        } else {
+          fetch('/pause/' + id, {method:'POST'});
+          pauseBtn.dataset.state = 'paused';
+          icon.setAttribute('d','M6 4l12 8-12 8z');
+        }
+      };
+      stopBtn.onclick = () => { fetch('/stop/' + id, {method:'POST'}); };
+    }
+
     function createItem(task){
       const node = template.content.cloneNode(true);
       const li   = node.querySelector('.filename');
       const bar  = node.querySelector('.progress');
       const st   = node.querySelector('.status');
       const dl   = node.querySelector('.download');
+      const pause= node.querySelector('.pause');
+      const stop = node.querySelector('.stop');
       li.textContent = task.name;
       bar.style.width = (task.pct||0) + '%';
       if(task.pct >= 100){
         st.classList.add('hidden');
         dl.classList.remove('hidden');
         dl.href = '/download/' + task.id;
+        pause.remove();
+        stop.remove();
       }
       else if(task.pct < 0) st.textContent = 'error';
       else {
         const [s,e] = STAGE_RANGES[task.stage] || [0,100];
         const sp = Math.round(((task.pct - s) / (e - s)) * 100);
         st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
+        pause.classList.remove('hidden');
+        stop.classList.remove('hidden');
+        setupControls(pause, stop, task.id);
       }
       queue.appendChild(node);
       updateVigs();
-      return {bar, st, dl};
+      return {bar, st, dl, pause, stop};
     }
 
     clearBtn.addEventListener('click', () => {
@@ -188,9 +217,9 @@
 
     // restore previous tasks
     tasks.forEach(t => {
-      const {bar, st, dl} = createItem(t);
+      const {bar, st, dl, pause, stop} = createItem(t);
       if(t.pct < 100 && t.pct >= 0){
-        trackProgress(t.id, bar, st, dl, t);
+        trackProgress(t.id, bar, st, dl, pause, stop, t);
       }
     });
     updateUI();
@@ -267,6 +296,8 @@
         const li   = item.querySelector('.filename');
         const bar  = item.querySelector('.progress');
         const st   = item.querySelector('.status');
+        const pause= item.querySelector('.pause');
+        const stop = item.querySelector('.stop');
         li.textContent = file.name;
         queue.appendChild(item);
         updateVigs();
@@ -303,7 +334,9 @@
           tasks.push(task);
           saveTasks();
           updateUI();
-          trackProgress(res.task_id, bar, st, item.querySelector('.download'), task);
+          setupControls(pause, stop, res.task_id);
+          const dl = item.querySelector('.download');
+          trackProgress(res.task_id, bar, st, dl, pause, stop, task);
         };
         xhr.onerror = () => {
           st.textContent = 'error';
@@ -315,7 +348,7 @@
       });
     }
 
-    function trackProgress(id, bar, st, dl, task){
+    function trackProgress(id, bar, st, dl, pause, stop, task){
       const es = new EventSource(`/progress/${id}`);
       es.onmessage = (evt) => {
         const info = JSON.parse(evt.data);
@@ -323,6 +356,13 @@
         const [s,e] = STAGE_RANGES[info.stage] || [0,100];
         const sp = Math.round(((info.pct - s) / (e - s)) * 100);
         st.textContent  = info.stage ? `${info.stage} (${sp}%)` : `${info.pct}%`;
+        if(info.stage === 'paused'){
+          pause.dataset.state = 'paused';
+          pause.querySelector('path').setAttribute('d','M6 4l12 8-12 8z');
+        } else if(pause.dataset.state === 'paused'){
+          pause.dataset.state = 'running';
+          pause.querySelector('path').setAttribute('d','M5 4h4v16H5zm10 0h4v16h-4z');
+        }
         task.pct = info.pct;
         task.stage = info.stage;
         saveTasks();
@@ -331,6 +371,8 @@
           st.classList.add('hidden');
           dl.classList.remove('hidden');
           dl.href = '/download/' + id;
+          pause.remove();
+          stop.remove();
           saveTasks();
         }
         if(info.pct < 0){ es.close(); st.textContent = 'error'; showError('processing failed'); saveTasks(); }
