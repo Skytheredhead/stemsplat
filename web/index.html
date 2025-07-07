@@ -70,10 +70,11 @@
     <div class="glass w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in">
       <p class="text-sm text-[var(--txt-main)] mt-4">stems</p>
       <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="accent-[var(--accent)]" checked>vocals</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>instrumental</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>drums</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>bass</label>
-      <label class="flex items-center gap-2 text-gray-500"><input type="checkbox" disabled>other</label>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="accent-[var(--accent)]">instrumental</label>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="drums-box" type="checkbox" class="accent-[var(--accent)]">drums</label>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="bass-box" type="checkbox" class="accent-[var(--accent)]">bass</label>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="other-box" type="checkbox" class="accent-[var(--accent)]">other</label>
+      <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="guitar-box" type="checkbox" class="accent-[var(--accent)]">guitar</label>
     </div>
   </div>
 
@@ -111,6 +112,11 @@
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
     const vocalsBox = document.getElementById('vocals-box');
+    const instBox   = document.getElementById('inst-box');
+    const drumsBox  = document.getElementById('drums-box');
+    const bassBox   = document.getElementById('bass-box');
+    const otherBox  = document.getElementById('other-box');
+    const guitarBox = document.getElementById('guitar-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const topBtn    = document.getElementById('top-btn');
@@ -285,7 +291,7 @@
       [...fileList].forEach(file => {
         // skip non-audio (extra guard even though accept="audio/*")
         if(!file.type.startsWith('audio/')) return;
-        if(!vocalsBox.checked){
+        if(![vocalsBox, instBox, drumsBox, bassBox, otherBox, guitarBox].some(b => b.checked)){
           showPopup('you have no stems selected! please select at least one and try again!');
           return;
         }
@@ -305,6 +311,14 @@
         // prepare form data
         const data = new FormData();
         data.append('file', file);
+        const stems = [];
+        if(vocalsBox.checked) stems.push('vocals');
+        if(instBox.checked)   stems.push('instrumental');
+        if(drumsBox.checked)  stems.push('drums');
+        if(bassBox.checked)   stems.push('bass');
+        if(otherBox.checked)  stems.push('other');
+        if(guitarBox.checked) stems.push('guitar');
+        data.append('stems', stems.join(','));
 
         // upload (with fetch + progress)
         const xhr = new XMLHttpRequest();

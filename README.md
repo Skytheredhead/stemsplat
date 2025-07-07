@@ -33,8 +33,9 @@ to derive other instruments.
 - kuielab_a_other.onnx
 
 ## Future Plans
-
+- Add a “estimated time remaining” to the processing of the stack of songs based on song length and how long it’s taken to process the previous length of the song.
 - Add different models for pc specs, like a low/med/high quality toggle that will use different models.
 - Improve the UI
+- Running your own models
+- Model Training
 - video support??
-
