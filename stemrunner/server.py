@@ -39,7 +39,9 @@ tasks = {}
 controls = {}
 
 process_queue: queue.Queue[callable] = queue.Queue()
-def _worker():
+
+
+def _worker() -> None:
     while True:
         fn = process_queue.get()
         try:
@@ -47,16 +49,6 @@ def _worker():
         finally:
             process_queue.task_done()
 
-threading.Thread(target=_worker, daemon=True).start()
-
-process_queue: queue.Queue[callable] = queue.Queue()
-def _worker():
-    while True:
-        fn = process_queue.get()
-        try:
-            fn()
-        finally:
-            process_queue.task_done()
 
 threading.Thread(target=_worker, daemon=True).start()
 
