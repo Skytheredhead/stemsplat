@@ -156,6 +156,23 @@ async def upload_file(
     if not config_path.exists():
         return JSONResponse({'detail': 'config file not found'}, status_code=400)
 
+    # Ensure required models are present for the requested stems
+    manager = ModelManager()
+    missing = []
+    for s in stem_list:
+        info = manager.model_info.get(s)
+        if not info:
+            continue
+        model_obj = getattr(manager, s)
+        if model_obj.kind == 'none':
+            missing.append(info[0])
+        cfg = info[1]
+        if cfg and getattr(manager, f"{s}_config") is None:
+            missing.append(cfg)
+    if missing:
+        msg = f"models missing: {', '.join(missing)}"
+        return JSONResponse({'detail': msg}, status_code=400)
+
     def cb(stage: str, pct: int):
         while pause_evt.is_set():
             progress[task_id] = {'stage': 'paused', 'pct': pct}
@@ -188,7 +205,6 @@ async def upload_file(
                 waveform = torchaudio.functional.resample(waveform, sr, 44100)
                 sr = 44100
 
-            manager = ModelManager()
             out_dir.mkdir(parents=True, exist_ok=True)
             temp_dir = Path(tempfile.gettempdir())
             stems_out: list[str] = []
