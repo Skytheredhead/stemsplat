@@ -150,16 +150,16 @@ async def upload_file(
 
     # Ensure required models are present for the requested stems
     manager = ModelManager()
+    missing_all = manager.missing_models()
     missing = []
     for s in stem_list:
         info = manager.model_info.get(s)
         if not info:
             continue
-        model_obj = getattr(manager, s)
-        if model_obj.kind == 'none':
+        if info[0] in missing_all:
             missing.append(info[0])
         cfg = info[1]
-        if cfg and getattr(manager, f"{s}_config") is None:
+        if cfg and cfg in missing_all:
             missing.append(cfg)
     if missing:
         msg = f"models missing: {', '.join(missing)}"
