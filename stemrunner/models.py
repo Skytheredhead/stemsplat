@@ -38,7 +38,11 @@ class StemModel:
         self.path = path
         if path is None:
             return
-        if path.suffix.lower() == '.onnx' and ort is not None:
+        if path.suffix.lower() == '.onnx':
+            if ort is None:
+                # ONNX models require onnxruntime to run
+                self.kind = 'none'
+                return
             try:
                 providers = (
                     ['CUDAExecutionProvider', 'CPUExecutionProvider']
@@ -50,7 +54,7 @@ class StemModel:
                 return
             except Exception:
                 self.session = None
-                self.kind = 'file'
+                self.kind = 'none'
         else:
             try:
                 self.net = torch.jit.load(str(path), map_location=device)
