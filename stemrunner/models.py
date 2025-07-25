@@ -38,7 +38,11 @@ class StemModel:
         self.path = path
         if path is None:
             return
-        if path.suffix.lower() == '.onnx' and ort is not None:
+        if path.suffix.lower() == '.onnx':
+            if ort is None:
+                # ONNX models require onnxruntime to run
+                self.kind = 'none'
+                return
             try:
                 providers = (
                     ['CUDAExecutionProvider', 'CPUExecutionProvider']
@@ -50,7 +54,7 @@ class StemModel:
                 return
             except Exception:
                 self.session = None
-                self.kind = 'file'
+                self.kind = 'none'
         else:
             try:
                 self.net = torch.jit.load(str(path), map_location=device)
@@ -103,14 +107,14 @@ class ModelManager:
                 setattr(self, f"{name}_config", self._load_path(CONFIGS_DIR / cfg_fname))
 
     def missing_models(self):
-        """Return a list of model or config files that could not be found."""
+        """Return model or config files that are unavailable or unusable."""
         self.refresh_models()
         missing = []
         for name, (model_fname, cfg_fname) in self.model_info.items():
             model_obj = getattr(self, name)
-            if model_obj.kind == 'none':
+            if model_obj.kind not in ('onnx', 'torchscript'):
                 missing.append(model_fname)
-            elif cfg_fname and getattr(self, f"{name}_config") is None:
+            if cfg_fname and getattr(self, f"{name}_config") is None:
                 missing.append(cfg_fname)
         return missing
 
