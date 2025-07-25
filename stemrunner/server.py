@@ -20,6 +20,15 @@ import logging
 import json
 from urllib.parse import quote
 
+# ---------------------------------------------------------------------------
+# Avoid importing the local torch.py / torchaudio stubs if real packages are
+# installed.  Remove the project root from sys.path when a stub is present so
+# that ``import torch`` resolves to the genuine library.
+import sys as _sys, pathlib as _pathlib
+_PROJECT_ROOT = _pathlib.Path(__file__).resolve().parents[1]
+if (_PROJECT_ROOT / "torch.py").exists():
+    _sys.path = [p for p in _sys.path if p not in ("", str(_PROJECT_ROOT))]
+
 from .models import ModelManager
 import torchaudio
 import soundfile as sf
@@ -259,6 +268,7 @@ async def upload_file(
                         zf.write(fp, arcname=name)
             tasks[task_id]["zip"] = zip_path
             tasks[task_id]["stems"] = stems_out
+            progress[task_id] = {"stage": "done", "pct": 100}
 
         except Exception as exc:
             logging.exception("processing failed")
