@@ -137,14 +137,15 @@ async def upload_file(
     import shutil
     shutil.copy2(path, conv_path)
 
-    ckpt_path = Path('models') / 'Mel Band Roformer Vocals.ckpt'
+    root_dir = Path(__file__).resolve().parent.parent
+    ckpt_path = root_dir / 'models' / 'Mel Band Roformer Vocals.ckpt'
     if not ckpt_path.exists():
         ckpt_path = Path.home() / 'Library/Application Support/stems/Mel Band Roformer Vocals.ckpt'
 
     if not ckpt_path.exists():
         return JSONResponse({'detail': 'checkpoint not found'}, status_code=400)
 
-    config_path = Path('configs') / 'Mel Band Roformer Vocals Config.yaml'
+    config_path = root_dir / 'configs' / 'Mel Band Roformer Vocals Config.yaml'
     if not config_path.exists():
         return JSONResponse({'detail': 'config file not found'}, status_code=400)
 
