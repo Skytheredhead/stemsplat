@@ -12,6 +12,23 @@ if (_PROJECT_ROOT / "torch.py").exists():
 import torch
 import torchaudio
 
+# ── Roformer loader ──────────────────────────────────────────────────────
+# We may have just *removed* the project root from sys.path to dodge a stub
+# torch.py.  That also hides the local “split/” package.  First try the
+# import; if it fails, append the project root *after* torch is safely
+# imported so it can’t shadow it, then retry.
+try:
+    from split.split import load_model as _load_roformer
+except ModuleNotFoundError:
+    import sys as _sys
+    _ROOT = str(_PROJECT_ROOT)
+    if _ROOT not in _sys.path:
+        _sys.path.append(_ROOT)          # add to the tail → torch already loaded
+    from split.split import load_model as _load_roformer
+
+# Base project root for model/config resolution
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
 try:
     import onnxruntime as ort
 except Exception:  # pragma: no cover - optional dependency
@@ -23,21 +40,34 @@ def _select_device(gpu: Optional[int]) -> torch.device:
         return torch.device('mps')
     return torch.device('cpu')
 
-MODELS_DIR = Path(__file__).resolve().parent.parent / 'models'
-CONFIGS_DIR = Path(__file__).resolve().parent.parent / 'configs'
+MODELS_DIR = ROOT_DIR / 'models'
+CONFIGS_DIR = ROOT_DIR / 'configs'
+
 
 
 class StemModel:
-    """Wrapper that loads TorchScript, ONNX or generic checkpoint files."""
+    """Wrapper that loads TorchScript, ONNX, Roformer, or generic checkpoint files."""
 
-    def __init__(self, path: Path | None, device: torch.device):
+    def __init__(self, path: Path | None, device: torch.device, config_path: Path | None = None):
         self.device = device
         self.kind = 'none'
         self.session = None
         self.net = None
         self.path = path
+        self.config_path = config_path
+        self.expects_waveform = False
         if path is None:
             return
+        if path.suffix.lower() == '.ckpt':
+            try:
+                # build a real model from <ckpt,+yaml>
+                self.net = _load_roformer(str(path), str(config_path or ''))
+                self.net.eval()
+                self.kind = 'roformer'          # new sentinel
+                self.expects_waveform = True    # takes raw waveform, not mags
+                return
+            except Exception:
+                self.net = None   # fall back to old logic below
         if path.suffix.lower() == '.onnx':
             if ort is None:
                 # ONNX models require onnxruntime to run
@@ -78,6 +108,9 @@ class StemModel:
         if self.kind == 'torchscript' and self.net is not None:
             with torch.no_grad():
                 return self.net(mag)
+        if self.kind == 'roformer' and self.net is not None:
+            with torch.no_grad():
+                return self.net(mag)            # here *mag* is really the raw waveform
         # fallback mask: all-pass
         return mag.new_ones(mag.shape)
 
@@ -102,9 +135,10 @@ class ModelManager:
         """Reload any missing model checkpoints from disk."""
         for name, (model_fname, cfg_fname) in self.model_info.items():
             path = self._load_path(MODELS_DIR / model_fname)
-            setattr(self, name, StemModel(path, self.device))
+            cfg_path = CONFIGS_DIR / cfg_fname if cfg_fname else None
+            setattr(self, name, StemModel(path, self.device, cfg_path))
             if cfg_fname:
-                setattr(self, f"{name}_config", self._load_path(CONFIGS_DIR / cfg_fname))
+                setattr(self, f"{name}_config", cfg_path)
 
     def missing_models(self):
         """Return model or config files that are unavailable or unusable."""
@@ -112,16 +146,24 @@ class ModelManager:
         missing = []
         for name, (model_fname, cfg_fname) in self.model_info.items():
             model_obj = getattr(self, name)
-            if model_obj.kind not in ('onnx', 'torchscript'):
+            # Treat generic checkpoint files as valid
+            if model_obj.kind not in ('onnx', 'torchscript', 'file', 'roformer'):
                 missing.append(model_fname)
             if cfg_fname and getattr(self, f"{name}_config") is None:
                 missing.append(cfg_fname)
         return missing
 
     def _load_path(self, path: Path):
-        """Return the path if it exists."""
-        if path.exists():
+        """Return the path if it exists, else try fallback locations."""
+        if path and path.exists():
             return path
+        # fallback to user application support (for server uploads)
+        alt = Path('models') / path.name
+        if alt.exists():
+            return alt
+        home = Path.home() / 'Library/Application Support/stems' / path.name
+        if home.exists():
+            return home
         return None
 
     def split_vocals(
@@ -134,6 +176,33 @@ class ModelManager:
     ):
         sr = 44100
         device = self.device
+        # ── Roformer whole‑track inference ───────────────────────────────
+        if getattr(self.vocals, 'expects_waveform', False):
+            if isinstance(waveform, np.ndarray):
+                waveform = torch.tensor(waveform, dtype=torch.float32)
+            waveform = waveform.to(device)
+
+            if progress_cb:
+                progress_cb(0.0)
+            with torch.no_grad():
+                pred = self.vocals(waveform.unsqueeze(0))[0].cpu()  # (stems?, C?, T?) or (2,T)
+
+            # normalise shape → (stems, C, T)
+            if pred.dim() == 2:                # (2, T)
+                pred = pred[:, None, :]
+            elif pred.dim() == 3 and pred.shape[1] not in (1, waveform.shape[0]):
+                pred = pred.permute(1, 0, 2)   # (C, stems, T) → (stems, C, T)
+
+            vocals  = pred[0]
+            if pred.shape[0] > 1:
+                inst = pred[1]
+            else:
+                inst = waveform.cpu() - vocals
+
+            if progress_cb:
+                progress_cb(1.0)
+            return vocals, inst
+        # ── existing STFT / mask path continues here ──
         # Ensure tensor input (server may pass NumPy array)
         if isinstance(waveform, np.ndarray):
             waveform = torch.tensor(waveform, dtype=torch.float32)
