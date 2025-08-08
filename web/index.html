@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <meta charset="utf-8" />
+  <title>stemsplat</title>
+
+  <!-- nunito sans -->
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+
+  <!-- tailwind (cdn build) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    :root {
+      --bg-1: #0F2027;   /* emerald dusk left */
+      --bg-2: #2C5364;   /* emerald dusk right */
+      --txt-main: #E7ECEF;
+      --txt-dim: #B8C4CC;
+      --accent:  #8ED8FF; /* subtle cyan accent for highlights only */
+      --icon:   #9BB6C2;
+      --card: rgba(23, 35, 41, 0.55);
+      --card-done: rgba(40, 66, 77, 0.70);
+      --border: rgba(255,255,255,0.06);
+    }
+    /* Animated light blur for settings overlay BACKGROUND (not the card) */
+    @keyframes overlayBlurIn {
+      from { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
+      to   { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background-color: rgba(0, 0, 0, 0.35); }
+    }
+    .overlay-bg {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      backdrop-filter: blur(0px);
+      -webkit-backdrop-filter: blur(0px);
+      background-color: rgba(0, 0, 0, 0.0);
+    }
+    .overlay-bg.anim     { animation: overlayBlurIn .28s ease both; }
+    @keyframes overlayBlurOut {
+      from { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background-color: rgba(0, 0, 0, 0.35); }
+      to   { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
+    }
+    .overlay-bg.anim-out { animation: overlayBlurOut 0.18s ease both; }
+    @keyframes settingsCardIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0)    scale(1.00); }
+    }
+    @keyframes settingsCardOut {
+      from { opacity: 1; transform: translateY(0)    scale(1.00); }
+      to   { opacity: 0; transform: translateY(6px)  scale(0.98); }
+    }
+    .settings-card-in  { animation: settingsCardIn  .28s cubic-bezier(.2,.7,.2,1) both; }
+    .settings-card-out { animation: settingsCardOut .18s ease both; }
+
+    body { background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); }
+
+    .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none;
+      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
+    .shade { position: fixed; inset: 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; }
+
+    .glass { background: var(--card); backdrop-filter: blur(12px) saturate(110%); -webkit-backdrop-filter: blur(12px) saturate(110%); border: 1px solid var(--border); box-shadow: 0 8px 26px rgba(0,0,0,.28); }
+    .glass-light { background: rgba(255,255,255,0.12); backdrop-filter: blur(10px) saturate(110%); -webkit-backdrop-filter: blur(10px) saturate(110%); border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 8px 26px rgba(0,0,0,.28); }
+    .card   { position: relative; overflow: visible; transition: background .20s ease; will-change: transform, opacity; transform: translateZ(0); contain: paint; flex-shrink: 0; }
+    .card:hover { box-shadow: 0 8px 26px rgba(0,0,0,.28); }
+    .card:has(.dl-pad:hover):hover { box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+    .card.done { background: var(--card-done); }
+
+    #title { letter-spacing: 0.5px; text-shadow: 0 8px 40px rgba(0,0,0,.45); }
+
+    .fade-in { animation: fade .7s ease forwards; }
+    @keyframes fade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:12px; padding:6px 10px; font-size:12px; font-weight:600; transition: transform .15s ease, box-shadow .15s ease; }
+    .btn:focus { outline: 2px solid rgba(255,255,255,.25); outline-offset: 2px; }
+    .btn:hover { transform: translateY(-1px); }
+
+    .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); }
+    .chip-dim { background: rgba(0,0,0,.38); border:1px solid rgba(255,255,255,.10); color:#E7ECEF; }
+
+    .bar { height: 10px; background: rgba(255,255,255,.08); border-radius:999px; overflow: hidden; }
+    .bar-fill { height:100%; width:0%; background: linear-gradient(90deg, #e7eef2, #dfe7ec); will-change: width; }
+
+    /* pretty checkboxes */
+    input.pretty{ appearance:none; -webkit-appearance:none; width:18px; height:18px; border:1.5px solid rgba(255,255,255,.35); border-radius:6px; background: transparent; display:inline-grid; place-items:center; transition: all .18s ease; }
+    input.pretty:hover{ border-color: rgba(255,255,255,.6); box-shadow: 0 0 0 3px rgba(255,255,255,.06) inset; }
+    input.pretty:checked{ background: linear-gradient(135deg, #96c5d6, #5fa3b5); border-color: transparent; }
+    input.pretty:checked::after{ content:""; width:6px; height:10px; border:2px solid #0F2027; border-top:0; border-left:0; transform: rotate(45deg); }
+
+    #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:40px; background:linear-gradient(to bottom,rgba(0,0,0,.45),transparent); opacity:0; transition:opacity .3s; }
+    #bot-vig{ top:auto; bottom:0; transform:rotate(180deg); }
+
+    .dl-pad,
+    .stop-pad { width:56px; height:56px; border-radius:14px; background: rgba(255,255,255,0.95); color:#0F2027; display:flex; align-items:center; justify-content:center; box-shadow:0 8px 20px rgba(0,0,0,.28); opacity:0; transform: translateX(-10px); transition: opacity .42s ease, transform .42s ease, box-shadow .20s ease; pointer-events:none; align-self: center; position: absolute; top: 50%; transform: translateY(-50%); }
+    .dl-pad.show,
+    .stop-pad.show { opacity:1; transform: translateX(0) translateY(-50%); pointer-events:auto; }
+    .dl-pad:hover,
+    .stop-pad:hover { box-shadow:0 12px 30px rgba(0,0,0,.35); }
+    .item-row { position: relative; padding-right: 84px; }
+    .dl-pad { right: 12px; }
+    .stop-pad { right: 12px; }
+    .dl-pad svg, .stop-pad svg { display:block; margin:auto; }
+
+    @keyframes breathe { 0%{transform:translateY(0)} 50%{transform:translateY(-2px)} 100%{transform:translateY(0)} }
+    .micro { animation: breathe 3s ease-in-out infinite; }
+    .slide-out { opacity: 0; transform: translateY(-10px); transition: transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s ease; }
+    .enter-pre { opacity: 0; transform: translateY(8px); }
+    .enter-active { opacity: 1; transform: translateY(0); transition: transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s ease; }
+    /* leave/fade/slide transition for queue items */
+    .leave { opacity: 1; transform: translateY(0); }
+    .leave-active { transition: transform .16s ease-out, opacity .16s ease-out; }
+    .leave-to { opacity: 0; transform: translateY(-2px); }
+    #clear-btn { opacity: 0; transition: opacity .25s ease; }
+    #clear-btn.show { opacity: 1; }
+    #queue-spacer { height: 0; transition: height .18s ease-out; will-change: height; }
+    .fade { transition: opacity .20s ease; }
+
+    
+    .page-mask { position:fixed; inset:0; background: rgba(0,0,0,0.0); pointer-events:none; opacity:0; transition: opacity .28s ease; }
+    .page-mask.show { opacity:1; }
+@media (prefers-reduced-motion: reduce){ .fade-in{ animation:none; } .btn:hover{ transform:none; } .card:hover{ transform:none; } .micro{ animation:none; } }
+    /* Prevent flashing UI before intro animation */
+    .intro .pre-hide{ opacity: 0; }
+    @view-transition { navigation: auto; }
+  </style>
+
+  <script>
+    if (localStorage.getItem('playIntro')) {
+      document.documentElement.classList.add('intro');
+    }
+  </script>
+</head>
+
+<body class="min-h-screen flex flex-col items-center justify-center gap-10" style="font-family: 'Nunito Sans', sans-serif;">
+
+  <div class="noise fixed inset-0 -z-10"></div>
+  <div class="shade"></div>
+
+  <!-- header -->
+  <h1 id="title" class="text-5xl md:text-6xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
+  <!-- controls -->
+  <div class="w-11/12 max-w-3xl flex gap-6">
+    <div id="dropzone" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
+      </svg>
+      <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
+      <input id="file-input" type="file" accept="audio/*" multiple aria-label="choose audio files" class="sr-only" />
+    </div>
+    <div class="flex flex-col gap-4 w-64">
+      <div id="stems-card" class="glass pre-hide w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
+        <button id="settings-btn" title="settings" class="absolute top-3 right-3 z-10 p-2 rounded-lg hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
+          <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82h0c.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
+          </svg>
+        </button>
+        <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="drums-box" type="checkbox" class="pretty">drums</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="bass-box" type="checkbox" class="pretty">bass</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="other-box" type="checkbox" class="pretty">other</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="guitar-box" type="checkbox" class="pretty">guitar</label>
+      </div>
+      <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        <span class="btn-title mt-1 text-sm font-semibold">start</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- queue -->
+  <div id="queue" class="pre-hide w-11/12 max-w-2xl flex flex-col gap-4"></div>
+  <div id="queue-spacer" class="w-11/12 max-w-2xl"></div>
+  <button id="clear-btn" class="pre-hide mt-4 text-white underline">clear all</button>
+  <button id="top-btn" class="hidden fixed top-4 right-4 bg-white text-black rounded px-3 py-1">top</button>
+  <div id="top-vig"></div>
+  <div id="bot-vig"></div>
+
+  <!-- templates & scripts -->
+  <template id="item-template">
+    <div class="item-row flex items-center gap-3">
+      <div class="glass card rounded-xl px-6 py-4 flex-1 flex flex-col gap-3">
+        <div class="flex justify-between items-center gap-3">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="truncate text-[var(--txt-main)] text-sm filename"></span>
+            <div class="labels flex items-center gap-1"></div>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="chip status">queued</span>
+          </div>
+        </div>
+        <div class="bar"><div class="bar-fill progress"></div></div>
+      </div>
+      <a class="dl-pad self-center" href="#" title="download">
+        <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v9"/>
+          <path d="M8 10l4 4 4-4"/>
+          <path d="M4 16h16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3z"/>
+        </svg>
+      </a>
+      <a class="stop-pad self-center" href="#" title="stop" style="display:none;">
+        <!-- square icon -->
+        <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="6" y="6" width="12" height="12"/>
+        </svg>
+      </a>
+    </div>
+  </template>
+
+  <script>
+    /* helpers */
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('file-input');
+    const vocalsBox = document.getElementById('vocals-box');
+    const instBox   = document.getElementById('inst-box');
+    const drumsBox  = document.getElementById('drums-box');
+    const bassBox   = document.getElementById('bass-box');
+    const otherBox  = document.getElementById('other-box');
+    const guitarBox = document.getElementById('guitar-box');
+    const queue     = document.getElementById('queue');
+    const clearBtn  = document.getElementById('clear-btn');
+    const topBtn    = document.getElementById('top-btn');
+    const topVig    = document.getElementById('top-vig');
+    const botVig    = document.getElementById('bot-vig');
+    const template  = document.getElementById('item-template');
+    const title     = document.getElementById('title');
+    const spacer    = document.getElementById('queue-spacer');
+
+    let startPressed = false;
+
+    // settings overlay refs (assigned on load)
+    let settingsOverlay = null;
+    function openSettings(){
+      if(!settingsOverlay) settingsOverlay = document.getElementById('settings-overlay');
+      const bg = document.getElementById('overlay-bg');
+      const card = document.getElementById('settings-card');
+      if(settingsOverlay){
+        settingsOverlay.classList.remove('hidden');
+        if(bg){
+          bg.classList.remove('anim-out');
+          bg.classList.remove('anim');
+          void bg.offsetWidth;
+          bg.classList.add('anim'); // IN
+        }
+        if(card){
+          card.classList.remove('settings-card-out');
+          card.classList.remove('opacity-0');
+          void card.offsetWidth;
+          card.classList.add('settings-card-in'); // IN
+        }
+      }
+    }
+    function closeSettings(){
+      if(!settingsOverlay) settingsOverlay = document.getElementById('settings-overlay');
+      const bg = document.getElementById('overlay-bg');
+      const card = document.getElementById('settings-card');
+      if(settingsOverlay){
+        if(bg){
+          bg.classList.remove('anim');
+          bg.classList.remove('anim-out');
+          void bg.offsetWidth;
+          bg.classList.add('anim-out'); // OUT
+        }
+        if(card){
+          card.classList.remove('settings-card-in');
+          card.classList.remove('fade-in');
+          card.classList.add('settings-card-out'); // OUT
+        }
+        setTimeout(() => {
+          if(card){
+            card.classList.remove('settings-card-out');
+            card.classList.add('opacity-0');
+          }
+          if(bg){ bg.classList.remove('anim-out'); }
+          settingsOverlay.classList.add('hidden');
+        }, 180);
+      }
+    }
+
+    // --- Progress Smoother Helper ---
+    function makeProgressSmoother(bar){
+      let raf = null;
+      let value = 0;     // currently displayed percent
+      let target = 0;    // latest requested percent
+      const clamp = p => Math.max(0, Math.min(100, p));
+      const tick = () => {
+        // critically damped-ish exponential approach toward target
+        const delta = target - value;
+        // if close enough, snap to target and stop
+        if (Math.abs(delta) < 0.08) {
+          value = target;
+          bar.style.width = value + '%';
+          raf = null;
+          return;
+        }
+        // ease toward target; 0.12 controls lag/smoothness
+        value += delta * 0.12;
+        bar.style.width = value + '%';
+        raf = requestAnimationFrame(tick);
+      };
+      return {
+        setImmediate(p){ value = target = clamp(p); bar.style.width = value + '%'; },
+        setTarget(p){ target = clamp(p); if(!raf) raf = requestAnimationFrame(tick); },
+        stop(){ if(raf){ cancelAnimationFrame(raf); raf = null; } }
+      };
+    }
+
+    if(localStorage.getItem('playIntro')){
+      localStorage.removeItem('playIntro');
+      title.style.position = 'absolute';
+      title.style.left = '50%';
+      title.style.top = '45%';
+      title.style.transform = 'translate(-50%, -50%)';
+      title.style.opacity = '1';
+      setTimeout(() => {
+        title.style.transition = 'all 0.5s ease';
+        title.style.left = '';
+        title.style.top = '';
+        title.style.transform = '';
+      }, 50);
+      setTimeout(() => {
+        document.querySelectorAll('#dropzone, .glass.w-64, #queue, #clear-btn').forEach((el,i)=>{
+          setTimeout(()=>{el.classList.add('fade-in')}, i*25);
+        });
+      }, 600);
+    } else {
+      title.classList.add('fade-in');
+    }
+
+    let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
+    const STAGE_RANGES = {
+      queued:[0,0],
+      preparing:[0,1], 'prepare.complete':[1,1],
+      converting:[1,5],
+      'load_audio.start':[1,2], 'load_audio.done':[2,3],
+      'split_vocals.start':[3,3], vocals:[3,60], 'split_vocals.done':[60,60],
+      instrumental_model:[60,72], 'split_inst_model.start':[60,60], 'split_inst_model.done':[70,72],
+      instrumental:[60,90], 'split_inst.start':[60,90], 'split_inst.masks_ready':[88,90],
+      'write.vocals':[52,55], 'write.instrumental':[72,75], 'write.drums':[92,94], 'write.bass':[92,94], 'write.other':[92,94], 'write.guitar':[92,94],
+      'zip.start':[95,98], 'zip.done':[98,99],
+      finalizing:[99,100], done:[100,100],
+      paused:[0,0], stopped:[0,0], error:[0,0],
+    };
+    // Helper: is a task finished? (completed or stopped)
+    function isFinished(t){
+      return t && (t.pct >= 100 || t.stage === 'stopped');
+    }
+    function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
+    // processing-state helper
+    function isProcessing(t){
+      return t && t.pct >= 0 && t.pct < 100 && t.stage !== 'stopped';
+    }
+    
+    function updateClear(){
+      let hasClearable = false;
+      if (!startPressed) {
+        hasClearable = Array.isArray(tasks) && tasks.length > 0;
+      } else {
+        hasClearable = tasks && tasks.some(t => t && (t.stage === 'stopped' || (typeof t.pct === 'number' && t.pct >= 100)));
+      }
+      // Reserve fixed vertical space to avoid layout jump whether visible or not
+      spacer.style.height = '32px';
+      if (hasClearable) {
+        clearBtn.classList.add('show');
+        clearBtn.style.pointerEvents = 'auto';
+      } else {
+        clearBtn.classList.remove('show');
+        clearBtn.style.pointerEvents = 'none';
+      }
+    }
+    function updateVigs(){
+      const rect = queue.getBoundingClientRect();
+      topVig.style.opacity = window.scrollY > 0 ? '1' : '0';
+      botVig.style.opacity = rect.bottom > window.innerHeight ? '1' : '0';
+      if(rect.bottom > window.innerHeight) topBtn.classList.remove('hidden');
+      else topBtn.classList.add('hidden');
+    }
+    function updateUI(){
+      updateClear();
+      updateVigs();
+    }
+
+
+    // Helper to apply stem labels
+    function applyLabels(container, stemsList){
+      if(!container || !stemsList) return;
+      container.innerHTML='';
+      stemsList.forEach(name => {
+        const base = name.split(' - ').pop() || name;
+        const stem = base.replace(/\.wav$/i,'');
+        const chip = document.createElement('span');
+        chip.className = 'chip chip-dim text-[11px]';
+        chip.textContent = stem;
+        container.appendChild(chip);
+      });
+    }
+
+    // --- Helper to set rerun and stop icons ---
+    
+    function setRerunIcon(stopPad){
+      if(!stopPad) return;
+      while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
+      const NS = 'http://www.w3.org/2000/svg';
+      const ccw = document.createElementNS(NS,'svg');
+      ccw.setAttribute('viewBox','0 0 24 24');
+      ccw.classList.add('w-7','h-7');
+      ccw.setAttribute('fill','none');
+      ccw.setAttribute('stroke','#222');
+      ccw.setAttribute('stroke-width','2');
+      ccw.setAttribute('stroke-linecap','round');
+      ccw.setAttribute('stroke-linejoin','round');
+      const path = document.createElementNS(NS,'path');
+      path.setAttribute('d','M4.93 4.93a10 10 0 1 1-1.41 1.41L1 5v6h6l-2.22-2.22a8 8 0 1 0 1.41-1.41z');
+      ccw.appendChild(path);
+      stopPad.appendChild(ccw);
+    }
+
+    function setStopSquareIcon(stopPad){
+      if(!stopPad) return;
+      while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
+      const NS = 'http://www.w3.org/2000/svg';
+      const sq = document.createElementNS(NS,'svg');
+      sq.setAttribute('viewBox','0 0 24 24');
+      sq.classList.add('w-7','h-7');
+      const rect = document.createElementNS(NS,'rect');
+      rect.setAttribute('x','4');
+      rect.setAttribute('y','4');
+      rect.setAttribute('width','16');
+      rect.setAttribute('height','16');
+      rect.setAttribute('fill','#222');
+      sq.appendChild(rect);
+      stopPad.appendChild(sq);
+    }
+// --- Helper to rerun a task server-side ---
+    async function rerunTask(task, ui){
+      const {bar, st, dl, stopPad, smooth} = ui;
+      if(!task || !task.id) return;
+      let ok = false, newId = null, payload = null;
+      try {
+        const res = await fetch('/rerun/' + task.id, { method: 'POST' });
+        if (res.ok) {
+          try { payload = await res.json(); } catch(_) { payload = null; }
+          newId = payload && (payload.task_id || payload.id || null);
+          if (newId) { ok = true; }
+        }
+      } catch (_) {}
+      if (!ok || !newId) {
+        // Treat it as a stopped/error card with rerun available
+        if (st) { st.textContent = 'error'; st.classList.remove('hidden'); }
+        const parent = st && st.closest ? st.closest('.card') : null;
+        if (parent) parent.classList.add('done');
+
+        if (stopPad) {
+          stopPad.title = 'rerun';
+          stopPad.innerHTML = '';          // prevent double icon
+          setRerunIcon(stopPad);
+          stopPad.style.pointerEvents = '';
+          stopPad.style.opacity = '';
+          stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, ui); };
+        }
+        updateUI();
+        showError('rerun failed');
+        return;
+      }
+      // reset visual state
+      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; }
+      if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
+      const card = stopPad && stopPad.closest('.card');
+      if(card){ card.classList.remove('done'); }
+      if(smooth){ smooth.setImmediate(0); }
+      // show stop square again
+      if(stopPad){
+        stopPad.title = 'stop';
+        stopPad.innerHTML = '';
+        setStopSquareIcon(stopPad);
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        stopPad.onclick = (e) => { e.preventDefault(); fetch('/stop/'+task.id,{method:'POST'}); };
+      }
+      task.stage = 'preparing';
+      task.pct = 0;
+      saveTasks();
+      updateUI();
+      // resume tracking
+      const oldId = task.id;
+      task.id = newId;
+      if (dl) { dl.removeAttribute('href'); }
+      const row = stopPad && stopPad.closest('.item-row');
+      if (row) { row.__taskId = newId; }
+      saveTasks();
+      trackProgress(newId, bar, st, dl, null, null, task, null, smooth, stopPad);
+    }
+
+    function createItem(task){
+      const node = template.content.cloneNode(true);
+      const li   = node.querySelector('.filename');
+      const bar  = node.querySelector('.bar-fill');
+      const st   = node.querySelector('.chip');
+      const dl   = node.querySelector('.dl-pad');
+      const card = node.querySelector('.card');
+      const stopPad = node.querySelector('.stop-pad');
+      li.textContent = task.name;
+      const labels = node.querySelector('.labels');
+      const smooth = makeProgressSmoother(bar);
+      const initRange = STAGE_RANGES[task.stage] || [0,100];
+      const initSp = Math.round(Math.max(0, Math.min(100, task.pct || 0)));
+      const initOverall = initRange[0] + (initRange[1] - initRange[0]) * (initSp/100);
+      smooth.setImmediate(initOverall);
+      if(task.pct >= 100){
+        st.classList.add('hidden');
+        dl.href = '/download/' + task.id;
+        dl.classList.add('show');
+        card.classList.add('done');
+        if(stopPad) stopPad.remove();
+      }
+      else if(task.stage === 'stopped'){
+        // Treat as finished visually
+        st.classList.add('hidden');
+        card.classList.add('done');
+        if (stopPad){
+          stopPad.style.display = '';
+          stopPad.classList.add('show');
+          stopPad.innerHTML = '';
+        setRerunIcon(stopPad);
+          stopPad.title = 'rerun';
+          stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
+        }
+      }
+      else if (task.stage === 'error' || task.pct < 0) {
+        // Treat like stopped; keep label visible for context
+        st.textContent = 'error';
+        const parent = st.closest('.card'); if (parent) parent.classList.add('done');
+        if (stopPad){
+          stopPad.style.display = '';
+          stopPad.classList.add('show');
+          stopPad.title = 'rerun';
+          stopPad.innerHTML = '';
+          setRerunIcon(stopPad);
+          stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
+        }
+      }
+      else {
+      const [s,e] = STAGE_RANGES[task.stage] || [0,100];
+      const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
+      const overallNow = s + (e - s) * (sp/100);
+      st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
+      smooth.setImmediate(overallNow);
+        if (stopPad) {
+          stopPad.style.display = '';
+          stopPad.classList.add('show');
+          // If we don't have a valid id yet, keep it disabled (re-enabled on onload)
+          if (!task.id) { stopPad.style.pointerEvents = 'none'; stopPad.style.opacity = '0.6'; }
+        }
+      }
+      const inserted = node.children[0];
+      // Attach task id for later filtering
+      inserted.__taskId = task.id;
+      queue.insertBefore(inserted, queue.firstChild);
+      // apply enter transition to the inserted card
+      requestAnimationFrame(() => {
+        inserted.classList.add('enter-pre');
+        requestAnimationFrame(() => inserted.classList.add('enter-active'));
+      });
+      // Apply any stem labels if present
+      applyLabels(inserted.querySelector('.labels'), task.stems);
+      updateClear();
+      updateVigs();
+      return {bar, st, dl, stopPad, smooth};
+    }
+
+    function withPageFade(doWork){
+      const mask = document.createElement('div');
+      mask.className = 'page-mask';
+      document.body.appendChild(mask);
+      requestAnimationFrame(() => {
+        mask.classList.add('show');
+        setTimeout(() => {
+          try { doWork(); } finally {
+            mask.classList.remove('show');
+            setTimeout(() => mask.remove(), 300);
+          }
+        }, 280);
+      });
+    }
+
+    clearBtn.addEventListener('click', () => {
+      if (!startPressed) {
+        return withPageFade(() => {
+          for (const el of Array.from(queue.children)) { el.remove(); }
+          tasks = [];
+          saveTasks();
+          try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
+          updateUI();
+        });
+      }
+
+      withPageFade(() => {
+        const children = Array.from(queue.children);
+        const clearable = new Set(tasks.filter(t => isFinished(t)).map(t => t.id));
+        if(clearable.size === 0){ updateUI(); return; }
+        // fade out only clearable ones
+        children.forEach(el => {
+          const id = el.__taskId || null;
+          if(id && clearable.has(id)){
+            el.classList.add('fade');
+            el.style.opacity = '0';
+          }
+        });
+        setTimeout(() => {
+          // remove DOM + prune tasks
+          for(const el of Array.from(queue.children)){
+            const id = el.__taskId || null;
+            if(id && clearable.has(id)) el.remove();
+          }
+          tasks = tasks.filter(t => !clearable.has(t.id));
+          saveTasks();
+          fetch('/clear_all_uploads', {method:'POST'});
+          updateUI();
+        }, 240);
+      });
+    });
+
+    // restore previous tasks
+    tasks.forEach(t => {
+      const {bar, st, dl, stopPad, smooth} = createItem(t);
+      const last = queue.lastElementChild;
+      if(last){
+        requestAnimationFrame(() => {
+          last.classList.add('enter-pre');
+          requestAnimationFrame(() => last.classList.add('enter-active'));
+        });
+      }
+      if(t.id && t.pct < 100 && t.pct >= 0){
+        trackProgress(t.id, bar, st, dl, null, null, t, null, smooth, stopPad);
+      }
+    });
+    updateUI();
+    window.addEventListener('scroll', updateVigs);
+    topBtn.addEventListener('click', () => window.scrollTo({top:0, behavior:'smooth'}));
+
+    // settings button → open overlay
+    const settingsBtn = document.getElementById('settings-btn');
+    if(settingsBtn){ settingsBtn.addEventListener('click', openSettings); }
+
+    // initialize overlay controls on load
+    window.addEventListener('load', () => {
+      settingsOverlay = document.getElementById('settings-overlay');
+      const closeBtn = document.getElementById('settings-close');
+      const forceBtn = document.getElementById('force-clear');
+      if(closeBtn) closeBtn.addEventListener('click', closeSettings);
+      if(settingsOverlay) settingsOverlay.addEventListener('click', (e)=>{ if(e.target === settingsOverlay) closeSettings(); });
+      if(forceBtn) forceBtn.addEventListener('click', async ()=>{
+        try{
+          // stop all running/queued tasks on the server
+          if(Array.isArray(tasks)){
+            for(const t of tasks){ if(t && t.id){ try{ await fetch('/stop/' + t.id, {method:'POST'}); } catch(_){} } }
+          }
+          // clear uploads on disk
+          try{ await fetch('/clear_all_uploads', {method:'POST'}); } catch(_){}
+          // remove all UI items and reset local state
+          for(const el of Array.from(queue.children)){ el.remove(); }
+          tasks = [];
+          saveTasks();
+          updateUI();
+          closeSettings();
+          showPopup('all tasks cleared');
+        }catch(err){ showError('force clear failed'); }
+      });
+    });
+
+    // drag-and-drop highlights
+    ['dragenter','dragover'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.add('ring-2','ring-[var(--accent)]');
+      }));
+    ['dragleave','drop'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove('ring-2','ring-[var(--accent)]');
+      }));
+
+    // open file picker on click
+    dropzone.addEventListener('click', () => {
+      try {
+        if (fileInput.showPicker) { fileInput.showPicker(); return; }
+      } catch(_) {}
+      fileInput.click();
+    });
+
+    // handle both dropped and picked files
+    dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+    fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+    function showError(msg){
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
+      document.body.appendChild(overlay);
+      const btn = overlay.querySelector('button');
+      btn.onclick = () => overlay.remove();
+      overlay.tabIndex = 0; overlay.focus();
+      overlay.addEventListener('keydown', e => { if(e.key === 'Enter') btn.click(); });
+    }
+
+    function showPopup(msg){
+      const card = document.createElement('div');
+      card.textContent = msg;
+      card.className = 'fixed top-4 right-4 glass px-4 py-2 rounded text-[var(--txt-main)]';
+      document.body.appendChild(card);
+      setTimeout(() => card.remove(), 3000);
+    }
+
+    function showModelsPopup(onCancel){
+      const declined = localStorage.getItem('declinedModels');
+      const msg = declined ? "you didn't put the models in :(" : 'models not found! would you like me to download them?';
+      const yes = declined ? 'download' : 'yes please';
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
+      document.body.appendChild(overlay);
+      const noBtn = overlay.querySelector('#no-btn');
+      const yesBtn = overlay.querySelector('#yes-btn');
+      noBtn.onclick = () => { localStorage.setItem('declinedModels','1'); overlay.remove(); if(onCancel) onCancel(); updateUI(); };
+      yesBtn.onclick = () => { localStorage.removeItem('declinedModels'); fetch('/download_models', {method:'POST'}); overlay.remove(); };
+      overlay.tabIndex = 0; overlay.focus();
+      overlay.addEventListener('keydown', e => { if(e.key === 'Enter') yesBtn.click(); });
+    }
+
+    /* === upload & progress logic === */
+    // queue of files added by user but not yet uploaded
+    const pendingItems = [];
+    const startBtn = document.getElementById('start-btn');
+
+    async function handleFiles(fileList){
+      const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+      [...fileList].forEach(file => {
+        // accept common audio even when type is empty
+        const looksAudio = (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
+        const tempKey = makeTempKey();
+        if(!looksAudio) return;
+        // build UI row (ready state)
+        const frag = template.content.cloneNode(true);
+        const item = frag.firstElementChild;
+        const li   = item.querySelector('.filename');
+        const bar  = item.querySelector('.bar-fill');
+        const st   = item.querySelector('.chip');
+        const dl   = item.querySelector('.dl-pad');
+        const card = item.querySelector('.card');
+        const stopPad = item.querySelector('.stop-pad');
+        li.textContent = file.name;
+        st.textContent = 'ready';
+        st.classList.add('chip-dim');
+        dl.classList.remove('show');
+        if (stopPad) stopPad.style.display = 'none';
+        queue.insertBefore(item, queue.firstChild);
+        requestAnimationFrame(() => {
+          item.classList.add('enter-pre');
+          requestAnimationFrame(() => item.classList.add('enter-active'));
+        });
+        updateVigs();
+        const smooth = makeProgressSmoother(bar);
+        smooth.setImmediate(0);
+        // record pending entry
+        pendingItems.push({ file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey });
+        // persist placeholder task (no id yet)
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey });
+        saveTasks();
+        updateUI();
+      });
+      if (fileInput) fileInput.value = '';
+    }
+function uploadWithStems(pending, stems){
+      return new Promise((resolve) => {
+        const {file, ui} = pending;
+        const {st, dl, card, stopPad, bar, smooth} = ui;
+        // enable stop square (disabled until task id assigned)
+        if (stopPad){
+          stopPad.style.display = '';
+          stopPad.classList.add('show');
+          stopPad.style.pointerEvents = 'none';
+          stopPad.style.opacity = '0.6';
+          setStopSquareIcon(stopPad);
+        }
+        const data = new FormData();
+        data.append('file', file);
+        data.append('stems', stems.join(','));
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST','/upload',true);
+        xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable) {
+          smooth.setImmediate(0);
+          st.textContent = 'loading';
+          st.classList.remove('chip-dim');
+        }
+        };
+        xhr.onload = () => {
+          if(xhr.status !== 200){
+            st.textContent = 'error';
+            try{
+              const msg = JSON.parse(xhr.responseText).detail || '';
+              if(msg.includes('checkpoint not found')) showModelsPopup(()=>ui.item.remove());
+              else showError(msg);
+            }catch(_){}
+            return resolve();
+          }
+          const res = JSON.parse(xhr.responseText);
+          pending.id = res.task_id;
+          pending.started = true;
+          pending.stems = res.stems;
+          ui.item.__taskId = res.task_id;
+          // replace placeholder task
+          const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
+          const t = { id:res.task_id, name:file.name, pct:0, stage:'preparing', stems:res.stems, tempKey: pending.tempKey };
+          if(idx>=0) tasks[idx]=t; else tasks.push(t);
+          saveTasks(); updateUI();
+          // enable stop now that we have an id
+          if (stopPad){
+            stopPad.style.pointerEvents = '';
+            stopPad.style.opacity = '';
+            stopPad.title = 'stop';
+            stopPad.onclick = async (e) => {
+              e.preventDefault();
+              try{ await fetch('/stop/'+res.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
+              // mark as stopped locally so UI updates right away
+              t.stage = 'stopped';
+              t.pct = 0;
+              saveTasks();
+              // update visuals
+              if(st){ st.classList.add('hidden'); }
+              const parent = st && st.closest('.card');
+              if(parent){ parent.classList.add('done'); }
+              // swap to rerun icon+handler
+              if(stopPad){
+                stopPad.style.pointerEvents = '';
+                stopPad.style.opacity = '';
+                stopPad.title = 'rerun';
+                setRerunIcon(stopPad);
+                stopPad.onclick = (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); };
+              }
+              updateUI();
+            };
+          }
+          // start polling
+          trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
+          resolve();
+        };
+        xhr.onerror = () => { st.textContent = 'error'; resolve(); };
+        xhr.send(data);
+      });
+    }
+    async function startSequentialProcessing(){
+      startPressed = true;
+// snapshot of current checkboxes
+      const stems = [];
+      if(vocalsBox.checked) stems.push('vocals');
+      if(instBox.checked)   stems.push('instrumental');
+      if(drumsBox.checked)  stems.push('drums');
+      if(bassBox.checked)   stems.push('bass');
+      if(otherBox.checked)  stems.push('other');
+      if(guitarBox.checked) stems.push('guitar');
+      if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+      for(const p of pendingItems){
+        if(!p.started){
+          await uploadWithStems(p, stems);
+        }
+      }
+    }
+    if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);
+
+    // --- Progress tracking for uploads (SSE) ---
+    function trackProgress(taskId, bar, st, dl, _a, _b, taskRef, _c, smooth, stopPad){
+      try{
+        const es = new EventSource('/progress/' + taskId);
+        es.addEventListener('message', (ev) => {
+          let data = null;
+          try { data = JSON.parse(ev.data); } catch(_) {}
+          if(!data) return;
+          const {stage, pct} = data;
+          if(taskRef){ taskRef.stage = stage; taskRef.pct = pct; saveTasks(); }
+          if(stage === 'done'){
+            smooth.setTarget(100);
+            st.classList.add('hidden');
+            if(dl){ dl.href = '/download/' + taskId; dl.classList.add('show'); }
+            if(stopPad) stopPad.remove();
+            const parent = st.closest('.card'); if(parent) parent.classList.add('done');
+            es.close(); updateUI(); return;
+          }
+          if (stage === 'stopped') {
+            if (taskRef) { taskRef.stage = 'stopped'; taskRef.pct = 0; saveTasks(); }
+            st.classList.add('hidden');
+            const parent = st.closest('.card'); if (parent) parent.classList.add('done');
+            if (stopPad) {
+              stopPad.style.display = '';
+              stopPad.classList.add('show');
+              stopPad.title = 'rerun';
+              stopPad.innerHTML = '';
+              setRerunIcon(stopPad);
+              stopPad.onclick = (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); };
+            }
+            es.close(); updateUI(); return;
+          }
+          if (typeof pct === 'number' && pct >= 0) {
+            const range = STAGE_RANGES[stage] || [0, 100];
+            const sp = Math.round(Math.max(0, Math.min(100, pct))); // stage-local percent for label
+            const overall = range[0] + (range[1] - range[0]) * (sp / 100);
+            st.textContent = stage ? `${stage} (${sp}%)` : 'queued';
+            smooth.setTarget(Math.max(0, Math.min(overall, 100)));
+          } else {
+            st.textContent = 'queued';
+          }
+        });
+        es.addEventListener('error', () => {
+          if (taskRef) {
+            taskRef.stage = 'stopped';
+            taskRef.pct = 0;
+            saveTasks();
+          }
+          if (st) {
+            st.textContent = 'error';
+            st.classList.remove('hidden');
+          }
+          const parent = st && st.closest ? st.closest('.card') : null;
+          if (parent) parent.classList.add('done');
+
+          if (stopPad) {
+            stopPad.style.display = '';
+            stopPad.classList.add('show');
+            stopPad.title = 'rerun';
+            stopPad.innerHTML = '';
+            setRerunIcon(stopPad);
+            stopPad.onclick = (e) => {
+              e.preventDefault();
+              if (taskRef) rerunTask(taskRef, { bar, st, dl, stopPad, smooth });
+            };
+          }
+          es.close();
+          updateUI();
+        });
+              }catch(e){
+        st.textContent = 'error';
+        if(taskRef){ taskRef.stage = 'error'; taskRef.pct = -1; saveTasks(); }
+        updateUI();
+      }
+    }
+</script>
+
+  <div id="settings-overlay" class="hidden fixed inset-0 z-50 grid place-items-center">
+    <!-- Animated background blur+dim layer -->
+    <div id="overlay-bg" class="overlay-bg"></div>
+
+    <!-- The modal card itself -->
+    <div id="settings-card"
+         class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
+         style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
+      <button id="settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
+      <h2 class="text-2xl font-light mb-1 select-none">stemsplat</h2>
+      <div class="opacity-80 mb-4">settings</div>
+
+      <div class="flex flex-col gap-3">
+        <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs" style="border-radius:12px;">force clear</button>
+        <div class="text-xs opacity-60">Stops all processing, removes all items, and clears uploaded files.</div>
+      </div>
+      <div class="flex gap-3 mt-3">
+        <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
+        <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
+      </div>
+
+      <div class="mt-6 text-center opacity-70 text-sm">v0.1</div>
+    </div>
+  </div>

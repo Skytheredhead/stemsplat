@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>stemsplat setup</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root{ --bg-1:#0F2027; --bg-2:#2C5364; --txt:#E7ECEF; --accent:#8ED8FF; --card:rgba(23,35,41,.55); --border:rgba(255,255,255,.06); }
+    body{ background: linear-gradient(135deg,#0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); color:var(--txt); font-family:'Nunito Sans',system-ui,sans-serif; }
+    @view-transition { navigation: auto; }
+    .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
+    .shade { position: fixed; inset: 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; }
+    .glass{ background:var(--card); backdrop-filter:blur(18px) saturate(120%); -webkit-backdrop-filter:blur(18px) saturate(120%); border:1px solid var(--border); box-shadow:0 12px 40px rgba(0,0,0,.35); }
+    .sheen{ position:relative; isolation:isolate; border-radius:18px; }
+    .sheen::before{ content:""; position:absolute; inset:0; padding:1px; border-radius:inherit; background:conic-gradient(from 0deg, var(--accent), transparent 30%, var(--accent), transparent 60%, var(--accent)); -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude; opacity:.28; }
+    .fade-out{ opacity:0; transition: opacity .28s ease; }
+    .fade-in{ animation:fade .6s ease both; }
+    @keyframes fade{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
+    .bar{ height: 12px; background: rgba(255,255,255,.08); border-radius:999px; overflow:hidden; }
+    .bar>div{ height:100%; width:0%; background:linear-gradient(90deg,#e7eef2,#dfe7ec); transition:width .35s cubic-bezier(.2,.7,.2,1); }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center gap-10">
+  <div class="noise fixed inset-0 -z-10"></div>
+  <div class="shade"></div>
+  <h1 class="text-4xl md:text-5xl font-light fade-in select-none">stemsplat setup</h1>
+  <div id="card" class="sheen glass w-11/12 max-w-xl px-8 py-6 rounded-2xl flex flex-col gap-4 fade-in">
+    <span id="status">starting…</span>
+    <div class="bar"><div id="bar"></div></div>
+    <div id="note" class="opacity-70 text-sm">this might take a minute (it'll probably take way less)</div>
+    <div id="log" class="text-xs h-4"></div>
+    <div id="error" class="hidden text-red-300 text-sm"></div>
+  </div>
+  <div id="loading" class="hidden">starting server…</div>
+
+  <script>
+    let lastStep = ''; let prompted = false;
+    async function poll(){
+      const res = await fetch('/progress');
+      const data = await res.json();
+      const barEl = document.getElementById('bar');
+      const status = document.getElementById('status');
+      const log = document.getElementById('log');
+      const err = document.getElementById('error');
+      if(data.pct >= 0){ barEl.style.width = data.pct + '%'; }
+      status.textContent = data.step;
+      if(data.step && data.step !== lastStep){ log.textContent = data.step; log.classList.remove('opacity-0'); lastStep = data.step; }
+      if(data.step === 'waiting for model choice' && !prompted){ showPrompt(); prompted = true; }
+      if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
+      if(data.pct >= 100){ waitForServer(); return; }
+      setTimeout(poll, 1000);
+    }
+
+    function showPrompt(){
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
+      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-3"><p>models not found! would you like me to download them?</p><div class="flex justify-end gap-2"><button id=\"skip\" class=\"px-3 py-1 rounded-lg glass\">nah i got it</button><button id=\"dl\" class=\"px-3 py-1 rounded-lg bg-white/90 text-gray-900\">yes please</button></div></div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#dl').onclick = async () => { await fetch('/download_models', {method:'POST'}); overlay.remove(); };
+      overlay.querySelector('#skip').onclick = async () => { await fetch('/skip_models', {method:'POST'}); overlay.remove(); };
+    }
+
+    async function waitForServer(){
+      const card = document.getElementById('card');
+      const loading = document.getElementById('loading');
+      while(true){
+        try{
+          await fetch('http://localhost:8000/', {mode:'no-cors'});
+          // start a quick fade-out and cue the intro for the app page
+          document.body.classList.add('fade-out');
+          card.style.animation = 'fade .4s ease reverse both';
+          loading.classList.remove('hidden');
+          // ensure the fade is visible before navigating
+          await new Promise(r=>setTimeout(r,220));
+          localStorage.setItem('playIntro','1');
+          location.replace('http://localhost:8000/');
+          return;
+        }catch(e){}
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+    poll();
+  </script>
+</body>
+</html>
