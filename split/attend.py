@@ -6,10 +6,26 @@ import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 try:
-    # new location for scaled dot-product attention kernel
-    from torch.nn.attention import sdpa_kernel
+    # torch 2.1+ exposes the context manager in torch.nn.attention
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+
+    def _sdpa_ctx(config):
+        """Map old style flags to new SDPBackend list."""
+        backends = []
+        if config.enable_flash:
+            backends.append(SDPBackend.FLASH_ATTENTION)
+        if config.enable_math:
+            backends.append(SDPBackend.MATH)
+        if config.enable_mem_efficient:
+            backends.append(SDPBackend.EFFICIENT_ATTENTION)
+        return sdpa_kernel(backends, set_priority_order=True)
+
 except Exception:  # pragma: no cover - fallback for older torch
-    from torch.backends.cuda import sdp_kernel as sdpa_kernel
+    # older PyTorch expects explicit enable_* keyword arguments
+    from torch.backends.cuda import sdp_kernel as sdpa_kernel  # type: ignore
+
+    def _sdpa_ctx(config):
+        return sdpa_kernel(**config._asdict())
 
 from einops import rearrange, reduce
 
@@ -74,7 +90,7 @@ class Attend(nn.Module):
 
         # pytorch 2.0 flash attn: q, k, v, mask, dropout, softmax_scale
 
-        with sdpa_kernel(**config._asdict()):
+        with _sdpa_ctx(config):
             out = F.scaled_dot_product_attention(
                 q, k, v,
                 dropout_p=self.dropout if self.training else 0.
