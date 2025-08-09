@@ -413,7 +413,7 @@ async def progress_stream(task_id: str):
                     yield {'event': 'error', 'data': errors.get(task_id, 'processing failed')}
                 else:
                     yield {'event': 'message', 'data': json.dumps({'stage': info['stage'], 'pct': info['pct']})}
-                ...
+                last = current
                 if info.get('stage') == 'stopped' or info['pct'] >= 100 or info['pct'] < 0:
                     break
             await asyncio.sleep(0.5)
