@@ -18,7 +18,10 @@ try:
             backends.append(SDPBackend.MATH)
         if config.enable_mem_efficient:
             backends.append(SDPBackend.EFFICIENT_ATTENTION)
-        return sdpa_kernel(backends, set_priority_order=True)
+        try:
+            return sdpa_kernel(backends)
+        except TypeError:
+            return sdpa_kernel(backends, set_priority_order=True)
 
 except Exception:  # pragma: no cover - fallback for older torch
     # older PyTorch expects explicit enable_* keyword arguments
@@ -68,7 +71,7 @@ class Attend(nn.Module):
 
         # determine efficient attention configs for cuda and cpu
 
-        self.cpu_config = FlashAttentionConfig(True, True, True)
+        self.cpu_config = FlashAttentionConfig(False, True, False)
         self.cuda_config = None
 
         if not torch.cuda.is_available() or not flash:
