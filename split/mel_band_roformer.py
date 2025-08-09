@@ -324,7 +324,14 @@ class MelBandRoformer(Module):
             normalized=stft_normalized
         )
 
-        freqs = torch.stft(torch.randn(1, 4096), **self.stft_kwargs, return_complex=True).shape[1]
+        # provide an explicit window to avoid spectral leakage warnings
+        _init_window = self.stft_window_fn(device='cpu')
+        freqs = torch.stft(
+            torch.randn(1, 4096),
+            **self.stft_kwargs,
+            window=_init_window,
+            return_complex=True,
+        ).shape[1]
 
         # create mel filter bank
         # with librosa.filters.mel as in section 2 of paper

@@ -2,5 +2,7 @@ __pycache__/
 venv/
 models/*
 !models/.gitkeep
-uploads/
+uploads/*
+!uploads/.gitkeep
 *.pyc
+.DS_Store
