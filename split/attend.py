@@ -5,6 +5,11 @@ from collections import namedtuple
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
+try:
+    # new location for scaled dot-product attention kernel
+    from torch.nn.attention import sdpa_kernel
+except Exception:  # pragma: no cover - fallback for older torch
+    from torch.backends.cuda import sdp_kernel as sdpa_kernel
 
 from einops import rearrange, reduce
 
@@ -69,10 +74,10 @@ class Attend(nn.Module):
 
         # pytorch 2.0 flash attn: q, k, v, mask, dropout, softmax_scale
 
-        with torch.backends.cuda.sdp_kernel(**config._asdict()):
+        with sdpa_kernel(**config._asdict()):
             out = F.scaled_dot_product_attention(
                 q, k, v,
-                dropout_p = self.dropout if self.training else 0.
+                dropout_p=self.dropout if self.training else 0.
             )
 
         return out

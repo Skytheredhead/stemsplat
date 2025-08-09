@@ -36,6 +36,15 @@ import threading
 import queue
 import urllib.request
 import time
+import warnings
+
+# Suppress torchaudio load deprecation notice
+warnings.filterwarnings(
+    "ignore",
+    message="In 2.9, this function's implementation will be changed to use torchaudio.load_with_torchcodec",
+    category=UserWarning,
+    module="torchaudio",
+)
 
 app = FastAPI()
 
@@ -368,11 +377,11 @@ async def upload_file(
             progress[task_id] = {"stage": "done", "pct": 100}
 
         except Exception as exc:
-            logging.exception("processing failed")
-            if stop_evt.is_set():
+            if stop_evt.is_set() or str(exc) == 'stopped':
                 progress[task_id] = {"stage": "stopped", "pct": 0}
                 errors[task_id] = 'stopped'
             else:
+                logging.exception("processing failed")
                 progress[task_id] = {"stage": "error", "pct": -1}
                 errors[task_id] = str(exc)
 
@@ -532,11 +541,11 @@ async def rerun(task_id: str):
             cb('finalizing', 99)
             progress[new_id] = {'stage': 'done', 'pct': 100}
         except Exception as exc:
-            logging.exception('rerun failed')
-            if stop_evt.is_set():
+            if stop_evt.is_set() or str(exc) == 'stopped':
                 progress[new_id] = {'stage': 'stopped', 'pct': 0}
                 errors[new_id] = 'stopped'
             else:
+                logging.exception('rerun failed')
                 progress[new_id] = {'stage': 'error', 'pct': -1}
                 errors[new_id] = str(exc)
 
