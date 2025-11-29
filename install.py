@@ -121,7 +121,7 @@ def _models_missing():
 
 
 def _start_server():
-    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'stemrunner.server:app'])
+    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'main:app'])
 
 
 def _download_models():

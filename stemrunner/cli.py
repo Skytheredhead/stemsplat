@@ -1,36 +1,20 @@
 import click
-from pathlib import Path
+from main import cli_main
 
-from .pipeline import process_file
-from .models import ModelManager
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument('files', nargs=-1, type=click.Path(exists=True))
-@click.option('--gpu', type=int, default=None, help='GPU id to use; CPU if omitted.')
-<<<<<<< HEAD
-@click.option('--outdir', type=click.Path(), default=None, help='Output directory.')
-def main(files, gpu, outdir):
-=======
-@click.option('--segment', type=int, default=None, help='Override segment size.')
-@click.option('--outdir', type=click.Path(), default=None, help='Output directory.')
-def main(files, gpu, segment, outdir):
->>>>>>> 81855b9 (VOCALS WORKINGgit add .)
-    """CLI entry point for stemrunner."""
-    if not files:
-        click.echo('No input files provided.')
-        return
-    manager = ModelManager(gpu=gpu)
-<<<<<<< HEAD
-    ckpt = getattr(manager.vocals, 'path', None)
-    if ckpt is None:
-        click.echo('Checkpoint not found.')
-        return
-    for f in files:
-        process_file(Path(f), ckpt, outdir=outdir)
-=======
-    for f in files:
-        process_file(Path(f), manager, segment=segment, outdir=outdir)
->>>>>>> 81855b9 (VOCALS WORKINGgit add .)
+@click.option('--stems', default='vocals', help='Comma-separated stems to extract when running locally.')
+@click.option('--serve', is_flag=True, default=False, help='Start the FastAPI server instead of local processing.')
+def main(files, stems, serve):
+    """CLI entry point delegating to main.cli_main."""
+    argv = []
+    if serve:
+        argv.append('--serve')
+    argv.extend(['--stems', stems])
+    argv.extend(list(files))
+    cli_main(argv)
+
 
 if __name__ == '__main__':
     main()

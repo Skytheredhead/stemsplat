@@ -1,4 +1,4 @@
-from .cli import main
+from main import cli_main
 
 if __name__ == '__main__':
-    main()
+    cli_main()
