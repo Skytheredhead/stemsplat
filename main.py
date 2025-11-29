@@ -78,6 +78,16 @@ MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
 SEGMENT = 352_800
 OVERLAP = 12
+LOG_PATH = BASE_DIR / "stemsplat.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+    ],
+)
 
 MODEL_URLS = [
     (
