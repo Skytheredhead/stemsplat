@@ -23,9 +23,9 @@ import time
 import uuid
 import zipfile
 
+import torch
 import soundfile as sf
 import torchaudio
-import torch
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -476,9 +476,25 @@ def _prepare_waveform(audio_path: Path) -> torch.Tensor:
             raise AppError(ErrorCode.RESAMPLE_FAILED, f"Resample failed: {exc}") from exc
     return waveform
 
-def _convert_to_wav(audio_path: Path) -> Path:
-    if audio_path.suffix.lower() in (".wav", ".wave"):
+def _ensure_ffmpeg() -> None:
+    import subprocess
+
+    try:
+        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError as exc:
+        raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
+    except Exception as exc:
+        raise AppError(ErrorCode.FFMPEG_MISSING, f"ffmpeg check failed: {exc}") from exc
+
+
+def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
+    """Convert ``audio_path`` to WAV in-place and optionally drop the original copy."""
+
+    _ensure_ffmpeg()
+
+    if audio_path.suffix.lower() in {".wav", ".wave"}:
         return audio_path
+
     wav_path = audio_path.with_suffix(".wav")
     cmd = ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
     try:
@@ -489,12 +505,123 @@ def _convert_to_wav(audio_path: Path) -> Path:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
+
+    if remove_source and wav_path != audio_path:
+        try:
+            audio_path.unlink()
+        except Exception:
+            logging.warning("failed to remove source %s after conversion", audio_path)
     return wav_path
+
+
+def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool = True) -> Path:
+    """Place a copy of ``src`` into ``dest_dir`` and normalize it to WAV."""
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    staged = dest_dir / src.name
+    if staged != src:
+        shutil.copy2(src, staged)
+    return _convert_to_wav(staged, remove_source=remove_original_copy)
+
+
+def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
+    """Convert all supported audio files in ``input_dir`` to WAV under ``output_dir``."""
+
+    _ensure_ffmpeg()
+
+    if not input_dir.exists() or not input_dir.is_dir():
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Input directory not found: {input_dir}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    converted: list[Path] = []
+    supported = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".alac", ".opus", ".m4a"}
+
+    for src_path in input_dir.rglob("*"):
+        if src_path.suffix.lower() not in supported:
+            continue
+        relative_subpath = src_path.relative_to(input_dir)
+        staged_dest = output_dir / relative_subpath
+        staged_dest.parent.mkdir(parents=True, exist_ok=True)
+        if staged_dest != src_path:
+            shutil.copy2(src_path, staged_dest)
+        wav_path = _convert_to_wav(staged_dest, remove_source=True)
+        converted.append(wav_path)
+    return converted
 
 
 def _write_wave(out_dir: Path, fname: str, tensor: torch.Tensor, sr: int = 44100) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     sf.write(out_dir / fname, tensor.T.cpu().numpy(), sr)
+
+
+def _separate_waveform(
+    manager: "ModelManager",
+    audio_path: Path,
+    stem_list: list[str],
+    cb: Callable[[str, int], None],
+    out_dir: Path,
+) -> list[str]:
+    waveform = _prepare_waveform(audio_path)
+    cb("load_audio.done", 2)
+
+    temp_dir = Path(tempfile.gettempdir())
+    stems_out: list[str] = []
+
+    need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
+    need_instrumental_model = "instrumental" in stem_list
+
+    inst_path: Optional[Path] = None
+
+    if need_vocal_pass:
+        def _cb(frac: float) -> None:
+            cb("vocals", 1 + int(frac * 99))
+
+        cb("split_vocals.start", 2)
+        voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
+        cb("split_vocals.done", 50)
+        if "vocals" in stem_list:
+            fname = f"{audio_path.stem} - vocals.wav"
+            _write_wave(out_dir, fname, voc)
+            stems_out.append(fname)
+            cb("write.vocals", 52)
+        need_inst = any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
+        if need_inst:
+            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
+            _write_wave(temp_dir, inst_path.name, inst)
+        del voc, inst
+
+    if need_instrumental_model:
+        cb("instrumental.start", 52)
+        inst_model = manager.instrumental
+        if inst_path is None:
+            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
+            waveform_np = waveform.cpu().numpy()
+            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
+        inst_wave = _prepare_waveform(inst_path)
+        inst_pred = inst_model(inst_wave)
+        fname = f"{audio_path.stem} - instrumental.wav"
+        _write_wave(out_dir, fname, inst_pred)
+        stems_out.append(fname)
+        cb("instrumental.done", 75)
+
+    for stem_name in ["drums", "bass", "other", "guitar"]:
+        if stem_name not in stem_list:
+            continue
+        cb(f"{stem_name}.start", 75)
+        inst_model = getattr(manager, stem_name)
+        if inst_path is None:
+            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
+            waveform_np = waveform.cpu().numpy()
+            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
+        inst_wave = _prepare_waveform(inst_path)
+        pred = inst_model(inst_wave)
+        fname = f"{audio_path.stem} - {stem_name}.wav"
+        _write_wave(out_dir, fname, pred)
+        stems_out.append(fname)
+        cb(f"{stem_name}.done", min(98, 75 + len(stems_out)))
+
+    cb("done", 100)
+    return stems_out
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────--
@@ -516,8 +643,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     conv_dir = Path("uploads_converted")
     conv_dir.mkdir(exist_ok=True)
-    conv_path = conv_dir / path.name
-    shutil.copy2(path, conv_path)
+    conv_path = _stage_audio_copy(path, conv_dir)
 
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
@@ -536,68 +662,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             manager = ModelManager()
             cb("preparing", 0)
             cb("prepare.complete", 1)
-            audio_path = _convert_to_wav(conv_path)
-            waveform = _prepare_waveform(audio_path)
-            cb("load_audio.done", 2)
-
-            temp_dir = Path(tempfile.gettempdir())
-            stems_out: list[str] = []
-
-            need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-            need_instrumental_model = "instrumental" in stem_list
-
-            inst_path: Optional[Path] = None
-            if need_vocal_pass:
-                def _cb(frac: float) -> None:
-                    cb("vocals", 1 + int(frac * 99))
-
-                cb("split_vocals.start", 2)
-                voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
-                cb("split_vocals.done", 50)
-                if "vocals" in stem_list:
-                    fname = f"{audio_path.stem} - vocals.wav"
-                    _write_wave(out_dir, fname, voc)
-                    stems_out.append(fname)
-                    cb("write.vocals", 52)
-                need_inst = any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-                if need_inst:
-                    inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-                    _write_wave(temp_dir, inst_path.name, inst)
-                del voc, inst
-
-            if need_instrumental_model:
-                def _cb_inst(frac: float) -> None:
-                    cb("instrumental_model", 1 + int(frac * 99))
-
-                cb("split_inst_model.start", 55)
-                inst0, inst1 = manager.split_pair_with_model(manager.instrumental, waveform, SEGMENT, OVERLAP, progress_cb=_cb_inst)
-                cb("split_inst_model.done", 70)
-                fname = f"{audio_path.stem} - instrumental.wav"
-                _write_wave(out_dir, fname, inst0)
-                stems_out.append(fname)
-                del inst0, inst1
-
-            if inst_path and any(s in stem_list for s in ["drums", "bass", "other", "guitar"]):
-                inst_wave = _prepare_waveform(inst_path)
-
-                def _cb2(frac: float) -> None:
-                    cb("instrumental", 1 + int(frac * 99))
-
-                cb("split_inst.start", 75)
-                d, b, o, k, g = manager.split_instrumental(inst_wave, SEGMENT, OVERLAP, progress_cb=_cb2)
-                mapping = {"drums": d, "bass": b, "other": o, "guitar": g}
-                cb("split_inst.masks_ready", 90)
-                for name, tensor in mapping.items():
-                    if name in stem_list:
-                        cb("write." + name, 92)
-                        fname = f"{audio_path.stem} - {name}.wav"
-                        _write_wave(out_dir, fname, tensor)
-                        stems_out.append(fname)
-                del d, b, o, k, g, inst_wave
-                try:
-                    os.remove(inst_path)
-                except OSError:
-                    pass
+            audio_path = conv_path
+            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
 
             zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
             cb("zip.start", 95)
@@ -689,67 +755,8 @@ async def rerun(task_id: str):
             manager = ModelManager()
             cb("preparing", 0)
             cb("prepare.complete", 1)
-            audio_path = conv_src
-            waveform = _prepare_waveform(audio_path)
-            cb("load_audio.done", 2)
-            temp_dir = Path(tempfile.gettempdir())
-            stems_out: list[str] = []
-
-            need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-            need_instrumental_model = "instrumental" in stem_list
-            inst_path: Optional[Path] = None
-
-            if need_vocal_pass:
-                def _cb(frac: float) -> None:
-                    cb("vocals", 1 + int(frac * 99))
-
-                cb("split_vocals.start", 2)
-                voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
-                cb("split_vocals.done", 50)
-                if "vocals" in stem_list:
-                    fname = f"{audio_path.stem} - vocals.wav"
-                    _write_wave(out_dir, fname, voc)
-                    stems_out.append(fname)
-                    cb("write.vocals", 52)
-                need_inst = any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-                if need_inst:
-                    inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-                    _write_wave(temp_dir, inst_path.name, inst)
-                del voc, inst
-
-            if need_instrumental_model:
-                def _cb_inst(frac: float) -> None:
-                    cb("instrumental_model", 1 + int(frac * 99))
-
-                cb("split_inst_model.start", 55)
-                inst0, inst1 = manager.split_pair_with_model(manager.instrumental, waveform, SEGMENT, OVERLAP, progress_cb=_cb_inst)
-                cb("split_inst_model.done", 70)
-                fname = f"{audio_path.stem} - instrumental.wav"
-                _write_wave(out_dir, fname, inst0)
-                stems_out.append(fname)
-                del inst0, inst1
-
-            if inst_path and any(s in stem_list for s in ["drums", "bass", "other", "guitar"]):
-                inst_wave = _prepare_waveform(inst_path)
-
-                def _cb2(frac: float) -> None:
-                    cb("instrumental", 1 + int(frac * 99))
-
-                cb("split_inst.start", 75)
-                d, b, o, k, g = manager.split_instrumental(inst_wave, SEGMENT, OVERLAP, progress_cb=_cb2)
-                mapping = {"drums": d, "bass": b, "other": o, "guitar": g}
-                cb("split_inst.masks_ready", 90)
-                for name, tensor in mapping.items():
-                    if name in stem_list:
-                        cb("write." + name, 92)
-                        fname = f"{audio_path.stem} - {name}.wav"
-                        _write_wave(out_dir, fname, tensor)
-                        stems_out.append(fname)
-                del d, b, o, k, g, inst_wave
-                try:
-                    os.remove(inst_path)
-                except OSError:
-                    pass
+            audio_path = _convert_to_wav(conv_src)
+            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
 
             zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
             cb("zip.start", 95)
@@ -843,6 +850,19 @@ async def index():
 
 # ── CLI entrypoint ─────────────────────────────────────────────────────────-
 
+
+def _process_local_file(path: Path, stem_list: list[str]) -> list[str]:
+    conv_dir = Path("uploads_converted")
+    conv_path = _stage_audio_copy(path, conv_dir)
+    out_dir = conv_dir / f"{conv_path.stem}—stems"
+
+    def cb(stage: str, pct: int) -> None:
+        logging.info("%s: %s%%", stage, pct)
+
+    manager = ModelManager()
+    stems_out = _separate_waveform(manager, conv_path, stem_list, cb, out_dir)
+    return [str(out_dir / stem) for stem in stems_out]
+
 def cli_main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Run stemsplat server or process a file")
     parser.add_argument("--serve", action="store_true", help="Start the FastAPI server with uvicorn")
@@ -859,25 +879,14 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
     if not args.files:
         parser.error("No files provided and --serve not set")
 
+    stem_list = [s for s in args.stems.split(",") if s]
     for file_path in args.files:
-        local_task = {
-            "task_id": "local",
-            "stems": [s for s in args.stems.split(",") if s],
-            "file": file_path,
-        }
-        # Re-use upload code path synchronously for local processing
         path = Path(file_path)
         if not path.exists():
             raise AppError(ErrorCode.UPLOAD_FAILED, f"File not found: {file_path}")
-        # mimic upload placement
-        conv_dir = Path("uploads_converted")
-        conv_dir.mkdir(exist_ok=True)
-        conv_path = conv_dir / path.name
-        shutil.copy2(path, conv_path)
-        # run synchronously using same helper
-        upload_payload = type("_Upload", (), {"filename": path.name})
-        background = BackgroundTasks()
-        asyncio.run(upload_file(background, upload_payload, stems=args.stems))
+        outputs = _process_local_file(path, stem_list)
+        for out in outputs:
+            print(out)
 
 
 if __name__ == "__main__":  # pragma: no cover
