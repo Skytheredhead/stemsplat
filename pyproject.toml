@@ -3,7 +3,6 @@ name = "stemrunner"
 version = "0.1.0"
 description = "Self-hosted stem separation tool"
 authors = ["Your Name <you@example.com>"]
-packages = [{ include = "stemrunner" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"

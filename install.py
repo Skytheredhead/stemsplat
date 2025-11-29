@@ -7,12 +7,24 @@ import sys
 import os
 import json
 import webbrowser
+import logging
 from pathlib import Path
 import time
 import urllib.request
 
+LOG_PATH = Path(__file__).resolve().parent / "stemsplat.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+    ],
+)
+
 progress = {"pct": 0, "step": "starting"}
 choice_event = threading.Event()
+PORT = 6060
 MODEL_URLS = [
     ("Mel Band Roformer Vocals.ckpt",
      "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
@@ -92,12 +104,18 @@ def run_server():
         handler = Handler
         thread = threading.Thread(target=install, daemon=True)
         thread.start()
-    with socketserver.TCPServer(('localhost', 6060), handler) as httpd:
-        webbrowser.open('http://localhost:6060/')
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            pass
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        with socketserver.TCPServer(('localhost', PORT), handler) as httpd:
+            webbrowser.open(f'http://localhost:{PORT}/')
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                pass
+    except OSError as exc:
+        logging.error("failed to bind install server on port %s: %s", PORT, exc)
+        print(f"Port {PORT} is already in use. Please close the other process or change PORT.")
+        sys.exit(1)
 
 def pip_path():
     if os.name == 'nt':
@@ -121,7 +139,7 @@ def _models_missing():
 
 
 def _start_server():
-    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'stemrunner.server:app'])
+    subprocess.Popen([str(python_path()), '-m', 'uvicorn', 'main:app'])
 
 
 def _download_models():
