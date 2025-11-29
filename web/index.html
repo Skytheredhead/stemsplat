@@ -75,6 +75,9 @@
     .btn:focus { outline: 2px solid rgba(255,255,255,.25); outline-offset: 2px; }
     .btn:hover { transform: translateY(-1px); }
 
+    .close-btn { position: fixed; top: 14px; left: 14px; width: 40px; height: 40px; border-radius: 12px; background: rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.12); color: #E7ECEF; backdrop-filter: blur(10px) saturate(120%); -webkit-backdrop-filter: blur(10px) saturate(120%); box-shadow: 0 10px 30px rgba(0,0,0,.25); display: grid; place-items: center; font-size: 18px; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; z-index: 20; }
+    .close-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0,0,0,.35); background: rgba(255,255,255,0.22); }
+
     .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); }
     .chip-dim { background: rgba(0,0,0,.38); border:1px solid rgba(255,255,255,.10); color:#E7ECEF; }
 
@@ -135,6 +138,9 @@
 
   <div class="noise fixed inset-0 -z-10"></div>
   <div class="shade"></div>
+  <button id="close-app" class="close-btn" title="close stemsplat" aria-label="close">
+    ×
+  </button>
 
   <!-- header -->
   <h1 id="title" class="text-5xl md:text-6xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
@@ -229,8 +235,25 @@
     const template  = document.getElementById('item-template');
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
+    const closeBtn  = document.getElementById('close-app');
 
     let startPressed = false;
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', async () => {
+        closeBtn.disabled = true;
+        closeBtn.style.opacity = '0.7';
+        try {
+          await fetch('/shutdown', { method: 'POST' });
+        } catch (err) {
+          console.error('shutdown failed', err);
+        }
+        setTimeout(() => {
+          window.close();
+          setTimeout(() => { window.location.href = 'about:blank'; }, 150);
+        }, 120);
+      });
+    }
 
     // settings overlay refs (assigned on load)
     let settingsOverlay = null;
