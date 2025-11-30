@@ -13,7 +13,14 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-LOG_PATH = Path(__file__).resolve().parent / "stemsplat.log"
+BASE_DIR = Path(__file__).resolve().parent
+LOG_PATH = BASE_DIR / "install_stemsplat.log"
+LEGACY_LOG = BASE_DIR / "stemsplat.log"
+if LEGACY_LOG.exists():
+    try:
+        LEGACY_LOG.unlink()
+    except Exception:
+        pass
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
@@ -26,6 +33,7 @@ logger = logging.getLogger("stemsplat.install")
 
 progress = {"pct": 0, "step": "starting"}
 choice_event = threading.Event()
+shutdown_event = threading.Event()
 PORT = 6060
 MODEL_URLS = [
     ("Mel Band Roformer Vocals.ckpt",
@@ -108,10 +116,20 @@ def run_server():
         with socketserver.TCPServer(("localhost", PORT), handler) as httpd:
             logger.info("installer ui listening on http://localhost:%s", PORT)
             webbrowser.open(f"http://localhost:{PORT}/")
+            server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            server_thread.start()
+            logger.debug("waiting for installer routine to finish before shutting ui")
             try:
-                httpd.serve_forever()
+                while not shutdown_event.wait(0.5):
+                    continue
+                logger.info("installer routine finished; shutting down installer ui")
+                httpd.shutdown()
+                httpd.server_close()
+                server_thread.join(timeout=2)
             except KeyboardInterrupt:
                 logger.info("installer interrupted; shutting down")
+                httpd.shutdown()
+                httpd.server_close()
     except OSError as exc:
         logger.error("failed to bind install server on port %s: %s", PORT, exc)
         print(f"Port {PORT} is already in use. Please close the other process or change PORT.")
@@ -238,6 +256,8 @@ def install():
         logger.exception("installer crashed")
         progress['step'] = 'installation failed'
         progress['pct'] = -1
+    finally:
+        shutdown_event.set()
 
 if __name__ == '__main__':
     run_server()

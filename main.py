@@ -78,7 +78,13 @@ MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
 SEGMENT = 352_800
 OVERLAP = 12
-LOG_PATH = BASE_DIR / "stemsplat.log"
+LOG_PATH = BASE_DIR / "main_stemsplat.log"
+LEGACY_LOG = BASE_DIR / "stemsplat.log"
+if LEGACY_LOG.exists():
+    try:
+        LEGACY_LOG.unlink()
+    except Exception:
+        pass
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -496,12 +502,14 @@ def _prepare_waveform(audio_path: Path) -> torch.Tensor:
         logger.info("loading audio %s", audio_path)
         waveform, sr = torchaudio.load(str(audio_path))
     except Exception as exc:
+        logger.exception("failed to load %s", audio_path)
         raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
     if sr != 44100:
         try:
             logger.info("resampling %s from %s to 44100", audio_path, sr)
             waveform = torchaudio.functional.resample(waveform, sr, 44100)
         except Exception as exc:
+            logger.exception("resample failed for %s", audio_path)
             raise AppError(ErrorCode.RESAMPLE_FAILED, f"Resample failed: {exc}") from exc
     return waveform
 
@@ -528,20 +536,25 @@ def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
     wav_path = audio_path.with_suffix(".wav")
     logger.info("converting %s to wav at %s", audio_path, wav_path)
     cmd = ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
+    conversion_ok = False
     try:
         import subprocess
 
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        conversion_ok = True
     except FileNotFoundError as exc:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
+        logger.exception("conversion to wav failed for %s", audio_path)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
 
-    if remove_source and wav_path != audio_path:
+    if remove_source and conversion_ok and wav_path != audio_path:
         try:
             audio_path.unlink()
         except Exception as exc:
             logging.warning("failed to remove source %s after conversion: %s", audio_path, exc)
+    elif remove_source and not conversion_ok and audio_path.exists():
+        logger.debug("preserving original %s because conversion did not complete", audio_path)
     return wav_path
 
 
@@ -553,7 +566,15 @@ def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool =
     if staged != src:
         logger.debug("copying %s to %s", src, staged)
         shutil.copy2(src, staged)
-    return _convert_to_wav(staged, remove_source=remove_original_copy)
+    wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
+    if staged.exists() and staged.suffix.lower() != ".wav" and staged != wav_path:
+        try:
+            staged.unlink()
+            logger.debug("removed non-wav staging copy %s after conversion", staged)
+        except Exception as exc:
+            logger.warning("failed to remove staging copy %s: %s", staged, exc)
+    logger.info("staged %s as %s", src, wav_path)
+    return wav_path
 
 
 def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
@@ -673,13 +694,17 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         path = Path("uploads") / file.filename
         path.parent.mkdir(exist_ok=True)
         with path.open("wb") as f:
-            f.write(await file.read())
+            content = await file.read()
+            f.write(content)
+        logger.info("persisted upload %s (%s bytes) to %s", file.filename, len(content), path)
     except Exception as exc:
+        logger.exception("failed to persist upload %s", file.filename)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
 
     conv_dir = Path("uploads_converted")
     conv_dir.mkdir(exist_ok=True)
     conv_path = _stage_audio_copy(path, conv_dir)
+    logger.info("queued conversion source %s -> %s", path, conv_path)
 
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
@@ -711,6 +736,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
                         if fp.exists():
                             zf.write(fp, arcname=name)
                             logger.debug("added %s to %s", fp, zip_path)
+                        else:
+                            logger.warning("expected stem %s missing at %s", name, fp)
             except Exception as exc:
                 raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
             cb("zip.done", 98)
@@ -718,11 +745,12 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             tasks[task_id]["stems"] = stems_out
             cb("finalizing", 99)
             progress[task_id] = {"stage": "done", "pct": 100}
-            logger.info("task %s completed", task_id)
+            logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
         except AppError as exc:
             progress[task_id] = {"stage": "error", "pct": -1}
             errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
             logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
+            logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
         except Exception as exc:  # pragma: no cover - safety net
             logging.exception("processing failed")
             progress[task_id] = {"stage": "error", "pct": -1}
@@ -899,11 +927,12 @@ async def index():
 async def shutdown():
     logger.warning("shutdown requested via api; terminating process")
 
-    async def _stop():
-        await asyncio.sleep(0.2)
+    def _stop():
+        logger.debug("shutdown thread armed; sleeping briefly to flush logs")
+        time.sleep(0.25)
         os._exit(0)
 
-    asyncio.create_task(_stop())
+    threading.Thread(target=_stop, daemon=True).start()
     return {"status": "shutting down"}
 
 
