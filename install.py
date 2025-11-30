@@ -35,6 +35,7 @@ progress = {"pct": 0, "step": "starting"}
 choice_event = threading.Event()
 shutdown_event = threading.Event()
 PORT = 6060
+MAIN_PORT = 8000
 MODEL_URLS = [
     ("Mel Band Roformer Vocals.ckpt",
      "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
@@ -74,6 +75,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             logger.debug("serving installer ui %s", self.path)
             self.path = "/install.html"
             return super().do_GET()
+
+        if self.path == "/installer_shutdown":
+            logger.info("installer shutdown requested via http")
+            shutdown_event.set()
+            self.send_response(200)
+            self.end_headers()
+            return
 
         # Serve any other static assets from web directory
         return super().do_GET()
@@ -167,8 +175,15 @@ def _models_missing():
 
 
 def _start_server():
-    logger.info("starting main server with uvicorn")
-    subprocess.Popen([str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"])
+    logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
+    subprocess.Popen(
+        [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
+    )
+    try:
+        logger.debug("opening main ui at http://localhost:%s", MAIN_PORT)
+        webbrowser.open(f"http://localhost:{MAIN_PORT}/")
+    except Exception:
+        logger.exception("failed to open browser for main ui")
 
 
 def _download_models():

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
+import urllib.request
 import argparse
 import asyncio
 import json
@@ -86,15 +87,21 @@ if LEGACY_LOG.exists():
     except Exception:
         pass
 
+file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+stream_handler = logging.StreamHandler()
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        stream_handler,
+        file_handler,
     ],
 )
 logger = logging.getLogger("stemsplat")
+for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uvicorn_logger = logging.getLogger(name)
+    uvicorn_logger.setLevel(logging.INFO)
+    uvicorn_logger.addHandler(file_handler)
 
 MODEL_URLS = [
     (
@@ -141,6 +148,18 @@ def select_device() -> torch.device:
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return torch.device("mps")
     raise AppError(ErrorCode.MPS_UNAVAILABLE, "Apple Metal (mps) device is unavailable; ensure torch==2.x with mps support.")
+
+
+def _close_installer_ui(port: int = 6060) -> None:
+    """Best-effort request to shut down the installer helper server."""
+
+    url = f"http://localhost:{port}/installer_shutdown"
+    logger.info("attempting to close installer ui on port %s", port)
+    try:
+        with urllib.request.urlopen(url, timeout=1) as resp:
+            logger.debug("installer ui shutdown status=%s", getattr(resp, "status", "unknown"))
+    except Exception as exc:
+        logger.debug("installer ui not reachable on %s: %s", url, exc)
 
 
 # ── Model management ────────────────────────────────────────────────────────
@@ -449,6 +468,11 @@ download_lock = threading.Lock()
 downloading = False
 
 
+@app.on_event("startup")
+async def _startup_cleanup() -> None:
+    _close_installer_ui()
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.time()
@@ -511,6 +535,7 @@ def _prepare_waveform(audio_path: Path) -> torch.Tensor:
         except Exception as exc:
             logger.exception("resample failed for %s", audio_path)
             raise AppError(ErrorCode.RESAMPLE_FAILED, f"Resample failed: {exc}") from exc
+    logger.debug("loaded waveform shape=%s sr=44100", tuple(waveform.shape))
     return waveform
 
 def _ensure_ffmpeg() -> None:
@@ -540,13 +565,18 @@ def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
     try:
         import subprocess
 
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        logger.debug("ffmpeg stdout for %s: %s", audio_path, result.stdout)
+        logger.debug("ffmpeg stderr for %s: %s", audio_path, result.stderr)
         conversion_ok = True
     except FileNotFoundError as exc:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
         logger.exception("conversion to wav failed for %s", audio_path)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
+
+    if conversion_ok and not wav_path.exists():
+        raise AppError(ErrorCode.UPLOAD_FAILED, f"WAV conversion did not create output for {audio_path}")
 
     if remove_source and conversion_ok and wav_path != audio_path:
         try:
@@ -564,7 +594,7 @@ def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool =
     dest_dir.mkdir(parents=True, exist_ok=True)
     staged = dest_dir / src.name
     if staged != src:
-        logger.debug("copying %s to %s", src, staged)
+        logger.debug("copying %s (%s bytes) to %s", src, src.stat().st_size if src.exists() else "n/a", staged)
         shutil.copy2(src, staged)
     wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
     if staged.exists() and staged.suffix.lower() != ".wav" and staged != wav_path:
@@ -697,6 +727,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             content = await file.read()
             f.write(content)
         logger.info("persisted upload %s (%s bytes) to %s", file.filename, len(content), path)
+        logger.debug("persisted upload bytes head=%s tail=%s", content[:32], content[-32:])
     except Exception as exc:
         logger.exception("failed to persist upload %s", file.filename)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
@@ -704,7 +735,11 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     conv_dir = Path("uploads_converted")
     conv_dir.mkdir(exist_ok=True)
     conv_path = _stage_audio_copy(path, conv_dir)
-    logger.info("queued conversion source %s -> %s", path, conv_path)
+    try:
+        conv_size = conv_path.stat().st_size
+    except Exception:
+        conv_size = "unknown"
+    logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
 
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
@@ -961,6 +996,7 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
     if args.serve:
         import uvicorn
 
+        _close_installer_ui()
         uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
         return
 
