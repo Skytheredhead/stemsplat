@@ -41,7 +41,15 @@
   <div id="loading" class="hidden">starting server…</div>
 
   <script>
-    let lastStep = ''; let prompted = false;
+    let lastStep = '';
+    let prompted = false;
+    let launched = false;
+    let pingTimer = null;
+
+    function startPinging(){
+      if (!pingTimer) { pingTimer = setInterval(pingMainServer, 900); }
+    }
+
     async function poll(){
       const res = await fetch('/progress');
       const data = await res.json();
@@ -54,6 +62,7 @@
       if(data.step && data.step !== lastStep){ log.textContent = data.step; log.classList.remove('opacity-0'); lastStep = data.step; }
       if(data.step === 'waiting for model choice' && !prompted){ showPrompt(); prompted = true; }
       if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
+      startPinging();
       if(data.pct >= 100){ waitForServer(); return; }
       setTimeout(poll, 1000);
     }
@@ -67,30 +76,40 @@
       overlay.querySelector('#skip').onclick = async () => { await fetch('/skip_models', {method:'POST'}); overlay.remove(); };
     }
 
+    async function pingMainServer(){
+      if (launched) return;
+      try{
+        await fetch('http://localhost:8000/', {mode:'no-cors'});
+        await launchApp();
+      }catch(_){ }
+    }
+
     async function waitForServer(){
+      startPinging();
+      await pingMainServer();
+    }
+
+    async function launchApp(){
+      if (launched) return;
+      launched = true;
+      if (pingTimer) { clearInterval(pingTimer); }
       const card = document.getElementById('card');
       const loading = document.getElementById('loading');
-      while(true){
-        try{
-          await fetch('http://localhost:8000/', {mode:'no-cors'});
-          // start a quick fade-out and cue the intro for the app page
-          const shell = document.getElementById('installer-shell');
-          document.body.classList.add('fade-out');
-          if(shell){ shell.classList.add('fade-out'); }
-          card.style.animation = 'fade .4s ease reverse both';
-          loading.classList.remove('hidden');
-          // ensure the fade is visible before navigating
-          await new Promise(r=>setTimeout(r,260));
-          localStorage.setItem('playIntro','1');
-          try { navigator.sendBeacon('http://localhost:6060/installer_shutdown'); } catch(_) {
-            try { fetch('http://localhost:6060/installer_shutdown', { method:'POST', mode:'no-cors', keepalive:true }); } catch(_) {}
-          }
-          location.replace('http://localhost:8000/');
-          return;
-        }catch(e){}
-        await new Promise(r => setTimeout(r, 1000));
+      // start a quick fade-out and cue the intro for the app page
+      const shell = document.getElementById('installer-shell');
+      document.body.classList.add('fade-out');
+      if(shell){ shell.classList.add('fade-out'); }
+      card.style.animation = 'fade .4s ease reverse both';
+      loading.classList.remove('hidden');
+      // ensure the fade is visible before navigating
+      await new Promise(r=>setTimeout(r,260));
+      localStorage.setItem('playIntro','1');
+      try { navigator.sendBeacon('http://localhost:6060/installer_shutdown'); } catch(_) {
+        try { fetch('http://localhost:6060/installer_shutdown', { method:'POST', mode:'no-cors', keepalive:true }); } catch(_){}
       }
+      location.replace('http://localhost:8000/');
     }
+    startPinging();
     poll();
   </script>
 </body>
