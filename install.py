@@ -185,11 +185,6 @@ def _start_server():
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
-    try:
-        logger.debug("opening main ui at http://localhost:%s", MAIN_PORT)
-        webbrowser.open(f"http://localhost:{MAIN_PORT}/")
-    except Exception:
-        logger.exception("failed to open browser for main ui")
 
 
 def _download_models():

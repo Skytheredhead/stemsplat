@@ -759,8 +759,21 @@
     const pendingItems = [];
     const startBtn = document.getElementById('start-btn');
 
+    function selectedStems(){
+      const stems = [];
+      if(vocalsBox.checked) stems.push('vocals');
+      if(instBox.checked)   stems.push('instrumental');
+      if(drumsBox.checked)  stems.push('drums');
+      if(bassBox.checked)   stems.push('bass');
+      if(otherBox.checked)  stems.push('other');
+      if(guitarBox.checked) stems.push('guitar');
+      return stems;
+    }
+
     async function handleFiles(fileList){
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+      const stems = selectedStems();
+      const newPending = [];
       [...fileList].forEach(file => {
         // accept common audio even when type is empty
         const looksAudio = (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
@@ -789,15 +802,29 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        pendingItems.push({ file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey });
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey };
+        pendingItems.push(pending);
+        newPending.push(pending);
         // persist placeholder task (no id yet)
         tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey });
         saveTasks();
         updateUI();
       });
       if (fileInput) fileInput.value = '';
+
+      if(newPending.length && stems.length === 0){
+        showPopup('please select at least one stem before uploading');
+        return;
+      }
+
+      for(const p of newPending){
+        if(!p.started){
+          await uploadWithStems(p, stems);
+        }
+      }
     }
-function uploadWithStems(pending, stems){
+
+    function uploadWithStems(pending, stems){
       return new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
@@ -878,14 +905,7 @@ function uploadWithStems(pending, stems){
     }
     async function startSequentialProcessing(){
       startPressed = true;
-// snapshot of current checkboxes
-      const stems = [];
-      if(vocalsBox.checked) stems.push('vocals');
-      if(instBox.checked)   stems.push('instrumental');
-      if(drumsBox.checked)  stems.push('drums');
-      if(bassBox.checked)   stems.push('bass');
-      if(otherBox.checked)  stems.push('other');
-      if(guitarBox.checked) stems.push('guitar');
+      const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
       for(const p of pendingItems){
         if(!p.started){
