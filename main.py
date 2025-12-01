@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
+import urllib.request
 import argparse
 import asyncio
 import json
@@ -17,6 +18,7 @@ import logging
 import os
 import queue
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -26,7 +28,7 @@ import zipfile
 import torch
 import soundfile as sf
 import torchaudio
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -78,16 +80,29 @@ MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
 SEGMENT = 352_800
 OVERLAP = 12
-LOG_PATH = BASE_DIR / "stemsplat.log"
+LOG_PATH = BASE_DIR / "main_stemsplat.log"
+LEGACY_LOG = BASE_DIR / "stemsplat.log"
+if LEGACY_LOG.exists():
+    try:
+        LEGACY_LOG.unlink()
+    except Exception:
+        pass
 
+file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+stream_handler = logging.StreamHandler()
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        stream_handler,
+        file_handler,
     ],
 )
+logger = logging.getLogger("stemsplat")
+for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uvicorn_logger = logging.getLogger(name)
+    uvicorn_logger.setLevel(logging.INFO)
+    uvicorn_logger.addHandler(file_handler)
 
 MODEL_URLS = [
     (
@@ -134,6 +149,28 @@ def select_device() -> torch.device:
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return torch.device("mps")
     raise AppError(ErrorCode.MPS_UNAVAILABLE, "Apple Metal (mps) device is unavailable; ensure torch==2.x with mps support.")
+
+
+def _close_installer_ui(port: int = 6060) -> None:
+    """Best-effort request to shut down the installer helper server."""
+
+    url = f"http://localhost:{port}/installer_shutdown"
+    logger.info("attempting to close installer ui on port %s", port)
+    try:
+        with urllib.request.urlopen(url, timeout=1) as resp:
+            logger.debug("installer ui shutdown status=%s", getattr(resp, "status", "unknown"))
+    except Exception as exc:
+        logger.debug("installer ui not reachable on %s: %s", url, exc)
+
+
+def _port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("localhost", port))
+            return True
+        except OSError:
+            return False
 
 
 # ── Model management ────────────────────────────────────────────────────────
@@ -442,6 +479,33 @@ download_lock = threading.Lock()
 downloading = False
 
 
+@app.on_event("startup")
+async def _startup_cleanup() -> None:
+    _close_installer_ui()
+
+
+@app.exception_handler(AppError)
+async def _handle_app_error(request: Request, exc: AppError):  # noqa: D401 - FastAPI signature
+    """Return JSON-encoded error responses while logging the failure."""
+
+    logger.error("app error for %s %s: %s %s", request.method, request.url.path, exc.code, exc.message)
+    return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    logger.info("request %s %s from %s", request.method, request.url.path, request.client.host if request.client else "?")
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("unhandled error for %s %s", request.method, request.url.path)
+        raise
+    duration = (time.time() - start) * 1000
+    logger.info("completed %s %s in %.1fms status=%s", request.method, request.url.path, duration, response.status_code)
+    return response
+
+
 def _download_models() -> None:
     global downloading
     with download_lock:
@@ -460,8 +524,10 @@ def _download_models() -> None:
                     if not chunk:
                         break
                     out.write(chunk)
+                    logger.debug("downloaded chunk for %s", name)
         except Exception as exc:  # pragma: no cover - network errors
             logging.error("model download failed: %s", exc)
+            logger.exception("model download failure for %s", name)
     downloading = False
 
 
@@ -476,14 +542,19 @@ async def download_models():
 
 def _prepare_waveform(audio_path: Path) -> torch.Tensor:
     try:
+        logger.info("loading audio %s", audio_path)
         waveform, sr = torchaudio.load(str(audio_path))
     except Exception as exc:
+        logger.exception("failed to load %s", audio_path)
         raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
     if sr != 44100:
         try:
+            logger.info("resampling %s from %s to 44100", audio_path, sr)
             waveform = torchaudio.functional.resample(waveform, sr, 44100)
         except Exception as exc:
+            logger.exception("resample failed for %s", audio_path)
             raise AppError(ErrorCode.RESAMPLE_FAILED, f"Resample failed: {exc}") from exc
+    logger.debug("loaded waveform shape=%s sr=44100", tuple(waveform.shape))
     return waveform
 
 def _ensure_ffmpeg() -> None:
@@ -492,8 +563,10 @@ def _ensure_ffmpeg() -> None:
     try:
         subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError as exc:
+        logger.error("ffmpeg binary missing from PATH; conversion cannot proceed")
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
+        logger.exception("ffmpeg health check failed")
         raise AppError(ErrorCode.FFMPEG_MISSING, f"ffmpeg check failed: {exc}") from exc
 
 
@@ -503,24 +576,36 @@ def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
     _ensure_ffmpeg()
 
     if audio_path.suffix.lower() in {".wav", ".wave"}:
+        logger.debug("%s already wav; skipping convert", audio_path)
         return audio_path
 
     wav_path = audio_path.with_suffix(".wav")
+    logger.info("converting %s to wav at %s", audio_path, wav_path)
     cmd = ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
+    conversion_ok = False
     try:
         import subprocess
 
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        logger.debug("ffmpeg stdout for %s: %s", audio_path, result.stdout)
+        logger.debug("ffmpeg stderr for %s: %s", audio_path, result.stderr)
+        conversion_ok = True
     except FileNotFoundError as exc:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
+        logger.exception("conversion to wav failed for %s", audio_path)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
 
-    if remove_source and wav_path != audio_path:
+    if conversion_ok and not wav_path.exists():
+        raise AppError(ErrorCode.UPLOAD_FAILED, f"WAV conversion did not create output for {audio_path}")
+
+    if remove_source and conversion_ok and wav_path != audio_path:
         try:
             audio_path.unlink()
-        except Exception:
-            logging.warning("failed to remove source %s after conversion", audio_path)
+        except Exception as exc:
+            logging.warning("failed to remove source %s after conversion: %s", audio_path, exc)
+    elif remove_source and not conversion_ok and audio_path.exists():
+        logger.debug("preserving original %s because conversion did not complete", audio_path)
     return wav_path
 
 
@@ -530,8 +615,26 @@ def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool =
     dest_dir.mkdir(parents=True, exist_ok=True)
     staged = dest_dir / src.name
     if staged != src:
+        logger.debug("copying %s (%s bytes) to %s", src, src.stat().st_size if src.exists() else "n/a", staged)
         shutil.copy2(src, staged)
-    return _convert_to_wav(staged, remove_source=remove_original_copy)
+    try:
+        wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
+    except AppError:
+        if staged.exists() and staged.suffix.lower() != ".wav":
+            try:
+                staged.unlink()
+                logger.debug("cleaned failed staging copy %s", staged)
+            except Exception as exc:
+                logger.warning("failed to clean staging copy %s after error: %s", staged, exc)
+        raise
+    if staged.exists() and staged.suffix.lower() != ".wav" and staged != wav_path:
+        try:
+            staged.unlink()
+            logger.debug("removed non-wav staging copy %s after conversion", staged)
+        except Exception as exc:
+            logger.warning("failed to remove staging copy %s: %s", staged, exc)
+    logger.info("staged %s as %s", src, wav_path)
+    return wav_path
 
 
 def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
@@ -553,6 +656,7 @@ def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
         staged_dest = output_dir / relative_subpath
         staged_dest.parent.mkdir(parents=True, exist_ok=True)
         if staged_dest != src_path:
+            logger.debug("copying %s to %s", src_path, staged_dest)
             shutil.copy2(src_path, staged_dest)
         wav_path = _convert_to_wav(staged_dest, remove_source=True)
         converted.append(wav_path)
@@ -561,6 +665,7 @@ def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
 
 def _write_wave(out_dir: Path, fname: str, tensor: torch.Tensor, sr: int = 44100) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("writing stem %s to %s", fname, out_dir)
     sf.write(out_dir / fname, tensor.T.cpu().numpy(), sr)
 
 
@@ -571,6 +676,7 @@ def _separate_waveform(
     cb: Callable[[str, int], None],
     out_dir: Path,
 ) -> list[str]:
+    logger.info("starting separation for %s with stems %s", audio_path, stem_list)
     waveform = _prepare_waveform(audio_path)
     cb("load_audio.done", 2)
 
@@ -643,17 +749,31 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     stop_evt = threading.Event()
     controls[task_id] = {"pause": pause_evt, "stop": stop_evt}
     stem_list = [s for s in stems.split(",") if s]
+    logger.info("upload received task=%s filename=%s stems=%s", task_id, file.filename, stem_list)
     try:
         path = Path("uploads") / file.filename
         path.parent.mkdir(exist_ok=True)
         with path.open("wb") as f:
-            f.write(await file.read())
+            content = await file.read()
+            f.write(content)
+        logger.info("persisted upload %s (%s bytes) to %s", file.filename, len(content), path)
+        logger.debug("persisted upload bytes head=%s tail=%s", content[:32], content[-32:])
     except Exception as exc:
+        logger.exception("failed to persist upload %s", file.filename)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
 
     conv_dir = Path("uploads_converted")
     conv_dir.mkdir(exist_ok=True)
-    conv_path = _stage_audio_copy(path, conv_dir)
+    try:
+        conv_path = _stage_audio_copy(path, conv_dir)
+    except AppError as exc:
+        logger.error("conversion staging failed for %s: %s %s", file.filename, exc.code, exc.message)
+        raise exc.to_http() if hasattr(exc, "to_http") else exc
+    try:
+        conv_size = conv_path.stat().st_size
+    except Exception:
+        conv_size = "unknown"
+    logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
 
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
@@ -665,6 +785,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         if stop_evt.is_set():
             progress[task_id] = {"stage": "stopped", "pct": 0}
             raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
+        logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
         progress[task_id] = {"stage": stage, "pct": pct}
 
     def run() -> None:
@@ -683,6 +804,9 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
                         fp = out_dir / name
                         if fp.exists():
                             zf.write(fp, arcname=name)
+                            logger.debug("added %s to %s", fp, zip_path)
+                        else:
+                            logger.warning("expected stem %s missing at %s", name, fp)
             except Exception as exc:
                 raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
             cb("zip.done", 98)
@@ -690,13 +814,17 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             tasks[task_id]["stems"] = stems_out
             cb("finalizing", 99)
             progress[task_id] = {"stage": "done", "pct": 100}
+            logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
         except AppError as exc:
             progress[task_id] = {"stage": "error", "pct": -1}
             errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
+            logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
+            logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
         except Exception as exc:  # pragma: no cover - safety net
             logging.exception("processing failed")
             progress[task_id] = {"stage": "error", "pct": -1}
             errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
+            logger.exception("task %s crashed", task_id)
 
     process_queue.put(run)
     progress[task_id] = {"stage": "queued", "pct": 0}
@@ -740,6 +868,7 @@ async def rerun(task_id: str):
         raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
     conv_src = Path(old.get("conv_src", ""))
     stem_list = old.get("stem_list") or []
+    logger.info("rerun requested for task %s", task_id)
     if not conv_src.exists() or not stem_list:
         raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "Missing source or stems for rerun").to_http(409)
 
@@ -807,6 +936,7 @@ async def download(task_id: str):
         raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
     zip_path = info.get("zip")
     if zip_path and Path(zip_path).exists():
+        logger.info("serving download for task %s at %s", task_id, zip_path)
         return FileResponse(path=zip_path, media_type="application/zip", filename=Path(zip_path).name)
     raise AppError(ErrorCode.INVALID_REQUEST, "Files not ready").to_http(409)
 
@@ -822,6 +952,7 @@ async def clear_all_uploads():
                     shutil.rmtree(entry)
                 else:
                     entry.unlink()
+    logger.info("cleared upload directories")
     return {"status": "cleared"}
 
 
@@ -831,6 +962,7 @@ async def pause_task(task_id: str):
     if not ctrl:
         raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
     ctrl["pause"].set()
+    logger.info("paused task %s", task_id)
     return {"status": "paused"}
 
 
@@ -840,6 +972,7 @@ async def resume_task(task_id: str):
     if not ctrl:
         raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
     ctrl["pause"].clear()
+    logger.info("resumed task %s", task_id)
     return {"status": "resumed"}
 
 
@@ -849,6 +982,7 @@ async def stop_task(task_id: str):
     if not ctrl:
         raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
     ctrl["stop"].set()
+    logger.info("stopped task %s", task_id)
     return {"status": "stopped"}
 
 
@@ -856,6 +990,19 @@ async def stop_task(task_id: str):
 async def index():
     html_path = BASE_DIR / "web" / "index.html"
     return HTMLResponse(html_path.read_text())
+
+
+@app.post("/shutdown")
+async def shutdown():
+    logger.warning("shutdown requested via api; terminating process")
+
+    def _stop():
+        logger.debug("shutdown thread armed; sleeping briefly to flush logs")
+        time.sleep(0.25)
+        os._exit(0)
+
+    threading.Thread(target=_stop, daemon=True).start()
+    return {"status": "shutting down"}
 
 
 # ── CLI entrypoint ─────────────────────────────────────────────────────────-
@@ -883,6 +1030,10 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
     if args.serve:
         import uvicorn
 
+        _close_installer_ui()
+        if not _port_available(8000):
+            logger.error("Port 8000 is already in use; aborting startup")
+            raise SystemExit("Port 8000 is already in use. Please free the port and try again.")
         uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
         return
 
