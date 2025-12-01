@@ -18,6 +18,7 @@ import logging
 import os
 import queue
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -160,6 +161,16 @@ def _close_installer_ui(port: int = 6060) -> None:
             logger.debug("installer ui shutdown status=%s", getattr(resp, "status", "unknown"))
     except Exception as exc:
         logger.debug("installer ui not reachable on %s: %s", url, exc)
+
+
+def _port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("localhost", port))
+            return True
+        except OSError:
+            return False
 
 
 # ── Model management ────────────────────────────────────────────────────────
@@ -473,6 +484,14 @@ async def _startup_cleanup() -> None:
     _close_installer_ui()
 
 
+@app.exception_handler(AppError)
+async def _handle_app_error(request: Request, exc: AppError):  # noqa: D401 - FastAPI signature
+    """Return JSON-encoded error responses while logging the failure."""
+
+    logger.error("app error for %s %s: %s %s", request.method, request.url.path, exc.code, exc.message)
+    return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.time()
@@ -544,8 +563,10 @@ def _ensure_ffmpeg() -> None:
     try:
         subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError as exc:
+        logger.error("ffmpeg binary missing from PATH; conversion cannot proceed")
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
+        logger.exception("ffmpeg health check failed")
         raise AppError(ErrorCode.FFMPEG_MISSING, f"ffmpeg check failed: {exc}") from exc
 
 
@@ -596,7 +617,16 @@ def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool =
     if staged != src:
         logger.debug("copying %s (%s bytes) to %s", src, src.stat().st_size if src.exists() else "n/a", staged)
         shutil.copy2(src, staged)
-    wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
+    try:
+        wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
+    except AppError:
+        if staged.exists() and staged.suffix.lower() != ".wav":
+            try:
+                staged.unlink()
+                logger.debug("cleaned failed staging copy %s", staged)
+            except Exception as exc:
+                logger.warning("failed to clean staging copy %s after error: %s", staged, exc)
+        raise
     if staged.exists() and staged.suffix.lower() != ".wav" and staged != wav_path:
         try:
             staged.unlink()
@@ -734,7 +764,11 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     conv_dir = Path("uploads_converted")
     conv_dir.mkdir(exist_ok=True)
-    conv_path = _stage_audio_copy(path, conv_dir)
+    try:
+        conv_path = _stage_audio_copy(path, conv_dir)
+    except AppError as exc:
+        logger.error("conversion staging failed for %s: %s %s", file.filename, exc.code, exc.message)
+        raise exc.to_http() if hasattr(exc, "to_http") else exc
     try:
         conv_size = conv_path.stat().st_size
     except Exception:
@@ -997,6 +1031,9 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
         import uvicorn
 
         _close_installer_ui()
+        if not _port_available(8000):
+            logger.error("Port 8000 is already in use; aborting startup")
+            raise SystemExit("Port 8000 is already in use. Please free the port and try again.")
         uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
         return
 

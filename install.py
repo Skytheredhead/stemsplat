@@ -176,6 +176,12 @@ def _models_missing():
 
 def _start_server():
     logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
+    if not _port_available(MAIN_PORT):
+        msg = f"Port {MAIN_PORT} is already in use. Please close the other process or change MAIN_PORT."
+        logger.error(msg)
+        print(msg)
+        shutdown_event.set()
+        return
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
