@@ -21,18 +21,22 @@
     @keyframes fade{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
     .bar{ height: 12px; background: rgba(255,255,255,.08); border-radius:999px; overflow:hidden; }
     .bar>div{ height:100%; width:0%; background:linear-gradient(90deg,#e7eef2,#dfe7ec); transition:width .35s cubic-bezier(.2,.7,.2,1); }
+    .fade-shell{ transition: opacity .35s ease; }
+    .fade-shell.fade-out{ opacity:0; }
   </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center gap-10">
   <div class="noise fixed inset-0 -z-10"></div>
   <div class="shade"></div>
-  <h1 class="text-4xl md:text-5xl font-light fade-in select-none">stemsplat setup</h1>
-  <div id="card" class="sheen glass w-11/12 max-w-xl px-8 py-6 rounded-2xl flex flex-col gap-4 fade-in">
+  <div id="installer-shell" class="fade-shell">
+    <h1 class="text-4xl md:text-5xl font-light fade-in select-none">stemsplat setup</h1>
+    <div id="card" class="sheen glass w-11/12 max-w-xl px-8 py-6 rounded-2xl flex flex-col gap-4 fade-in">
     <span id="status">starting…</span>
     <div class="bar"><div id="bar"></div></div>
     <div id="note" class="opacity-70 text-sm">this might take a minute (it'll probably take way less)</div>
     <div id="log" class="text-xs h-4"></div>
     <div id="error" class="hidden text-red-300 text-sm"></div>
+  </div>
   </div>
   <div id="loading" class="hidden">starting server…</div>
 
@@ -70,12 +74,17 @@
         try{
           await fetch('http://localhost:8000/', {mode:'no-cors'});
           // start a quick fade-out and cue the intro for the app page
+          const shell = document.getElementById('installer-shell');
           document.body.classList.add('fade-out');
+          if(shell){ shell.classList.add('fade-out'); }
           card.style.animation = 'fade .4s ease reverse both';
           loading.classList.remove('hidden');
           // ensure the fade is visible before navigating
-          await new Promise(r=>setTimeout(r,220));
+          await new Promise(r=>setTimeout(r,260));
           localStorage.setItem('playIntro','1');
+          try { navigator.sendBeacon('http://localhost:6060/installer_shutdown'); } catch(_) {
+            try { fetch('http://localhost:6060/installer_shutdown', { method:'POST', mode:'no-cors', keepalive:true }); } catch(_) {}
+          }
           location.replace('http://localhost:8000/');
           return;
         }catch(e){}

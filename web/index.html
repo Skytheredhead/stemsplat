@@ -356,6 +356,7 @@
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
     const STAGE_RANGES = {
+      ready:[0,0],
       queued:[0,0],
       preparing:[0,1], 'prepare.complete':[1,1],
       converting:[1,5],
@@ -825,7 +826,8 @@
     }
 
     function uploadWithStems(pending, stems){
-      return new Promise((resolve) => {
+      pending.started = true;
+      pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
         // enable stop square (disabled until task id assigned)
@@ -840,32 +842,45 @@
         data.append('file', file);
         data.append('stems', stems.join(','));
         const xhr = new XMLHttpRequest();
-        xhr.open('POST','/upload',true);
+        xhr.open('POST', '/upload');
         xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable) {
-          smooth.setImmediate(0);
-          st.textContent = 'loading';
-          st.classList.remove('chip-dim');
-        }
+          if(evt.lengthComputable){
+            const pct = Math.round(evt.loaded / evt.total * 100);
+            smooth.setTarget(Math.min(pct * 0.2, 20)); // cap at 20% until server stages
+            st.textContent = `uploading (${pct}%)`;
+            st.classList.remove('chip-dim');
+          }
         };
         xhr.onload = () => {
-          if(xhr.status !== 200){
-            st.textContent = 'error';
-            try{
-              const msg = JSON.parse(xhr.responseText).detail || '';
-              if(msg.includes('checkpoint not found')) showModelsPopup(()=>ui.item.remove());
+          if(xhr.status >= 400){ st.textContent = 'error'; return resolve(); }
+          st.classList.remove('chip-dim');
+          st.textContent = 'ready';
+          let res = {};
+          try {
+            res = JSON.parse(xhr.responseText || '{}');
+            const msg = res.detail && res.detail.message;
+            if(msg){
+              st.textContent = 'error';
+              st.classList.add('chip-dim');
+              if (stopPad) stopPad.style.display = 'none';
               else showError(msg);
-            }catch(_){}
+            }
+          }catch(_){ }
+          if(res.detail && res.detail.message){
+            try{
+              const msg = res.detail.message;
+              st.textContent = 'error'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
+              else showError(msg);
+            }catch(_){ }
             return resolve();
           }
           const res = JSON.parse(xhr.responseText);
           pending.id = res.task_id;
-          pending.started = true;
           pending.stems = res.stems;
           ui.item.__taskId = res.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:res.task_id, name:file.name, pct:0, stage:'preparing', stems:res.stems, tempKey: pending.tempKey };
+          const t = { id:res.task_id, name:file.name, pct:0, stage:'ready', stems:res.stems, tempKey: pending.tempKey };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
@@ -897,20 +912,39 @@
           }
           // start polling
           trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
+          if(startPressed){
+            startTaskWhenReady(pending);
+          }
           resolve();
         };
         xhr.onerror = () => { st.textContent = 'error'; resolve(); };
         xhr.send(data);
       });
+      return pending.uploadPromise;
     }
+
+    function startTaskWhenReady(pending){
+      if(!pending || pending.startedProcessing) return;
+      if(!pending.uploadPromise){ return; }
+      pending.startedProcessing = true;
+      pending.uploadPromise.then(async () => {
+        if(!pending.id) return;
+        try{ await fetch('/start/' + pending.id, { method:'POST' }); }catch(_){ /* ignore */ }
+      });
+    }
+
     async function startSequentialProcessing(){
       startPressed = true;
       const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
       for(const p of pendingItems){
-        if(!p.started){
+        if(!p.uploadPromise){
           await uploadWithStems(p, stems);
         }
+        if(p.uploadPromise){
+          await p.uploadPromise;
+        }
+        startTaskWhenReady(p);
       }
     }
     if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);
