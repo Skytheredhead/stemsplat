@@ -78,6 +78,8 @@ class AppError(Exception):
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
+UPLOAD_DIR = BASE_DIR / "uploads"
+CONVERTED_DIR = BASE_DIR / "uploads_converted"
 SEGMENT = 352_800
 OVERLAP = 12
 LOG_PATH = BASE_DIR / "main_stemsplat.log"
@@ -836,8 +838,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     stem_list = [s for s in stems.split(",") if s]
     logger.info("upload received task=%s filename=%s stems=%s", task_id, file.filename, stem_list)
     try:
-        path = Path("uploads") / file.filename
-        path.parent.mkdir(exist_ok=True)
+        path = UPLOAD_DIR / file.filename
+        path.parent.mkdir(exist_ok=True, parents=True)
         with path.open("wb") as f:
             content = await file.read()
             f.write(content)
@@ -847,7 +849,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         logger.exception("failed to persist upload %s", file.filename)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
 
-    conv_dir = Path("uploads_converted")
+    conv_dir = CONVERTED_DIR
     conv_dir.mkdir(exist_ok=True)
     try:
         conv_path = _stage_audio_copy(path, conv_dir)
@@ -961,9 +963,8 @@ async def download(task_id: str):
 
 @app.post("/clear_all_uploads")
 async def clear_all_uploads():
-    dirs = ["uploads", "uploads_converted"]
-    for d in dirs:
-        dir_path = BASE_DIR / d
+    dirs = [UPLOAD_DIR, CONVERTED_DIR]
+    for dir_path in dirs:
         if dir_path.exists():
             for entry in dir_path.iterdir():
                 if entry.is_dir():
@@ -1010,7 +1011,7 @@ async def index():
     return HTMLResponse(html_path.read_text())
 
 
-@app.post("/shutdown")
+@app.api_route("/shutdown", methods=["POST", "GET"])
 async def shutdown():
     logger.warning("shutdown requested via api; terminating process")
 
@@ -1027,7 +1028,7 @@ async def shutdown():
 
 
 def _process_local_file(path: Path, stem_list: list[str]) -> list[str]:
-    conv_dir = Path("uploads_converted")
+    conv_dir = CONVERTED_DIR
     conv_path = _stage_audio_copy(path, conv_dir)
     out_dir = conv_dir / f"{conv_path.stem}—stems"
 
