@@ -146,13 +146,13 @@
   <h1 id="title" class="text-5xl md:text-6xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
   <!-- controls -->
   <div class="w-11/12 max-w-3xl flex gap-6">
-    <div id="dropzone" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105">
+    <label id="dropzone" for="file-input" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
       </svg>
       <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
       <input id="file-input" type="file" accept="audio/*" multiple aria-label="choose audio files" class="sr-only" />
-    </div>
+    </label>
     <div class="flex flex-col gap-4 w-64">
       <div id="stems-card" class="glass pre-hide w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
         <button id="settings-btn" title="settings" class="absolute top-3 right-3 z-10 p-2 rounded-lg hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
@@ -240,18 +240,23 @@
     let startPressed = false;
 
     if (closeBtn) {
+      const closeWindow = () => {
+        try { window.close(); } catch(_) {}
+        setTimeout(() => { window.location.replace('about:blank'); }, 140);
+      };
       closeBtn.addEventListener('click', async () => {
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
-          await fetch('/shutdown', { method: 'POST' });
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon('/shutdown', new Blob());
+          } else {
+            await fetch('/shutdown', { method: 'POST', keepalive: true });
+          }
         } catch (err) {
           console.error('shutdown failed', err);
         }
-        setTimeout(() => {
-          window.close();
-          setTimeout(() => { window.location.href = 'about:blank'; }, 150);
-        }, 120);
+        setTimeout(closeWindow, 120);
       });
     }
 
@@ -356,6 +361,7 @@
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
     const STAGE_RANGES = {
+      ready:[0,0],
       queued:[0,0],
       preparing:[0,1], 'prepare.complete':[1,1],
       converting:[1,5],
@@ -707,12 +713,19 @@
         dropzone.classList.remove('ring-2','ring-[var(--accent)]');
       }));
 
-    // open file picker on click
-    dropzone.addEventListener('click', () => {
+    // open file picker on click/keyboard
+    const triggerPicker = () => {
       try {
         if (fileInput.showPicker) { fileInput.showPicker(); return; }
       } catch(_) {}
       fileInput.click();
+    };
+    dropzone.addEventListener('click', triggerPicker);
+    dropzone.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        triggerPicker();
+      }
     });
 
     // handle both dropped and picked files
@@ -825,7 +838,8 @@
     }
 
     function uploadWithStems(pending, stems){
-      return new Promise((resolve) => {
+      pending.started = true;
+      pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
         // enable stop square (disabled until task id assigned)
@@ -840,32 +854,45 @@
         data.append('file', file);
         data.append('stems', stems.join(','));
         const xhr = new XMLHttpRequest();
-        xhr.open('POST','/upload',true);
+        xhr.open('POST', '/upload');
         xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable) {
-          smooth.setImmediate(0);
-          st.textContent = 'loading';
-          st.classList.remove('chip-dim');
-        }
+          if(evt.lengthComputable){
+            const pct = Math.round(evt.loaded / evt.total * 100);
+            smooth.setTarget(Math.min(pct * 0.2, 20)); // cap at 20% until server stages
+            st.textContent = `uploading (${pct}%)`;
+            st.classList.remove('chip-dim');
+          }
         };
         xhr.onload = () => {
-          if(xhr.status !== 200){
-            st.textContent = 'error';
-            try{
-              const msg = JSON.parse(xhr.responseText).detail || '';
-              if(msg.includes('checkpoint not found')) showModelsPopup(()=>ui.item.remove());
+          if(xhr.status >= 400){ st.textContent = 'error'; return resolve(); }
+          st.classList.remove('chip-dim');
+          st.textContent = 'ready';
+          let res = {};
+          try {
+            res = JSON.parse(xhr.responseText || '{}');
+            const msg = res.detail && res.detail.message;
+            if(msg){
+              st.textContent = 'error';
+              st.classList.add('chip-dim');
+              if (stopPad) stopPad.style.display = 'none';
               else showError(msg);
-            }catch(_){}
+            }
+          }catch(_){ }
+          if(res.detail && res.detail.message){
+            try{
+              const msg = res.detail.message;
+              st.textContent = 'error'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
+              else showError(msg);
+            }catch(_){ }
             return resolve();
           }
           const res = JSON.parse(xhr.responseText);
           pending.id = res.task_id;
-          pending.started = true;
           pending.stems = res.stems;
           ui.item.__taskId = res.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:res.task_id, name:file.name, pct:0, stage:'preparing', stems:res.stems, tempKey: pending.tempKey };
+          const t = { id:res.task_id, name:file.name, pct:0, stage:'ready', stems:res.stems, tempKey: pending.tempKey };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
@@ -897,20 +924,39 @@
           }
           // start polling
           trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
+          if(startPressed){
+            startTaskWhenReady(pending);
+          }
           resolve();
         };
         xhr.onerror = () => { st.textContent = 'error'; resolve(); };
         xhr.send(data);
       });
+      return pending.uploadPromise;
     }
+
+    function startTaskWhenReady(pending){
+      if(!pending || pending.startedProcessing) return;
+      if(!pending.uploadPromise){ return; }
+      pending.startedProcessing = true;
+      pending.uploadPromise.then(async () => {
+        if(!pending.id) return;
+        try{ await fetch('/start/' + pending.id, { method:'POST' }); }catch(_){ /* ignore */ }
+      });
+    }
+
     async function startSequentialProcessing(){
       startPressed = true;
       const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
       for(const p of pendingItems){
-        if(!p.started){
+        if(!p.uploadPromise){
           await uploadWithStems(p, stems);
         }
+        if(p.uploadPromise){
+          await p.uploadPromise;
+        }
+        startTaskWhenReady(p);
       }
     }
     if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);

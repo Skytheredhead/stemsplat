@@ -101,6 +101,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             return
+        if self.path == "/installer_shutdown":
+            logger.info("installer shutdown requested via post")
+            shutdown_event.set()
+            self.send_response(200)
+            self.end_headers()
+            return
 
         self.send_response(404)
         self.end_headers()

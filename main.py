@@ -557,23 +557,47 @@ def _prepare_waveform(audio_path: Path) -> torch.Tensor:
     logger.debug("loaded waveform shape=%s sr=44100", tuple(waveform.shape))
     return waveform
 
-def _ensure_ffmpeg() -> None:
+def _ensure_ffmpeg() -> str:
+    """Return a usable ffmpeg executable path, downloading a bundled copy if needed."""
+
+    import shutil
     import subprocess
 
-    try:
-        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except FileNotFoundError as exc:
-        logger.error("ffmpeg binary missing from PATH; conversion cannot proceed")
-        raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
-    except Exception as exc:
-        logger.exception("ffmpeg health check failed")
-        raise AppError(ErrorCode.FFMPEG_MISSING, f"ffmpeg check failed: {exc}") from exc
+    path = shutil.which("ffmpeg")
+    candidates: list[str] = []
+    if path:
+        candidates.append(path)
+
+    try:  # fallback to bundled binary if available
+        import imageio_ffmpeg  # type: ignore
+
+        try:
+            bundled = imageio_ffmpeg.get_ffmpeg_exe()
+            if bundled:
+                candidates.append(bundled)
+                logger.debug("using bundled ffmpeg at %s", bundled)
+        except Exception:
+            logger.debug("imageio-ffmpeg present but failed to provide binary", exc_info=True)
+    except Exception:
+        logger.debug("imageio-ffmpeg not available; relying on system ffmpeg")
+
+    for candidate in candidates:
+        try:
+            subprocess.run([candidate, "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return candidate
+        except FileNotFoundError:
+            logger.debug("ffmpeg candidate missing at %s", candidate)
+        except Exception as exc:
+            logger.debug("ffmpeg candidate at %s failed health check: %s", candidate, exc)
+
+    logger.error("ffmpeg binary missing from PATH and bundled lookup failed; conversion cannot proceed")
+    raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg or ensure imageio-ffmpeg can download it.")
 
 
 def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
     """Convert ``audio_path`` to WAV in-place and optionally drop the original copy."""
 
-    _ensure_ffmpeg()
+    ffmpeg_path = _ensure_ffmpeg()
 
     if audio_path.suffix.lower() in {".wav", ".wave"}:
         logger.debug("%s already wav; skipping convert", audio_path)
@@ -581,7 +605,7 @@ def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
 
     wav_path = audio_path.with_suffix(".wav")
     logger.info("converting %s to wav at %s", audio_path, wav_path)
-    cmd = ["ffmpeg", "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
+    cmd = [ffmpeg_path, "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
     conversion_ok = False
     try:
         import subprocess
@@ -635,6 +659,67 @@ def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool =
             logger.warning("failed to remove staging copy %s: %s", staged, exc)
     logger.info("staged %s as %s", src, wav_path)
     return wav_path
+
+
+def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: list[str]) -> None:
+    pause_evt = controls.setdefault(task_id, {}).setdefault("pause", threading.Event())
+    stop_evt = controls.setdefault(task_id, {}).setdefault("stop", threading.Event())
+
+    def cb(stage: str, pct: int):
+        while pause_evt.is_set():
+            progress[task_id] = {"stage": "paused", "pct": pct}
+            time.sleep(0.5)
+        if stop_evt.is_set():
+            progress[task_id] = {"stage": "stopped", "pct": 0}
+            raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
+        logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
+        progress[task_id] = {"stage": stage, "pct": pct}
+
+    def run() -> None:
+        try:
+            tasks[task_id]["status"] = "running"
+            manager = ModelManager()
+            cb("preparing", 0)
+            cb("prepare.complete", 1)
+            audio_path = conv_path
+            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
+
+            zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
+            cb("zip.start", 95)
+            try:
+                with zipfile.ZipFile(zip_path, "w") as zf:
+                    for name in stems_out:
+                        fp = out_dir / name
+                        if fp.exists():
+                            zf.write(fp, arcname=name)
+                            logger.debug("added %s to %s", fp, zip_path)
+                        else:
+                            logger.warning("expected stem %s missing at %s", name, fp)
+            except Exception as exc:
+                raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
+            cb("zip.done", 98)
+            tasks[task_id]["zip"] = zip_path
+            tasks[task_id]["stems"] = stems_out
+            cb("finalizing", 99)
+            progress[task_id] = {"stage": "done", "pct": 100}
+            tasks[task_id]["status"] = "done"
+            logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
+        except AppError as exc:
+            progress[task_id] = {"stage": "error", "pct": -1}
+            errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
+            tasks[task_id]["status"] = "error"
+            logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
+            logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
+        except Exception as exc:  # pragma: no cover - safety net
+            logging.exception("processing failed")
+            progress[task_id] = {"stage": "error", "pct": -1}
+            errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
+            tasks[task_id]["status"] = "error"
+            logger.exception("task %s crashed", task_id)
+
+    tasks[task_id]["status"] = "queued"
+    progress[task_id] = {"stage": "queued", "pct": 0}
+    process_queue.put(run)
 
 
 def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
@@ -778,56 +863,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
 
-    def cb(stage: str, pct: int):
-        while pause_evt.is_set():
-            progress[task_id] = {"stage": "paused", "pct": pct}
-            time.sleep(0.5)
-        if stop_evt.is_set():
-            progress[task_id] = {"stage": "stopped", "pct": 0}
-            raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
-        logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
-        progress[task_id] = {"stage": stage, "pct": pct}
-
-    def run() -> None:
-        try:
-            manager = ModelManager()
-            cb("preparing", 0)
-            cb("prepare.complete", 1)
-            audio_path = conv_path
-            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
-
-            zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
-            cb("zip.start", 95)
-            try:
-                with zipfile.ZipFile(zip_path, "w") as zf:
-                    for name in stems_out:
-                        fp = out_dir / name
-                        if fp.exists():
-                            zf.write(fp, arcname=name)
-                            logger.debug("added %s to %s", fp, zip_path)
-                        else:
-                            logger.warning("expected stem %s missing at %s", name, fp)
-            except Exception as exc:
-                raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-            cb("zip.done", 98)
-            tasks[task_id]["zip"] = zip_path
-            tasks[task_id]["stems"] = stems_out
-            cb("finalizing", 99)
-            progress[task_id] = {"stage": "done", "pct": 100}
-            logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
-        except AppError as exc:
-            progress[task_id] = {"stage": "error", "pct": -1}
-            errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
-            logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
-            logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
-        except Exception as exc:  # pragma: no cover - safety net
-            logging.exception("processing failed")
-            progress[task_id] = {"stage": "error", "pct": -1}
-            errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
-            logger.exception("task %s crashed", task_id)
-
-    process_queue.put(run)
-    progress[task_id] = {"stage": "queued", "pct": 0}
+    progress[task_id] = {"stage": "ready", "pct": 0}
     tasks[task_id] = {
         "dir": out_dir,
         "stems": expected,
@@ -835,8 +871,26 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         "conv_src": str(conv_path),
         "orig_src": str(path),
         "stem_list": stem_list,
+        "status": "ready",
     }
-    return {"task_id": task_id, "stems": expected}
+    return {"task_id": task_id, "stems": expected, "status": "ready"}
+
+
+@app.post("/start/{task_id}")
+async def start_task(task_id: str):
+    info = tasks.get(task_id)
+    if not info:
+        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
+    if info.get("status") in {"queued", "running"}:
+        return {"task_id": task_id, "status": info.get("status")}
+    conv_src = Path(info.get("conv_src", ""))
+    if not conv_src.exists():
+        raise AppError(ErrorCode.UPLOAD_FAILED, "Converted source missing; please re-upload.").to_http()
+    out_dir = Path(info.get("dir", conv_src.parent / f"{conv_src.stem}—stems"))
+    stem_list = info.get("stem_list") or []
+    logger.info("starting task %s on demand", task_id)
+    _queue_processing(task_id, conv_src, out_dir, stem_list)
+    return {"task_id": task_id, "status": "queued"}
 
 
 @app.get("/progress/{task_id}")
@@ -873,50 +927,11 @@ async def rerun(task_id: str):
         raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "Missing source or stems for rerun").to_http(409)
 
     new_id = str(uuid.uuid4())
-    pause_evt = threading.Event()
-    stop_evt = threading.Event()
-    controls[new_id] = {"pause": pause_evt, "stop": stop_evt}
+    controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
     conv_dir = conv_src.parent
     out_dir = conv_dir / f"{conv_src.stem}—stems"
     expected = [f"{conv_src.stem} - {s}.wav" for s in stem_list]
 
-    def cb(stage: str, pct: int):
-        while pause_evt.is_set():
-            progress[new_id] = {"stage": "paused", "pct": pct}
-            time.sleep(0.5)
-        if stop_evt.is_set():
-            progress[new_id] = {"stage": "stopped", "pct": 0}
-            raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
-        progress[new_id] = {"stage": stage, "pct": pct}
-
-    def run_again() -> None:
-        try:
-            manager = ModelManager()
-            cb("preparing", 0)
-            cb("prepare.complete", 1)
-            audio_path = _convert_to_wav(conv_src)
-            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
-
-            zip_path = conv_dir / f"{audio_path.stem}—stems.zip"
-            cb("zip.start", 95)
-            with zipfile.ZipFile(zip_path, "w") as zf:
-                for name in stems_out:
-                    fp = out_dir / name
-                    if fp.exists():
-                        zf.write(fp, arcname=name)
-            cb("zip.done", 98)
-            tasks[new_id] = {**old, "zip": zip_path, "controls": controls[new_id]}
-            cb("finalizing", 99)
-            progress[new_id] = {"stage": "done", "pct": 100}
-        except AppError as exc:
-            progress[new_id] = {"stage": "error", "pct": -1}
-            errors[new_id] = json.dumps({"code": exc.code, "message": exc.message})
-        except Exception as exc:  # pragma: no cover
-            logging.exception("rerun failed")
-            progress[new_id] = {"stage": "error", "pct": -1}
-            errors[new_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
-
-    process_queue.put(run_again)
     progress[new_id] = {"stage": "queued", "pct": 0}
     tasks[new_id] = {
         "dir": out_dir,
@@ -925,7 +940,10 @@ async def rerun(task_id: str):
         "conv_src": str(conv_src),
         "orig_src": old.get("orig_src"),
         "stem_list": stem_list,
+        "zip": old.get("zip"),
+        "status": "queued",
     }
+    _queue_processing(new_id, conv_src, out_dir, stem_list)
     return {"task_id": new_id, "stems": expected}
 
 

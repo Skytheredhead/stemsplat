@@ -1,0 +1,31 @@
+stemsplat developer notes
+=========================
+
+Installer ➜ app handoff
+-----------------------
+- The installer UI runs on http://localhost:6060 and fades out once the main FastAPI app on http://localhost:8000 responds.
+- During handoff we trigger a short fade on the installer shell, then navigate to port 8000. A `navigator.sendBeacon` call (with a fetch fallback) asks the installer helper to shut down so the port is freed.
+
+Audio processing pipeline
+-------------------------
+1. Upload: Files are stored under `uploads/` and immediately normalized into 44.1 kHz stereo WAVs in `uploads_converted/`.
+2. Ready state: After conversion, each task is marked `ready` and waits for the user to press **start**.
+3. Start: Pressing **start** issues `/start/{task_id}` for every uploaded item (the start call is deferred until conversion finishes if it is still running).
+4. Separation: The queued job loads the requested stem models, separates the WAV, and writes stems under `uploads_converted/<name>—stems/`.
+5. Download: A ZIP containing all generated stems is saved beside the converted WAV and can be fetched from `/download/{task_id}`.
+
+Key backend behaviors
+---------------------
+- ffmpeg is required for conversion. The server first looks for a system binary and otherwise falls back to the `imageio-ffmpeg` bundled executable. Install dependencies from `requirements.txt` to ensure the fallback is available.
+- `/upload` only converts and stages files; `/start/{task_id}` queues the heavy processing. Reruns reuse the converted WAV via `/rerun/{task_id}`.
+
+Front-end flow
+--------------
+- File drops are uploaded immediately so conversion can finish early. Progress stays at `ready` until **start** is pressed.
+- If the user clicks **start** while a conversion is still running, the UI waits for the upload/conversion promise to resolve and then triggers `/start/{task_id}` automatically.
+- SSE progress streams emit `ready` → `queued` → processing stages → `done`.
+
+Other notes
+-----------
+- The vocals checkbox remains selected by default, but all other stem options still work for multi-stem runs.
+- Clearing uploads via `/clear_all_uploads` wipes both `uploads/` and `uploads_converted/`.
