@@ -55,6 +55,7 @@ ALIAS_MAP = {
     "configs": {
         "config_vocals_becruily.yaml": ["Mel Band Roformer Vocals Config.yaml"],
         "config_instrumental_becruily.yaml": ["Mel Band Roformer Instrumental Config.yaml"],
+        "config_deux_becruily.yaml": ["config_deux_becruily.yaml"],
     },
 }
 

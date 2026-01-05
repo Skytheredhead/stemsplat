@@ -94,8 +94,12 @@ if LEGACY_LOG.exists():
 MODEL_ALIAS_MAP = {
     "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
     "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+}
+
+CONFIG_ALIAS_MAP = {
     "config_vocals_becruily.yaml": ["Mel Band Roformer Vocals Config.yaml"],
     "config_instrumental_becruily.yaml": ["Mel Band Roformer Instrumental Config.yaml"],
+    "config_deux_becruily.yaml": [],
 }
 
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
@@ -268,6 +272,14 @@ class ModelManager:
         cfg = CONFIG_DIR / filename
         if cfg.exists():
             return cfg
+        aliases = CONFIG_ALIAS_MAP.get(filename, [])
+        for alt in aliases:
+            alt_cfg = CONFIG_DIR / alt
+            if alt_cfg.exists():
+                return alt_cfg
+            alt_fb = Path.home() / "Library/Application Support/stems" / alt
+            if alt_fb.exists():
+                return alt_fb
         raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
     def _load_model(self, name: str) -> StemModel:
