@@ -886,13 +886,13 @@
             }catch(_){ }
             return resolve();
           }
-          const res = JSON.parse(xhr.responseText);
-          pending.id = res.task_id;
-          pending.stems = res.stems;
-          ui.item.__taskId = res.task_id;
+          const parsed = JSON.parse(xhr.responseText);
+          pending.id = parsed.task_id;
+          pending.stems = parsed.stems;
+          ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:res.task_id, name:file.name, pct:0, stage:'ready', stems:res.stems, tempKey: pending.tempKey };
+          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
@@ -902,7 +902,7 @@
             stopPad.title = 'stop';
             stopPad.onclick = async (e) => {
               e.preventDefault();
-              try{ await fetch('/stop/'+res.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
+              try{ await fetch('/stop/'+parsed.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
               // mark as stopped locally so UI updates right away
               t.stage = 'stopped';
               t.pct = 0;
