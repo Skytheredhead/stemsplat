@@ -240,6 +240,18 @@
     let startPressed = false;
 
     if (closeBtn) {
+      const shutdownEndpoints = [
+        { url: '/shutdown', options: { method: 'POST', keepalive: true } },
+        { url: 'http://localhost:6060/installer_shutdown', options: { method: 'POST', mode: 'no-cors', keepalive: true } },
+      ];
+      const sendShutdown = async () => {
+        const tasks = shutdownEndpoints.map(({ url, options }) => (
+          fetch(url, options).catch(() => {
+            try { navigator.sendBeacon(url, new Blob()); } catch(_) {}
+          })
+        ));
+        await Promise.allSettled(tasks);
+      };
       const closeWindow = () => {
         try { window.close(); } catch(_) {}
         setTimeout(() => { window.location.replace('about:blank'); }, 140);
@@ -248,15 +260,11 @@
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
-          if (navigator.sendBeacon) {
-            navigator.sendBeacon('/shutdown', new Blob());
-          } else {
-            await fetch('/shutdown', { method: 'POST', keepalive: true });
-          }
+          await sendShutdown();
         } catch (err) {
           console.error('shutdown failed', err);
         }
-        setTimeout(closeWindow, 120);
+        setTimeout(closeWindow, 220);
       });
     }
 

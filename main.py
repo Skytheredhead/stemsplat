@@ -554,12 +554,40 @@ async def download_models():
 # ── Separation helpers ─────────────────────────────────────────────────────-
 
 def _prepare_waveform(audio_path: Path) -> torch.Tensor:
+    loaded_via_soundfile = False
     try:
         logger.info("loading audio %s", audio_path)
         waveform, sr = torchaudio.load(str(audio_path))
     except Exception as exc:
-        logger.exception("failed to load %s", audio_path)
-        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
+        needs_fallback = isinstance(exc, ImportError) and ("torchcodec" in str(exc).lower() or "TorchCodec" in str(exc))
+        if not needs_fallback:
+            logger.exception("failed to load %s", audio_path)
+            raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
+
+        logger.warning("torchcodec missing; retrying %s with soundfile backend", audio_path)
+        try:
+            torchaudio.set_audio_backend("soundfile")
+            waveform, sr = torchaudio.load(str(audio_path))
+            logger.info("loaded %s via torchaudio soundfile backend", audio_path)
+        except Exception as sf_exc:
+            logger.debug("torchaudio soundfile backend failed for %s: %s", audio_path, sf_exc)
+            try:
+                data, sr = sf.read(str(audio_path))
+                waveform = torch.from_numpy(data)
+                logger.info("loaded %s via soundfile direct read", audio_path)
+                loaded_via_soundfile = True
+            except Exception as final_exc:
+                logger.exception("failed to load %s via all fallbacks", audio_path)
+                raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {final_exc}") from final_exc
+
+    if loaded_via_soundfile and waveform.ndim == 2:
+        waveform = waveform.transpose(0, 1)
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    if not torch.is_floating_point(waveform):
+        waveform = waveform.float()
+    if waveform.dtype != torch.float32:
+        waveform = waveform.float()
     if sr != 44100:
         try:
             logger.info("resampling %s from %s to 44100", audio_path, sr)
@@ -1025,6 +1053,10 @@ async def index():
 @app.api_route("/shutdown", methods=["POST", "GET"])
 async def shutdown():
     logger.warning("shutdown requested via api; terminating process")
+    try:
+        _close_installer_ui()
+    except Exception:
+        logger.debug("installer ui shutdown during close failed", exc_info=True)
 
     def _stop():
         logger.debug("shutdown thread armed; sleeping briefly to flush logs")

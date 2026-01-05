@@ -23,7 +23,14 @@
     .bar>div{ height:100%; width:0%; background:linear-gradient(90deg,#e7eef2,#dfe7ec); transition:width .35s cubic-bezier(.2,.7,.2,1); }
     .fade-shell{ transition: opacity .35s ease; }
     .fade-shell.fade-out{ opacity:0; }
-    .spin{ width:18px; height:18px; border-radius:999px; border:3px solid rgba(255,255,255,.22); border-top-color:var(--accent); animation:spin 1s linear infinite; }
+    .spin{
+      width:18px; height:18px; border-radius:999px;
+      border:3px solid rgba(255,255,255,.14);
+      border-top-color:var(--accent);
+      border-right-color:rgba(142,216,255,.65);
+      box-shadow: 0 0 0 1px rgba(11,26,31,.35) inset;
+      animation:spin 1s linear infinite;
+    }
     @keyframes spin{ to{ transform:rotate(360deg); } }
   </style>
 </head>
