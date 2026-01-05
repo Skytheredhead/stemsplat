@@ -428,6 +428,32 @@
       });
     }
 
+    function shouldShowStatus(stage){
+      const active = stage && stage !== 'ready' && stage !== 'queued';
+      return startPressed || active;
+    }
+
+    function setStatusVisibility(st, stage){
+      if(!st) return;
+      const visible = shouldShowStatus(stage);
+      st.classList.toggle('hidden', !visible);
+    }
+
+    function setStopVisibility(stopPad, stage, forceShow = false){
+      if(!stopPad) return;
+      const active = forceShow || (stage && !['ready','queued','done','stopped','error'].includes(stage));
+      const show = !!active;
+      stopPad.style.display = show ? '' : 'none';
+      stopPad.classList.toggle('show', show);
+      if(!show){
+        stopPad.style.pointerEvents = 'none';
+        stopPad.style.opacity = '0.6';
+      } else {
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+      }
+    }
+
     // --- Helper to set rerun and stop icons ---
     
     function setRerunIcon(stopPad){
@@ -479,7 +505,7 @@
       } catch (_) {}
       if (!ok || !newId) {
         // Treat it as a stopped/error card with rerun available
-        if (st) { st.textContent = 'error'; st.classList.remove('hidden'); }
+        if (st) { st.textContent = 'error'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
         const parent = st && st.closest ? st.closest('.card') : null;
         if (parent) parent.classList.add('done');
 
@@ -496,7 +522,7 @@
         return;
       }
       // reset visual state
-      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; }
+      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
       if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
       const card = stopPad && stopPad.closest('.card');
       if(card){ card.classList.remove('done'); }
@@ -509,6 +535,7 @@
         stopPad.style.pointerEvents = '';
         stopPad.style.opacity = '';
         stopPad.onclick = (e) => { e.preventDefault(); fetch('/stop/'+task.id,{method:'POST'}); };
+        setStopVisibility(stopPad, 'preparing');
       }
       task.stage = 'preparing';
       task.pct = 0;
@@ -576,15 +603,11 @@
       const [s,e] = STAGE_RANGES[task.stage] || [0,100];
       const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
       const overallNow = s + (e - s) * (sp/100);
-      st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
-      smooth.setImmediate(overallNow);
-        if (stopPad) {
-          stopPad.style.display = '';
-          stopPad.classList.add('show');
-          // If we don't have a valid id yet, keep it disabled (re-enabled on onload)
-          if (!task.id) { stopPad.style.pointerEvents = 'none'; stopPad.style.opacity = '0.6'; }
-        }
+        st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
+        smooth.setImmediate(overallNow);
+        setStopVisibility(stopPad, task.stage);
       }
+      setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
       // Attach task id for later filtering
       inserted.__taskId = task.id;
@@ -771,6 +794,20 @@
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
     const startBtn = document.getElementById('start-btn');
+    function getTaskById(id){
+      return tasks.find(t => t && t.id === id);
+    }
+
+    function revealStatusesAfterStart(){
+      document.querySelectorAll('#queue .chip').forEach(chip => chip.classList.remove('hidden'));
+      document.querySelectorAll('#queue .stop-pad').forEach(pad => {
+        const row = pad.closest('.item-row');
+        const id = row ? row.__taskId : null;
+        const task = id ? getTaskById(id) : null;
+        const stage = task ? task.stage : null;
+        setStopVisibility(pad, stage);
+      });
+    }
 
     function selectedStems(){
       const stems = [];
@@ -804,6 +841,8 @@
         li.textContent = file.name;
         st.textContent = 'ready';
         st.classList.add('chip-dim');
+        st.classList.add('hidden');
+        if(startPressed){ st.classList.remove('hidden'); }
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
         queue.insertBefore(item, queue.firstChild);
@@ -842,14 +881,6 @@
       pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
-        // enable stop square (disabled until task id assigned)
-        if (stopPad){
-          stopPad.style.display = '';
-          stopPad.classList.add('show');
-          stopPad.style.pointerEvents = 'none';
-          stopPad.style.opacity = '0.6';
-          setStopSquareIcon(stopPad);
-        }
         const data = new FormData();
         data.append('file', file);
         data.append('stems', stems.join(','));
@@ -858,7 +889,6 @@
         xhr.upload.onprogress = (evt) => {
           if(evt.lengthComputable){
             const pct = Math.round(evt.loaded / evt.total * 100);
-            smooth.setTarget(Math.min(pct * 0.2, 20)); // cap at 20% until server stages
             st.textContent = `uploading (${pct}%)`;
             st.classList.remove('chip-dim');
           }
@@ -867,6 +897,7 @@
           if(xhr.status >= 400){ st.textContent = 'error'; return resolve(); }
           st.classList.remove('chip-dim');
           st.textContent = 'ready';
+          smooth.setImmediate(0);
           let res = {};
           try {
             res = JSON.parse(xhr.responseText || '{}');
@@ -897,6 +928,7 @@
           saveTasks(); updateUI();
           // enable stop now that we have an id
           if (stopPad){
+            setStopSquareIcon(stopPad);
             stopPad.style.pointerEvents = '';
             stopPad.style.opacity = '';
             stopPad.title = 'stop';
@@ -921,6 +953,7 @@
               }
               updateUI();
             };
+            setStopVisibility(stopPad, 'ready');
           }
           // start polling
           trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
@@ -946,9 +979,10 @@
     }
 
     async function startSequentialProcessing(){
-      startPressed = true;
       const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+      startPressed = true;
+      revealStatusesAfterStart();
       for(const p of pendingItems){
         if(!p.uploadPromise){
           await uploadWithStems(p, stems);
@@ -998,10 +1032,16 @@
             const sp = Math.round(Math.max(0, Math.min(100, pct))); // stage-local percent for label
             const overall = range[0] + (range[1] - range[0]) * (sp / 100);
             st.textContent = stage ? `${stage} (${sp}%)` : 'queued';
-            smooth.setTarget(Math.max(0, Math.min(overall, 100)));
+            if (stage === 'queued' || stage === 'ready') {
+              smooth.setImmediate(0);
+            } else {
+              smooth.setTarget(Math.max(0, Math.min(overall, 100)));
+            }
           } else {
             st.textContent = 'queued';
           }
+          setStatusVisibility(st, stage);
+          setStopVisibility(stopPad, stage);
         });
         es.addEventListener('error', () => {
           if (taskRef) {
@@ -1013,6 +1053,7 @@
             st.textContent = 'error';
             st.classList.remove('hidden');
           }
+          setStatusVisibility(st, 'error');
           const parent = st && st.closest ? st.closest('.card') : null;
           if (parent) parent.classList.add('done');
 

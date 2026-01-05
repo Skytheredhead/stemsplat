@@ -234,7 +234,7 @@ class ModelManager:
             "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
             "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
         }
-        self.refresh_models()
+        self.model_cache: dict[str, StemModel] = {}
 
     def _resolve_path(self, filename: str) -> Path:
         preferred = MODEL_DIR / filename
@@ -253,13 +253,24 @@ class ModelManager:
             return cfg
         raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
-    def refresh_models(self) -> None:
-        for name, (model_fname, cfg_fname) in self.model_info.items():
-            model_path = self._resolve_path(model_fname)
-            cfg_path = self._resolve_config(cfg_fname)
-            setattr(self, name, StemModel(model_path, self.device, cfg_path))
-            if cfg_fname:
-                setattr(self, f"{name}_config", cfg_path)
+    def _load_model(self, name: str) -> StemModel:
+        if name in self.model_cache:
+            return self.model_cache[name]
+        if name not in self.model_info:
+            raise AttributeError(name)
+        model_fname, cfg_fname = self.model_info[name]
+        model_path = self._resolve_path(model_fname)
+        cfg_path = self._resolve_config(cfg_fname)
+        model = StemModel(model_path, self.device, cfg_path)
+        self.model_cache[name] = model
+        if cfg_fname:
+            setattr(self, f"{name}_config", cfg_path)
+        return model
+
+    def __getattr__(self, name: str) -> StemModel:
+        if name in self.model_info:
+            return self._load_model(name)
+        raise AttributeError(name)
 
     # Separation helpers
     def split_vocals(
