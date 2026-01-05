@@ -368,20 +368,6 @@
     }
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
-    const STAGE_RANGES = {
-      ready:[0,0],
-      queued:[0,0],
-      preparing:[0,1], 'prepare.complete':[1,1],
-      converting:[1,5],
-      'load_audio.start':[1,2], 'load_audio.done':[2,3],
-      'split_vocals.start':[3,3], vocals:[3,60], 'split_vocals.done':[60,60],
-      instrumental_model:[60,72], 'split_inst_model.start':[60,60], 'split_inst_model.done':[70,72],
-      instrumental:[60,90], 'split_inst.start':[60,90], 'split_inst.masks_ready':[88,90],
-      'write.vocals':[52,55], 'write.instrumental':[72,75], 'write.drums':[92,94], 'write.bass':[92,94], 'write.other':[92,94], 'write.guitar':[92,94],
-      'zip.start':[95,98], 'zip.done':[98,99],
-      finalizing:[99,100], done:[100,100],
-      paused:[0,0], stopped:[0,0], error:[0,0],
-    };
     // Helper: is a task finished? (completed or stopped)
     function isFinished(t){
       return t && (t.pct >= 100 || t.stage === 'stopped');
@@ -570,9 +556,7 @@
       li.textContent = task.name;
       const labels = node.querySelector('.labels');
       const smooth = makeProgressSmoother(bar);
-      const initRange = STAGE_RANGES[task.stage] || [0,100];
-      const initSp = Math.round(Math.max(0, Math.min(100, task.pct || 0)));
-      const initOverall = initRange[0] + (initRange[1] - initRange[0]) * (initSp/100);
+      const initOverall = Math.max(0, Math.min(100, task.pct || 0));
       smooth.setImmediate(initOverall);
       if(task.pct >= 100){
         st.classList.add('hidden');
@@ -608,11 +592,9 @@
         }
       }
       else {
-      const [s,e] = STAGE_RANGES[task.stage] || [0,100];
       const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
-      const overallNow = s + (e - s) * (sp/100);
         st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
-        smooth.setImmediate(overallNow);
+        smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
       }
       setStatusVisibility(st, task.stage);
@@ -1036,14 +1018,12 @@
             es.close(); updateUI(); return;
           }
           if (typeof pct === 'number' && pct >= 0) {
-            const range = STAGE_RANGES[stage] || [0, 100];
-            const sp = Math.round(Math.max(0, Math.min(100, pct))); // stage-local percent for label
-            const overall = range[0] + (range[1] - range[0]) * (sp / 100);
+            const sp = Math.round(Math.max(0, Math.min(100, pct)));
             st.textContent = stage ? `${stage} (${sp}%)` : 'queued';
             if (stage === 'queued' || stage === 'ready') {
               smooth.setImmediate(0);
             } else {
-              smooth.setTarget(Math.max(0, Math.min(overall, 100)));
+              smooth.setTarget(sp);
             }
           } else {
             st.textContent = 'queued';

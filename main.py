@@ -726,7 +726,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
 
             zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
-            cb("zip.start", 95)
+            cb("zip.start", 99)
             try:
                 with zipfile.ZipFile(zip_path, "w") as zf:
                     for name in stems_out:
@@ -738,7 +738,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                             logger.warning("expected stem %s missing at %s", name, fp)
             except Exception as exc:
                 raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-            cb("zip.done", 98)
+            cb("zip.done", 99)
             tasks[task_id]["zip"] = zip_path
             tasks[task_id]["stems"] = stems_out
             cb("finalizing", 99)
@@ -804,65 +804,94 @@ def _separate_waveform(
 ) -> list[str]:
     logger.info("starting separation for %s with stems %s", audio_path, stem_list)
     waveform = _prepare_waveform(audio_path)
-    cb("load_audio.done", 2)
+    cb("load_audio.done", 1)
 
-    temp_dir = Path(tempfile.gettempdir())
-    stems_out: list[str] = []
+    channel_count = waveform.shape[0]
+    channel_specs: list[tuple[int, str, int, int]] = []
+    if channel_count >= 2:
+        channel_specs = [(0, "left", 2, 49), (1, "right", 51, 99)]
+    else:
+        # mono: use most of the range so the bar still progresses smoothly
+        channel_specs = [(0, "left", 2, 99)]
 
     need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
     need_instrumental_model = "instrumental" in stem_list
 
-    inst_path: Optional[Path] = None
+    channel_stems: dict[str, list[torch.Tensor]] = {}
 
-    if need_vocal_pass:
-        def _cb(frac: float) -> None:
-            cb("vocals", 1 + int(frac * 99))
+    def map_channel_pct(local_pct: float, start: int, end: int) -> int:
+        span = max(1, end - start)
+        return start + int(span * max(0.0, min(100.0, local_pct)) / 100)
 
-        cb("split_vocals.start", 2)
-        voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
-        cb("split_vocals.done", 50)
-        if "vocals" in stem_list:
-            fname = f"{audio_path.stem} - vocals.wav"
-            _write_wave(out_dir, fname, voc)
-            stems_out.append(fname)
-            cb("write.vocals", 52)
-        need_inst = any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-        if need_inst:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            _write_wave(temp_dir, inst_path.name, inst)
-        del voc, inst
+    def process_channel(idx: int, label: str, start: int, end: int) -> None:
+        if idx >= channel_count:
+            return
+        chan_wave = waveform[idx : idx + 1]
+        chan_outputs: dict[str, torch.Tensor] = {}
 
-    if need_instrumental_model:
-        cb("instrumental.start", 52)
-        inst_model = manager.instrumental
-        if inst_path is None:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            waveform_np = waveform.cpu().numpy()
-            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
-        inst_wave = _prepare_waveform(inst_path)
-        inst_pred = inst_model(inst_wave)
-        fname = f"{audio_path.stem} - instrumental.wav"
-        _write_wave(out_dir, fname, inst_pred)
-        stems_out.append(fname)
-        cb("instrumental.done", 75)
+        def ch(stage: str, local_pct: float) -> None:
+            overall = map_channel_pct(local_pct, start, end)
+            cb(f"{label}.{stage}", overall)
 
-    for stem_name in ["drums", "bass", "other", "guitar"]:
-        if stem_name not in stem_list:
+        ch("start", 0)
+        inst_wave: Optional[torch.Tensor] = None
+        vocals_wave: Optional[torch.Tensor] = None
+
+        if need_vocal_pass:
+            ch("split_vocals.start", 2)
+
+            def _cb(frac: float) -> None:
+                ch("vocals", 5 + (frac * 70))
+
+            voc, inst = manager.split_vocals(chan_wave, SEGMENT, OVERLAP, progress_cb=_cb)
+            vocals_wave = voc
+            inst_wave = inst
+            ch("split_vocals.done", 78)
+            if "vocals" in stem_list:
+                chan_outputs["vocals"] = voc
+                ch("write.vocals", 82)
+        else:
+            inst_wave = chan_wave
+
+        if need_instrumental_model:
+            ch("instrumental.start", 84)
+            inst_model = manager.instrumental
+            use_wave = inst_wave if inst_wave is not None else chan_wave
+            inst_pred = inst_model(use_wave)
+            chan_outputs["instrumental"] = inst_pred
+            ch("instrumental.done", 90)
+
+        for stem_name in ["drums", "bass", "other", "guitar"]:
+            if stem_name not in stem_list:
+                continue
+            ch(f"{stem_name}.start", 90)
+            inst_model = getattr(manager, stem_name)
+            use_wave = inst_wave if inst_wave is not None else chan_wave
+            pred = inst_model(use_wave)
+            chan_outputs[stem_name] = pred
+            ch(f"{stem_name}.done", 96)
+
+        ch("channel.done", 100)
+        for stem_name, tensor in chan_outputs.items():
+            channel_stems.setdefault(stem_name, []).append(tensor)
+        # free channel-specific references promptly
+        del chan_outputs, inst_wave, vocals_wave
+
+    for idx, label, start, end in channel_specs:
+        process_channel(idx, label, start, end)
+
+    stems_out: list[str] = []
+    for stem_name in stem_list:
+        tensors = channel_stems.get(stem_name)
+        if not tensors:
             continue
-        cb(f"{stem_name}.start", 75)
-        inst_model = getattr(manager, stem_name)
-        if inst_path is None:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            waveform_np = waveform.cpu().numpy()
-            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
-        inst_wave = _prepare_waveform(inst_path)
-        pred = inst_model(inst_wave)
+        combined = torch.cat(tensors, dim=0)
         fname = f"{audio_path.stem} - {stem_name}.wav"
-        _write_wave(out_dir, fname, pred)
+        _write_wave(out_dir, fname, combined)
         stems_out.append(fname)
-        cb(f"{stem_name}.done", min(98, 75 + len(stems_out)))
+        cb(f"write.{stem_name}", 98)
 
-    cb("done", 100)
+    cb("merge.done", 99)
     return stems_out
 
 
