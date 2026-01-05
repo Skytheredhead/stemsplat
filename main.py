@@ -823,6 +823,13 @@ def _separate_waveform(
         span = max(1, end - start)
         return start + int(span * max(0.0, min(100.0, local_pct)) / 100)
 
+    def ensure_stereo(x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        if x.shape[0] >= 2:
+            return x
+        return x.repeat(2, 1)
+
     def process_channel(idx: int, label: str, start: int, end: int) -> None:
         if idx >= channel_count:
             return
@@ -843,12 +850,12 @@ def _separate_waveform(
             def _cb(frac: float) -> None:
                 ch("vocals", 5 + (frac * 70))
 
-            voc, inst = manager.split_vocals(chan_wave, SEGMENT, OVERLAP, progress_cb=_cb)
+            voc, inst = manager.split_vocals(ensure_stereo(chan_wave), SEGMENT, OVERLAP, progress_cb=_cb)
             vocals_wave = voc
             inst_wave = inst
             ch("split_vocals.done", 78)
             if "vocals" in stem_list:
-                chan_outputs["vocals"] = voc
+                chan_outputs["vocals"] = voc[:1]
                 ch("write.vocals", 82)
         else:
             inst_wave = chan_wave
@@ -856,9 +863,9 @@ def _separate_waveform(
         if need_instrumental_model:
             ch("instrumental.start", 84)
             inst_model = manager.instrumental
-            use_wave = inst_wave if inst_wave is not None else chan_wave
-            inst_pred = inst_model(use_wave)
-            chan_outputs["instrumental"] = inst_pred
+            use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
+            inst_pred = inst_model(ensure_stereo(use_wave))
+            chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
             ch("instrumental.done", 90)
 
         for stem_name in ["drums", "bass", "other", "guitar"]:
@@ -866,9 +873,9 @@ def _separate_waveform(
                 continue
             ch(f"{stem_name}.start", 90)
             inst_model = getattr(manager, stem_name)
-            use_wave = inst_wave if inst_wave is not None else chan_wave
-            pred = inst_model(use_wave)
-            chan_outputs[stem_name] = pred
+            use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
+            pred = inst_model(ensure_stereo(use_wave))
+            chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
             ch(f"{stem_name}.done", 96)
 
         ch("channel.done", 100)

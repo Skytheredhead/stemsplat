@@ -19,8 +19,6 @@
     .fade-out{ opacity:0; transition: opacity .28s ease; }
     .fade-in{ animation:fade .6s ease both; }
     @keyframes fade{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
-    .bar{ height: 12px; background: rgba(255,255,255,.08); border-radius:999px; overflow:hidden; }
-    .bar>div{ height:100%; width:0%; background:linear-gradient(90deg,#e7eef2,#dfe7ec); transition:width .35s cubic-bezier(.2,.7,.2,1); }
     .fade-shell{ transition: opacity .35s ease; }
     .fade-shell.fade-out{ opacity:0; }
     .spin{
@@ -44,7 +42,6 @@
         <span id="status">starting…</span>
         <div id="spinner" class="spin" aria-hidden="true"></div>
       </div>
-      <div class="bar"><div id="bar"></div></div>
       <div id="note" class="opacity-70 text-sm">this might take a minute (it'll probably take way less)</div>
       <div id="error" class="hidden text-red-300 text-sm"></div>
     </div>
@@ -55,6 +52,9 @@
     let prompted = false;
     let launched = false;
     let pingTimer = null;
+    const hasInstalledBefore = localStorage.getItem('installedOnce') === '1';
+    const noteOnce = document.getElementById('note');
+    if(hasInstalledBefore && noteOnce){ noteOnce.classList.add('hidden'); }
 
     function startPinging(){
       if (!pingTimer) { pingTimer = setInterval(pingMainServer, 900); }
@@ -63,15 +63,23 @@
     async function poll(){
       const res = await fetch('/progress');
       const data = await res.json();
-      const barEl = document.getElementById('bar');
       const status = document.getElementById('status');
       const spinner = document.getElementById('spinner');
+      const note = document.getElementById('note');
       const err = document.getElementById('error');
-      if(data.pct >= 0){ barEl.style.width = data.pct + '%'; }
-      status.textContent = data.step;
+
+      if (hasInstalledBefore && status) {
+        status.textContent = 'checking…';
+      } else if (status) {
+        status.textContent = data.step;
+      }
       if(spinner){ spinner.classList.toggle('hidden', data.pct >= 100 || data.pct === -1); }
       if(data.step === 'waiting for model choice' && !prompted){ showPrompt(); prompted = true; }
       if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
+      if (data.pct >= 100) {
+        localStorage.setItem('installedOnce','1');
+        if(note){ note.classList.add('hidden'); }
+      }
       startPinging();
       if(data.pct >= 100){ waitForServer(); return; }
       setTimeout(poll, 1000);
