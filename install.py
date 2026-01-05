@@ -47,6 +47,17 @@ MAIN_PORT = 8000
 MODEL_URLS = [(item["filename"], item["url"]) for item in DL_FILES]
 TOTAL_BYTES = int(3.68 * 1024**3)
 
+ALIAS_MAP = {
+    "models": {
+        "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
+        "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+    },
+    "configs": {
+        "config_vocals_becruily.yaml": ["Mel Band Roformer Vocals Config.yaml"],
+        "config_instrumental_becruily.yaml": ["Mel Band Roformer Instrumental Config.yaml"],
+    },
+}
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self.web_dir = Path(__file__).resolve().parent / "web"
@@ -180,8 +191,12 @@ def _models_missing():
     base = Path(".")
     for item in DL_FILES:
         dest = base / item["subdir"] / item["filename"]
-        if not dest.exists():
-            return True
+        if dest.exists():
+            continue
+        aliases = ALIAS_MAP.get(item["subdir"], {}).get(item["filename"], [])
+        if any((base / item["subdir"] / alt).exists() for alt in aliases):
+            continue
+        return True
     return False
 
 

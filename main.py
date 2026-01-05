@@ -91,6 +91,13 @@ if LEGACY_LOG.exists():
     except Exception:
         pass
 
+MODEL_ALIAS_MAP = {
+    "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
+    "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+    "config_vocals_becruily.yaml": ["Mel Band Roformer Vocals Config.yaml"],
+    "config_instrumental_becruily.yaml": ["Mel Band Roformer Instrumental Config.yaml"],
+}
+
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 stream_handler = logging.StreamHandler()
 logging.basicConfig(
@@ -245,6 +252,14 @@ class ModelManager:
         fallback = Path.home() / "Library/Application Support/stems" / filename
         if fallback.exists():
             return fallback
+        aliases = MODEL_ALIAS_MAP.get(filename, [])
+        for alt in aliases:
+            cand = MODEL_DIR / alt
+            if cand.exists():
+                return cand
+            cand_fb = Path.home() / "Library/Application Support/stems" / alt
+            if cand_fb.exists():
+                return cand_fb
         raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
 
     def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:

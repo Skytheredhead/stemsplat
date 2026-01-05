@@ -170,7 +170,7 @@
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="other-box" type="checkbox" class="pretty">other</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="guitar-box" type="checkbox" class="pretty">guitar</label>
       </div>
-      <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white">
+      <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M8 5v14l11-7z"/>
         </svg>
@@ -240,6 +240,19 @@
     const closeBtn  = document.getElementById('close-app');
 
     let startPressed = false;
+    updateStartButton();
+    function updateStartButton(){
+      const hasItems = queue.children.length > 0;
+      if(!hasItems){
+        startBtn.disabled = true;
+        const icon = startBtn.querySelector('svg');
+        if(icon){ icon.style.animation = 'none'; }
+      }else{
+        startBtn.disabled = false;
+        const icon = startBtn.querySelector('svg');
+        if(icon){ icon.style.animation = ''; }
+      }
+    }
 
     if (closeBtn) {
       const shutdownEndpoints = [
@@ -407,6 +420,7 @@
     function updateUI(){
       updateClear();
       updateVigs();
+      updateStartButton();
     }
 
 
@@ -613,6 +627,7 @@
       applyLabels(inserted.querySelector('.labels'), task.stems);
       updateClear();
       updateVigs();
+      updateStartButton();
       return {bar, st, dl, stopPad, smooth};
     }
 
@@ -867,6 +882,7 @@
           await uploadWithStems(p, stems);
         }
       }
+      updateStartButton();
     }
 
     function uploadWithStems(pending, stems){
@@ -972,6 +988,7 @@
     }
 
     async function startSequentialProcessing(){
+      if(startBtn && startBtn.disabled) return;
       const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
       startPressed = true;
