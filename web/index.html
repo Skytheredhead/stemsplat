@@ -164,6 +164,7 @@
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">voc/inst (deux)</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="drums-box" type="checkbox" class="pretty">drums</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="bass-box" type="checkbox" class="pretty">bass</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="other-box" type="checkbox" class="pretty">other</label>
@@ -223,6 +224,7 @@
     const fileInput = document.getElementById('file-input');
     const vocalsBox = document.getElementById('vocals-box');
     const instBox   = document.getElementById('inst-box');
+    const deuxBox   = document.getElementById('deux-box');
     const drumsBox  = document.getElementById('drums-box');
     const bassBox   = document.getElementById('bass-box');
     const otherBox  = document.getElementById('other-box');
@@ -803,6 +805,7 @@
       const stems = [];
       if(vocalsBox.checked) stems.push('vocals');
       if(instBox.checked)   stems.push('instrumental');
+      if(deuxBox && deuxBox.checked) stems.push('deux');
       if(drumsBox.checked)  stems.push('drums');
       if(bassBox.checked)   stems.push('bass');
       if(otherBox.checked)  stems.push('other');

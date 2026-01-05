@@ -12,6 +12,14 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+from typing import List, Optional
+
+try:
+    import certifi  # noqa: F401  # ensure dependency present for downloader context
+except Exception:
+    certifi = None
+
+from downloader import FILES as DL_FILES, download_to
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_PATH = BASE_DIR / "install_stemsplat.log"
@@ -36,22 +44,7 @@ choice_event = threading.Event()
 shutdown_event = threading.Event()
 PORT = 6060
 MAIN_PORT = 8000
-MODEL_URLS = [
-    ("Mel Band Roformer Vocals.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
-    ("Mel Band Roformer Instrumental.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true"),
-    ("mel_band_roformer_karaoke_becruily.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true"),
-    ("becruily_guitar.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true"),
-    ("kuielab_a_bass.onnx",
-     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true"),
-    ("kuielab_a_drums.onnx",
-     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true"),
-    ("kuielab_a_other.onnx",
-     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true"),
-]
+MODEL_URLS = [(item["filename"], item["url"]) for item in DL_FILES]
 TOTAL_BYTES = int(3.68 * 1024**3)
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -89,7 +82,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/download_models":
             logger.info("user requested model download")
+            length = int(self.headers.get("Content-Length", 0))
+            selection: Optional[List[str]] = None
+            if length:
+                try:
+                    body = self.rfile.read(length)
+                    parsed = json.loads(body.decode("utf-8"))
+                    if isinstance(parsed, dict) and isinstance(parsed.get("models"), list):
+                        selection = [str(x) for x in parsed["models"]]
+                except Exception:
+                    logger.debug("failed to parse selection body", exc_info=True)
             progress["choice"] = "download"
+            progress["selection"] = selection
             choice_event.set()
             self.send_response(200)
             self.end_headers()
@@ -173,9 +177,10 @@ def _port_available(port: int) -> bool:
 
 
 def _models_missing():
-    models_dir = Path('models')
-    for name, _ in MODEL_URLS:
-        if not (models_dir / name).exists():
+    base = Path(".")
+    for item in DL_FILES:
+        dest = base / item["subdir"] / item["filename"]
+        if not dest.exists():
             return True
     return False
 
@@ -193,31 +198,20 @@ def _start_server():
     )
 
 
-def _download_models():
-    models_dir = Path('models')
-    models_dir.mkdir(exist_ok=True)
-    downloaded = 0
-    for name, url in MODEL_URLS:
-        logger.info("downloading model %s from %s", name, url)
-        progress['step'] = f'downloading {name}'
-        dest = models_dir / name
-        with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
-            t0 = time.time()
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                now = time.time()
-                speed = len(chunk) / 1024 / 1024 / max(now - t0, 1e-6)
-                progress['pct'] = int(downloaded / TOTAL_BYTES * 100)
-                progress['step'] = f'downloading {name} ({speed:.1f} MB/s)'
-                t0 = now
-        logger.info("finished %s", name)
-    progress['pct'] = 100
-    progress['step'] = 'done'
-    _start_server()
+def _download_models(selection: Optional[list[str]] = None):
+    try:
+        base_dir = Path(__file__).resolve().parent
+        progress["step"] = "downloading models"
+        progress["pct"] = 5
+        download_to(base_dir, selection or [])
+        progress["pct"] = 100
+        progress["step"] = "done"
+        _start_server()
+    except Exception as exc:
+        logger.exception("model download failed")
+        progress["step"] = f"download failed: {exc}"
+        progress["error"] = str(exc)
+        progress["pct"] = -1
 
 def install():
     logger.info("install routine starting")
@@ -261,7 +255,7 @@ def install():
             choice_event.wait()
             choice_event.clear()
             if progress.get('choice') == 'download':
-                _download_models()
+                _download_models(progress.get("selection"))
                 return
             else:
                 logger.info("user skipped downloads")

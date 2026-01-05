@@ -75,7 +75,11 @@
       }
       if(spinner){ spinner.classList.toggle('hidden', data.pct >= 100 || data.pct === -1); }
       if(data.step === 'waiting for model choice' && !prompted){ showPrompt(); prompted = true; }
-      if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
+      if(data.pct === -1){
+        err.textContent = data.error || 'installation failed';
+        err.classList.remove('hidden');
+        return;
+      }
       if (data.pct >= 100) {
         localStorage.setItem('installedOnce','1');
         if(note){ note.classList.add('hidden'); }
@@ -88,9 +92,37 @@
     function showPrompt(){
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-3"><p>models not found! would you like me to download them?</p><div class="flex justify-end gap-2"><button id=\"skip\" class=\"px-3 py-1 rounded-lg glass\">nah i got it</button><button id=\"dl\" class=\"px-3 py-1 rounded-lg bg-white/90 text-gray-900\">yes please</button></div></div>`;
+      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-full">
+        <p class="text-lg">models not found! choose which ones to download</p>
+        <div class="flex flex-col gap-2 text-sm">
+          <label class="flex items-center gap-2"><input id="dl-vocals" type="checkbox" class="pretty" checked>vocals</label>
+          <label class="flex items-center gap-2"><input id="dl-inst" type="checkbox" class="pretty" checked>instrumental</label>
+          <label class="flex items-center gap-2"><input id="dl-deux" type="checkbox" class="pretty" checked>voc/inst (deux)</label>
+        </div>
+        <div id="dl-error" class="hidden text-red-300 text-sm"></div>
+        <div class="flex justify-end gap-2">
+          <button id="skip" class="px-3 py-1 rounded-lg glass">nah i got it</button>
+          <button id="dl" class="px-3 py-1 rounded-lg bg-white/90 text-gray-900">download</button>
+        </div>
+      </div>`;
       document.body.appendChild(overlay);
-      overlay.querySelector('#dl').onclick = async () => { await fetch('/download_models', {method:'POST'}); overlay.remove(); };
+      const errorBox = overlay.querySelector('#dl-error');
+      overlay.querySelector('#dl').onclick = async () => {
+        const selection = [];
+        if(overlay.querySelector('#dl-vocals').checked) selection.push('vocals');
+        if(overlay.querySelector('#dl-inst').checked) selection.push('instrumental');
+        if(overlay.querySelector('#dl-deux').checked) selection.push('deux');
+        if(selection.length === 0){
+          if(errorBox){ errorBox.textContent = 'please select at least one model'; errorBox.classList.remove('hidden'); }
+          return;
+        }
+        try{
+          await fetch('/download_models', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({models: selection})});
+          overlay.remove();
+        }catch(err){
+          if(errorBox){ errorBox.textContent = 'download request failed. ensure certifi is installed.'; errorBox.classList.remove('hidden'); }
+        }
+      };
       overlay.querySelector('#skip').onclick = async () => { await fetch('/skip_models', {method:'POST'}); overlay.remove(); };
     }
 

@@ -81,6 +81,7 @@ CONFIG_DIR = BASE_DIR / "configs"
 UPLOAD_DIR = BASE_DIR / "uploads"
 CONVERTED_DIR = BASE_DIR / "uploads_converted"
 SEGMENT = 352_800
+DEUX_SEGMENT = 573_300
 OVERLAP = 12
 LOG_PATH = BASE_DIR / "main_stemsplat.log"
 LEGACY_LOG = BASE_DIR / "stemsplat.log"
@@ -226,8 +227,9 @@ class ModelManager:
     def __init__(self):
         self.device = select_device()
         self.model_info = {
-            "vocals": ("Mel Band Roformer Vocals.ckpt", "Mel Band Roformer Vocals Config.yaml"),
-            "instrumental": ("Mel Band Roformer Instrumental.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
+            "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "config_vocals_becruily.yaml"),
+            "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "config_instrumental_becruily.yaml"),
+            "deux": ("becruily_deux.ckpt", "config_deux_becruily.yaml"),
             "drums": ("kuielab_a_drums.onnx", None),
             "bass": ("kuielab_a_bass.onnx", None),
             "other": ("kuielab_a_other.onnx", None),
@@ -806,22 +808,8 @@ def _separate_waveform(
     waveform = _prepare_waveform(audio_path)
     cb("load_audio.done", 1)
 
-    channel_count = waveform.shape[0]
-    channel_specs: list[tuple[int, str, int, int]] = []
-    if channel_count >= 2:
-        channel_specs = [(0, "left", 2, 49), (1, "right", 51, 99)]
-    else:
-        # mono: use most of the range so the bar still progresses smoothly
-        channel_specs = [(0, "left", 2, 99)]
-
-    need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-    need_instrumental_model = "instrumental" in stem_list
-
-    channel_stems: dict[str, list[torch.Tensor]] = {}
-
-    def map_channel_pct(local_pct: float, start: int, end: int) -> int:
-        span = max(1, end - start)
-        return start + int(span * max(0.0, min(100.0, local_pct)) / 100)
+    stems_out: list[str] = []
+    remaining_stems = [s for s in stem_list if s != "deux"]
 
     def ensure_stereo(x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 1:
@@ -830,73 +818,107 @@ def _separate_waveform(
             return x
         return x.repeat(2, 1)
 
-    def process_channel(idx: int, label: str, start: int, end: int) -> None:
-        if idx >= channel_count:
-            return
-        chan_wave = waveform[idx : idx + 1]
-        chan_outputs: dict[str, torch.Tensor] = {}
+    if "deux" in stem_list:
+        cb("deux.start", 2)
+        deux_model = manager.deux
 
-        def ch(stage: str, local_pct: float) -> None:
-            overall = map_channel_pct(local_pct, start, end)
-            cb(f"{label}.{stage}", overall)
+        def _cb(frac: float) -> None:
+            cb("deux", 2 + int(frac * 94))
 
-        ch("start", 0)
-        inst_wave: Optional[torch.Tensor] = None
-        vocals_wave: Optional[torch.Tensor] = None
+        deux_wave = ensure_stereo(waveform)
+        voc_d, inst_d = manager.split_pair_with_model(deux_model, deux_wave, DEUX_SEGMENT, OVERLAP, progress_cb=_cb)
+        fname_v = f"{audio_path.stem} - vocals (deux).wav"
+        fname_i = f"{audio_path.stem} - instrumental (deux).wav"
+        _write_wave(out_dir, fname_v, voc_d)
+        cb("write.vocals_deux", 97)
+        _write_wave(out_dir, fname_i, inst_d)
+        cb("write.instrumental_deux", 98)
+        stems_out.extend([fname_v, fname_i])
 
-        if need_vocal_pass:
-            ch("split_vocals.start", 2)
+    channel_count = waveform.shape[0]
+    channel_specs: list[tuple[int, str, int, int]] = []
+    if channel_count >= 2:
+        channel_specs = [(0, "left", 2, 49), (1, "right", 51, 99)]
+    else:
+        # mono: use most of the range so the bar still progresses smoothly
+        channel_specs = [(0, "left", 2, 99)]
 
-            def _cb(frac: float) -> None:
-                ch("vocals", 5 + (frac * 70))
+    need_vocal_pass = ("vocals" in remaining_stems) or any(s in remaining_stems for s in ["drums", "bass", "other", "guitar"])
+    need_instrumental_model = "instrumental" in remaining_stems
 
-            voc, inst = manager.split_vocals(ensure_stereo(chan_wave), SEGMENT, OVERLAP, progress_cb=_cb)
-            vocals_wave = voc
-            inst_wave = inst
-            ch("split_vocals.done", 78)
-            if "vocals" in stem_list:
-                chan_outputs["vocals"] = voc[:1]
-                ch("write.vocals", 82)
-        else:
-            inst_wave = chan_wave
+    if remaining_stems:
+        channel_stems: dict[str, list[torch.Tensor]] = {}
 
-        if need_instrumental_model:
-            ch("instrumental.start", 84)
-            inst_model = manager.instrumental
-            use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-            inst_pred = inst_model(ensure_stereo(use_wave))
-            chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
-            ch("instrumental.done", 90)
+        def map_channel_pct(local_pct: float, start: int, end: int) -> int:
+            span = max(1, end - start)
+            return start + int(span * max(0.0, min(100.0, local_pct)) / 100)
 
-        for stem_name in ["drums", "bass", "other", "guitar"]:
-            if stem_name not in stem_list:
+        def process_channel(idx: int, label: str, start: int, end: int) -> None:
+            if idx >= channel_count:
+                return
+            chan_wave = waveform[idx : idx + 1]
+            chan_outputs: dict[str, torch.Tensor] = {}
+
+            def ch(stage: str, local_pct: float) -> None:
+                overall = map_channel_pct(local_pct, start, end)
+                cb(f"{label}.{stage}", overall)
+
+            ch("start", 0)
+            inst_wave: Optional[torch.Tensor] = None
+            vocals_wave: Optional[torch.Tensor] = None
+
+            if need_vocal_pass:
+                ch("split_vocals.start", 2)
+
+                def _cb(frac: float) -> None:
+                    ch("vocals", 5 + (frac * 70))
+
+                voc, inst = manager.split_vocals(ensure_stereo(chan_wave), SEGMENT, OVERLAP, progress_cb=_cb)
+                vocals_wave = voc
+                inst_wave = inst
+                ch("split_vocals.done", 78)
+                if "vocals" in remaining_stems:
+                    chan_outputs["vocals"] = voc[:1]
+                    ch("write.vocals", 82)
+            else:
+                inst_wave = chan_wave
+
+            if need_instrumental_model:
+                ch("instrumental.start", 84)
+                inst_model = manager.instrumental
+                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
+                inst_pred = inst_model(ensure_stereo(use_wave))
+                chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
+                ch("instrumental.done", 90)
+
+            for stem_name in ["drums", "bass", "other", "guitar"]:
+                if stem_name not in remaining_stems:
+                    continue
+                ch(f"{stem_name}.start", 90)
+                inst_model = getattr(manager, stem_name)
+                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
+                pred = inst_model(ensure_stereo(use_wave))
+                chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
+                ch(f"{stem_name}.done", 96)
+
+            ch("channel.done", 100)
+            for stem_name, tensor in chan_outputs.items():
+                channel_stems.setdefault(stem_name, []).append(tensor)
+            # free channel-specific references promptly
+            del chan_outputs, inst_wave, vocals_wave
+
+        for idx, label, start, end in channel_specs:
+            process_channel(idx, label, start, end)
+
+        for stem_name in remaining_stems:
+            tensors = channel_stems.get(stem_name)
+            if not tensors:
                 continue
-            ch(f"{stem_name}.start", 90)
-            inst_model = getattr(manager, stem_name)
-            use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-            pred = inst_model(ensure_stereo(use_wave))
-            chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
-            ch(f"{stem_name}.done", 96)
-
-        ch("channel.done", 100)
-        for stem_name, tensor in chan_outputs.items():
-            channel_stems.setdefault(stem_name, []).append(tensor)
-        # free channel-specific references promptly
-        del chan_outputs, inst_wave, vocals_wave
-
-    for idx, label, start, end in channel_specs:
-        process_channel(idx, label, start, end)
-
-    stems_out: list[str] = []
-    for stem_name in stem_list:
-        tensors = channel_stems.get(stem_name)
-        if not tensors:
-            continue
-        combined = torch.cat(tensors, dim=0)
-        fname = f"{audio_path.stem} - {stem_name}.wav"
-        _write_wave(out_dir, fname, combined)
-        stems_out.append(fname)
-        cb(f"write.{stem_name}", 98)
+            combined = torch.cat(tensors, dim=0)
+            fname = f"{audio_path.stem} - {stem_name}.wav"
+            _write_wave(out_dir, fname, combined)
+            stems_out.append(fname)
+            cb(f"write.{stem_name}", 98)
 
     cb("merge.done", 99)
     return stems_out
@@ -938,7 +960,13 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
 
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
-    expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
+    expected: list[str] = []
+    for s in stem_list:
+        if s == "deux":
+            expected.append(f"{Path(file.filename).stem} - vocals (deux).wav")
+            expected.append(f"{Path(file.filename).stem} - instrumental (deux).wav")
+        else:
+            expected.append(f"{Path(file.filename).stem} - {s}.wav")
 
     progress[task_id] = {"stage": "ready", "pct": 0}
     tasks[task_id] = {
@@ -1007,7 +1035,13 @@ async def rerun(task_id: str):
     controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
     conv_dir = conv_src.parent
     out_dir = conv_dir / f"{conv_src.stem}—stems"
-    expected = [f"{conv_src.stem} - {s}.wav" for s in stem_list]
+    expected: list[str] = []
+    for s in stem_list:
+        if s == "deux":
+            expected.append(f"{conv_src.stem} - vocals (deux).wav")
+            expected.append(f"{conv_src.stem} - instrumental (deux).wav")
+        else:
+            expected.append(f"{conv_src.stem} - {s}.wav")
 
     progress[new_id] = {"stage": "queued", "pct": 0}
     tasks[new_id] = {
