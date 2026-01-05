@@ -165,10 +165,6 @@
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">voc/inst (deux)</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="drums-box" type="checkbox" class="pretty">drums</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="bass-box" type="checkbox" class="pretty">bass</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="other-box" type="checkbox" class="pretty">other</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="guitar-box" type="checkbox" class="pretty">guitar</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -225,10 +221,6 @@
     const vocalsBox = document.getElementById('vocals-box');
     const instBox   = document.getElementById('inst-box');
     const deuxBox   = document.getElementById('deux-box');
-    const drumsBox  = document.getElementById('drums-box');
-    const bassBox   = document.getElementById('bass-box');
-    const otherBox  = document.getElementById('other-box');
-    const guitarBox = document.getElementById('guitar-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const topBtn    = document.getElementById('top-btn');
@@ -238,10 +230,12 @@
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
     const closeBtn  = document.getElementById('close-app');
+    const startBtn  = document.getElementById('start-btn');
 
     let startPressed = false;
     updateStartButton();
     function updateStartButton(){
+      if(!startBtn) return;
       const hasItems = queue.children.length > 0;
       if(!hasItems){
         startBtn.disabled = true;
@@ -800,7 +794,6 @@
     /* === upload & progress logic === */
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
-    const startBtn = document.getElementById('start-btn');
     function getTaskById(id){
       return tasks.find(t => t && t.id === id);
     }
@@ -821,10 +814,6 @@
       if(vocalsBox.checked) stems.push('vocals');
       if(instBox.checked)   stems.push('instrumental');
       if(deuxBox && deuxBox.checked) stems.push('deux');
-      if(drumsBox.checked)  stems.push('drums');
-      if(bassBox.checked)   stems.push('bass');
-      if(otherBox.checked)  stems.push('other');
-      if(guitarBox.checked) stems.push('guitar');
       return stems;
     }
 
