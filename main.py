@@ -114,6 +114,9 @@ for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     uvicorn_logger.setLevel(logging.INFO)
     uvicorn_logger.addHandler(file_handler)
 
+# Silence extremely noisy multipart debug logs
+logging.getLogger("python_multipart").setLevel(logging.INFO)
+
 MODEL_URLS = [
     (
         "Mel Band Roformer Vocals.ckpt",
@@ -920,7 +923,11 @@ def _separate_waveform(
             else:
                 inst_wave = chan_wave
 
-            def _run_stem_model(model: StemModel, wave: torch.Tensor) -> torch.Tensor:
+            def _run_stem_model(
+                model: StemModel,
+                wave: torch.Tensor,
+                progress_cb: Optional[Callable[[float], None]] = None,
+            ) -> torch.Tensor:
                 """Normalize tensor shape/device for model expectations."""
                 prefer_stereo = getattr(model.net, "stereo", True) if model.net is not None else True
 
@@ -960,7 +967,10 @@ def _separate_waveform(
                     # Run them in chunks to keep attention buffer sizes manageable.
                     step = max(1, SEGMENT - OVERLAP)
                     if length <= SEGMENT:
-                        return _call_model(prepared)
+                        pred_full = _call_model(prepared)
+                        if progress_cb:
+                            progress_cb(1.0)
+                        return pred_full
 
                     acc: Optional[torch.Tensor] = None
                     counts = torch.zeros((1, length), device=model.device, dtype=prepared.dtype)
@@ -991,6 +1001,9 @@ def _separate_waveform(
                         acc[:, start_idx : start_idx + trimmed.shape[-1]] += trimmed
                         counts[:, start_idx : start_idx + trimmed.shape[-1]] += 1
 
+                        if progress_cb:
+                            progress_cb(min(1.0, end_idx / length))
+
                     if acc is None:
                         raise AppError(ErrorCode.MODEL_MISSING, "Model failed to produce output.")
 
@@ -1003,7 +1016,12 @@ def _separate_waveform(
                 ch("instrumental.start", 84)
                 inst_model = manager.instrumental
                 use_wave = inst_wave if inst_wave is not None else chan_wave
-                inst_pred = _run_stem_model(inst_model, use_wave)
+
+                def _inst_progress(frac: float) -> None:
+                    # map chunk progress into the local 84-90% window
+                    ch("instrumental.progress", 84 + (90 - 84) * frac)
+
+                inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
                 chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
                 ch("instrumental.done", 90)
 
