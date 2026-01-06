@@ -91,6 +91,7 @@
     input.pretty:checked::after{ content:""; width:6px; height:10px; border:2px solid #0F2027; border-top:0; border-left:0; transform: rotate(45deg); }
 
     #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:40px; background:linear-gradient(to bottom,rgba(0,0,0,.45),transparent); opacity:0; transition:opacity .3s; }
+    #top-vig{ top:0; }
     #bot-vig{ top:auto; bottom:0; transform:rotate(180deg); }
 
     .dl-pad,
@@ -179,7 +180,7 @@
   <div id="queue" class="pre-hide w-11/12 max-w-2xl flex flex-col gap-4"></div>
   <div id="queue-spacer" class="w-11/12 max-w-2xl"></div>
   <button id="clear-btn" class="pre-hide mt-4 text-white underline">clear all</button>
-  <button id="top-btn" class="hidden fixed top-4 right-4 bg-white text-black rounded px-3 py-1">top</button>
+  <div id="queue-bottom-pad" class="w-11/12 max-w-2xl"></div>
   <div id="top-vig"></div>
   <div id="bot-vig"></div>
 
@@ -222,9 +223,9 @@
     const deuxBox   = document.getElementById('deux-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
-    const topBtn    = document.getElementById('top-btn');
     const topVig    = document.getElementById('top-vig');
     const botVig    = document.getElementById('bot-vig');
+    const bottomPad = document.getElementById('queue-bottom-pad');
     const template  = document.getElementById('item-template');
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
@@ -471,8 +472,12 @@
       } else {
         hasClearable = tasks && tasks.some(t => t && (t.stage === 'stopped' || (typeof t.pct === 'number' && t.pct >= 100)));
       }
+      const manyItems = queue.children.length > 6;
       // Reserve fixed vertical space to avoid layout jump whether visible or not
-      spacer.style.height = '32px';
+      spacer.style.height = hasClearable ? '18px' : '12px';
+      if (bottomPad) {
+        bottomPad.style.height = manyItems ? '72px' : '40px';
+      }
       if (hasClearable) {
         clearBtn.classList.add('show');
         clearBtn.style.pointerEvents = 'auto';
@@ -485,8 +490,6 @@
       const rect = queue.getBoundingClientRect();
       topVig.style.opacity = window.scrollY > 0 ? '1' : '0';
       botVig.style.opacity = rect.bottom > window.innerHeight ? '1' : '0';
-      if(rect.bottom > window.innerHeight) topBtn.classList.remove('hidden');
-      else topBtn.classList.add('hidden');
     }
     function updateUI(){
       updateClear();
@@ -517,8 +520,20 @@
 
     function setStatusVisibility(st, stage){
       if(!st) return;
-      const visible = shouldShowStatus(stage);
+      const visible = stage !== 'done' && shouldShowStatus(stage);
       st.classList.toggle('hidden', !visible);
+    }
+
+    function hideStatus(st){
+      if(!st) return;
+      st.textContent = '';
+      st.classList.add('hidden');
+      st.style.display = 'none';
+    }
+
+    function showStatus(st){
+      if(!st) return;
+      st.style.display = '';
     }
 
     function setStopVisibility(stopPad, stage, forceShow = false){
@@ -557,22 +572,26 @@
 
     // --- Helper to set rerun and stop icons ---
     
-    function setRerunIcon(stopPad){
+    function setRetryIcon(stopPad){
       if(!stopPad) return;
       while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
       const NS = 'http://www.w3.org/2000/svg';
-      const ccw = document.createElementNS(NS,'svg');
-      ccw.setAttribute('viewBox','0 0 24 24');
-      ccw.classList.add('w-7','h-7');
-      ccw.setAttribute('fill','none');
-      ccw.setAttribute('stroke','#222');
-      ccw.setAttribute('stroke-width','2');
-      ccw.setAttribute('stroke-linecap','round');
-      ccw.setAttribute('stroke-linejoin','round');
-      const path = document.createElementNS(NS,'path');
-      path.setAttribute('d','M4.93 4.93a10 10 0 1 1-1.41 1.41L1 5v6h6l-2.22-2.22a8 8 0 1 0 1.41-1.41z');
-      ccw.appendChild(path);
-      stopPad.appendChild(ccw);
+      const svg = document.createElementNS(NS,'svg');
+      svg.setAttribute('viewBox','0 0 24 24');
+      svg.classList.add('w-7','h-7');
+      svg.setAttribute('fill','none');
+      svg.setAttribute('stroke','#0F2027');
+      svg.setAttribute('stroke-width','2');
+      svg.setAttribute('stroke-linecap','round');
+      svg.setAttribute('stroke-linejoin','round');
+      const arc = document.createElementNS(NS,'path');
+      arc.setAttribute('d','M4 12a8 8 0 1 1 4.5 7.2');
+      const arrow = document.createElementNS(NS,'path');
+      arrow.setAttribute('d','M4 12V6m0 0h6');
+      const spark = document.createElementNS(NS,'path');
+      spark.setAttribute('d','M14.5 5.5l2-2m0 0v4m0-4h-4');
+      svg.append(arc, arrow, spark);
+      stopPad.appendChild(svg);
     }
 
     function setStopSquareIcon(stopPad){
@@ -606,14 +625,14 @@
       } catch (_) {}
       if (!ok || !newId) {
         // Treat it as a stopped/error card with rerun available
-        if (st) { st.textContent = 'errored'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
+        if (st) { showStatus(st); st.textContent = 'error'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
         const parent = st && st.closest ? st.closest('.card') : null;
         if (parent) parent.classList.add('done');
 
         if (stopPad) {
           stopPad.title = 'rerun';
           stopPad.innerHTML = '';          // prevent double icon
-          setRerunIcon(stopPad);
+          setRetryIcon(stopPad);
           stopPad.style.pointerEvents = '';
           stopPad.style.opacity = '';
           stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, ui); };
@@ -623,7 +642,7 @@
         return;
       }
       // reset visual state
-      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
+      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
       if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
       const card = stopPad && stopPad.closest('.card');
       if(card){ card.classList.remove('done'); }
@@ -672,7 +691,7 @@
       const initOverall = Math.max(0, Math.min(100, task.pct || 0));
       smooth.setImmediate(initOverall);
       if(task.stage === 'done'){
-        st.classList.add('hidden');
+        hideStatus(st);
         dl.classList.add('show');
         dl.title = 'open folder';
         bindFolderButton(dl, task);
@@ -681,32 +700,35 @@
       }
       else if(task.stage === 'stopped'){
         // Treat as finished visually
+        showStatus(st);
         st.classList.add('hidden');
         card.classList.add('done');
         if (stopPad){
           stopPad.style.display = '';
           stopPad.classList.add('show');
           stopPad.innerHTML = '';
-        setRerunIcon(stopPad);
+          setRetryIcon(stopPad);
           stopPad.title = 'rerun';
           stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
         }
       }
       else if (task.stage === 'error' || task.pct < 0) {
         // Treat like stopped; keep label visible for context
-        st.textContent = 'errored';
+        showStatus(st);
+        st.textContent = 'error';
         const parent = st.closest('.card'); if (parent) parent.classList.add('done');
         if (stopPad){
           stopPad.style.display = '';
           stopPad.classList.add('show');
           stopPad.title = 'rerun';
           stopPad.innerHTML = '';
-          setRerunIcon(stopPad);
+          setRetryIcon(stopPad);
           stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
         }
       }
       else {
-      const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
+        const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
+        showStatus(st);
         st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
         smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
@@ -715,7 +737,7 @@
         dl.classList.add('show');
         dl.title = 'retry';
         dl.innerHTML = '';
-        setRerunIcon(dl);
+        setRetryIcon(dl);
         dl.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
       }
       setStatusVisibility(st, task.stage);
@@ -808,8 +830,6 @@
       updateUI();
       window.addEventListener('scroll', updateVigs);
     });
-    topBtn.addEventListener('click', () => window.scrollTo({top:0, behavior:'smooth'}));
-
     // settings button → open overlay
     const settingsBtn = document.getElementById('settings-btn');
     if(settingsBtn){ settingsBtn.addEventListener('click', openSettings); }
@@ -1042,7 +1062,7 @@
           }
         };
         xhr.onload = () => {
-          if(xhr.status >= 400){ st.textContent = 'errored'; return resolve(); }
+          if(xhr.status >= 400){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'error'; return resolve(); }
           st.classList.remove('chip-dim');
           st.textContent = 'ready';
           smooth.setImmediate(0);
@@ -1051,7 +1071,8 @@
             res = JSON.parse(xhr.responseText || '{}');
             const msg = res.detail && res.detail.message;
             if(msg){
-              st.textContent = 'errored';
+              showStatus(st);
+              st.textContent = 'error';
               st.classList.add('chip-dim');
               if (stopPad) stopPad.style.display = 'none';
               else showError(msg);
@@ -1060,7 +1081,7 @@
           if(res.detail && res.detail.message){
             try{
               const msg = res.detail.message;
-              st.textContent = 'errored'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
+              showStatus(st); st.textContent = 'error'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
               else showError(msg);
             }catch(_){ }
             return resolve();
@@ -1090,7 +1111,7 @@
               t.pct = 0;
               saveTasks();
               // update visuals
-              if(st){ st.textContent = 'stopped'; st.classList.remove('hidden'); }
+              if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
               const parent = st && st.closest('.card');
               if(parent){ parent.classList.add('done'); }
               // swap to rerun icon+handler
@@ -1098,7 +1119,7 @@
                 stopPad.style.pointerEvents = '';
                 stopPad.style.opacity = '';
                 stopPad.title = 'rerun';
-                setRerunIcon(stopPad);
+                setRetryIcon(stopPad);
                 stopPad.onclick = (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); };
               }
               stopPad.dataset.busy = '';
@@ -1113,7 +1134,7 @@
           }
           resolve();
         };
-        xhr.onerror = () => { st.textContent = 'errored'; resolve(); };
+        xhr.onerror = () => { showStatus(st); st.classList.remove('hidden'); st.textContent = 'error'; resolve(); };
         xhr.send(data);
       });
       return pending.uploadPromise;
@@ -1171,7 +1192,7 @@
       if(lower.includes('bass')) return 'bass';
       if(lower.includes('other')) return 'other';
       if(lower.includes('guitar')) return 'guitar';
-      if(lower.includes('error')) return 'errored';
+      if(lower.includes('error')) return 'error';
       if(lower.startsWith('prepare')) return 'preparing';
       if(lower.startsWith('load_audio')) return 'loading';
       if(lower.startsWith('write')) return 'finishing';
@@ -1186,7 +1207,9 @@
           let data = null;
           try { data = JSON.parse(ev.data); } catch(_) {}
           if(!data) return;
-          const {stage, pct} = data;
+          const rawStage = data.stage;
+          const stage = rawStage === 'errored' ? 'error' : rawStage;
+          const pct = data.pct;
           if(taskRef){
             taskRef.stage = stage;
             taskRef.pct = pct;
@@ -1199,12 +1222,10 @@
             const parentRow = st.closest('.item-row');
             applyLabels(parentRow ? parentRow.querySelector('.labels') : null, data.stems);
           }
+          if(st){ showStatus(st); }
           if(stage === 'done'){
             smooth.setTarget(100);
-            if(st){
-              st.textContent = '';
-              st.classList.add('hidden');
-            }
+            hideStatus(st);
             if(dl){
               dl.classList.add('show');
               dl.title = 'open folder';
@@ -1217,6 +1238,7 @@
           }
           if (stage === 'stopped') {
             if (taskRef) { taskRef.stage = 'stopped'; taskRef.pct = 0; saveTasks(); }
+            showStatus(st);
             st.textContent = 'stopped';
             st.classList.remove('hidden');
             const parent = st.closest('.card'); if (parent) parent.classList.add('done');
@@ -1225,7 +1247,7 @@
               stopPad.classList.add('show');
               stopPad.title = 'rerun';
               stopPad.innerHTML = '';
-              setRerunIcon(stopPad);
+              setRetryIcon(stopPad);
               stopPad.onclick = (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); };
             }
             dropPendingById(taskId);
@@ -1250,6 +1272,11 @@
           setStopVisibility(stopPad, stage);
         });
         es.addEventListener('error', (ev) => {
+          if (taskRef && taskRef.stage === 'stopped') {
+            es.close();
+            updateUI();
+            return;
+          }
           let errPayload = null;
           let errCode = null;
           let errMsg = null;
@@ -1266,7 +1293,8 @@
             saveTasks();
           }
           if (st) {
-            st.textContent = 'errored';
+            showStatus(st);
+            st.textContent = 'error';
             st.classList.remove('hidden');
           }
           setStatusVisibility(st, 'error');
@@ -1278,7 +1306,7 @@
             stopPad.classList.add('show');
             stopPad.title = 'rerun';
             stopPad.innerHTML = '';
-            setRerunIcon(stopPad);
+            setRetryIcon(stopPad);
             stopPad.onclick = (e) => {
               e.preventDefault();
               if (taskRef) rerunTask(taskRef, { bar, st, dl, stopPad, smooth });
@@ -1294,7 +1322,8 @@
           updateUI();
         });
               }catch(e){
-        st.textContent = 'errored';
+        showStatus(st);
+        st.textContent = 'error';
         if(taskRef){ taskRef.stage = 'error'; taskRef.pct = -1; saveTasks(); }
         updateUI();
       }
