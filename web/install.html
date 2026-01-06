@@ -93,12 +93,12 @@
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
       overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-full">
-        <p class="text-lg">models not found! choose which ones to download</p>
-        <div class="flex flex-col gap-2 text-sm">
-          <label class="flex items-center gap-2"><input id="dl-vocals" type="checkbox" class="pretty" checked>vocals</label>
-          <label class="flex items-center gap-2"><input id="dl-inst" type="checkbox" class="pretty" checked>instrumental</label>
-          <label class="flex items-center gap-2"><input id="dl-deux" type="checkbox" class="pretty" checked>voc/inst (deux)</label>
-        </div>
+        <p class="text-lg">models not found! download the required set?</p>
+        <ul class="list-disc list-inside text-sm opacity-80">
+          <li>becruily_deux.ckpt</li>
+          <li>Mel Band Roformer Instrumental.ckpt</li>
+          <li>Mel Band Roformer Vocals.ckpt</li>
+        </ul>
         <div id="dl-error" class="hidden text-red-300 text-sm"></div>
         <div class="flex justify-end gap-2">
           <button id="skip" class="px-3 py-1 rounded-lg glass">nah i got it</button>
@@ -108,16 +108,8 @@
       document.body.appendChild(overlay);
       const errorBox = overlay.querySelector('#dl-error');
       overlay.querySelector('#dl').onclick = async () => {
-        const selection = [];
-        if(overlay.querySelector('#dl-vocals').checked) selection.push('vocals');
-        if(overlay.querySelector('#dl-inst').checked) selection.push('instrumental');
-        if(overlay.querySelector('#dl-deux').checked) selection.push('deux');
-        if(selection.length === 0){
-          if(errorBox){ errorBox.textContent = 'please select at least one model'; errorBox.classList.remove('hidden'); }
-          return;
-        }
         try{
-          await fetch('/download_models', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({models: selection})});
+          await fetch('/download_models', {method:'POST'});
           overlay.remove();
         }catch(err){
           if(errorBox){ errorBox.textContent = 'download request failed. ensure certifi is installed.'; errorBox.classList.remove('hidden'); }
