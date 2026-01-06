@@ -219,6 +219,14 @@ class StemModel:
         self.net.eval()
         self.kind = "torchscript"
 
+    def _move_to(self, device: torch.device) -> None:
+        """Move model to a different device (no-op for ONNX)."""
+        if self.kind == "onnx":
+            return
+        if self.net is not None:
+            self.net = self.net.to(device)
+        self.device = device
+
     def __call__(self, mag: "torch.Tensor") -> "torch.Tensor":
         if self.kind == "onnx" and self.session is not None:
             inp_name = self.session.get_inputs()[0].name
@@ -915,13 +923,26 @@ def _separate_waveform(
             def _run_stem_model(model: StemModel, wave: torch.Tensor) -> torch.Tensor:
                 """Normalize tensor shape/device for model expectations."""
                 prefer_stereo = getattr(model.net, "stereo", True) if model.net is not None else True
-                if model.expects_waveform:
-                    prepared = ensure_stereo(wave) if prefer_stereo else ensure_mono(wave)
+                def _normalize_waveform_input(target_model: StemModel, tensor: torch.Tensor) -> torch.Tensor:
+                    prepared = ensure_stereo(tensor) if prefer_stereo else ensure_mono(tensor)
                     if prepared.dim() == 2:
                         prepared = prepared.unsqueeze(0)
-                    prepared = prepared.to(model.device)
-                    with torch.no_grad():
-                        pred = model(prepared)
+                    return prepared.to(target_model.device)
+
+                if model.expects_waveform:
+                    prepared = _normalize_waveform_input(model, wave)
+                    try:
+                        with torch.no_grad():
+                            pred = model(prepared)
+                    except RuntimeError as exc:
+                        if model.device.type == "mps" and ("MPSGaph" in str(exc) or "MPSGraph" in str(exc)):
+                            logger.warning("MPSGraph failed; retrying %s on CPU", model.kind)
+                            model._move_to(torch.device("cpu"))
+                            prepared = _normalize_waveform_input(model, wave)
+                            with torch.no_grad():
+                                pred = model(prepared)
+                        else:
+                            raise
                     if pred.dim() == 2:
                         pred = pred[:, None, :]
                     elif pred.dim() == 3 and pred.shape[1] not in (1, prepared.shape[1]):
