@@ -1,5 +1,5 @@
 Status: 1/5/26 8p PST
-- currently working. just don't hit the clear all button and then process with a different model. Memory leak.
+- voc working, inst not working. deux i think working
 
 # stemsplat - DEVELOPER PREVIEW
 
