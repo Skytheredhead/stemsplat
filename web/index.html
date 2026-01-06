@@ -327,7 +327,7 @@
           body: JSON.stringify(settingsState),
         });
         if(!res.ok){
-          if(showMissingPopup) showPopup('folder doesn\\'t exist');
+          if(showMissingPopup) showPopup("folder doesn't exist");
           await loadSettings();
           return;
         }
@@ -337,7 +337,7 @@
         applySettingsUI();
       }catch(err){
         console.warn('settings update failed', err);
-        if(showMissingPopup) showPopup('folder doesn\\'t exist');
+        if(showMissingPopup) showPopup("folder doesn't exist");
         await loadSettings();
       }
     }
