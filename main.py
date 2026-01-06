@@ -262,13 +262,13 @@ class ModelManager:
                 return cand_fb
         raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
 
-def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
-    if not filename:
-        return None
-    cand = CONFIG_DIR / filename
-    if cand.exists():
-        return cand
-    raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
+    def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
+        if not filename:
+            return None
+        cand = CONFIG_DIR / filename
+        if cand.exists():
+            return cand
+        raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
     def _load_model(self, name: str) -> StemModel:
         if name in self.model_cache:
