@@ -226,7 +226,7 @@ def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> 
         pass
     root = settings.output_root
     if mode == "structured":
-        deliver_dir = settings.resolve_output_dir(base_name)
+        deliver_dir = settings.resolve_output_dir(base_name) / "stems"
         staging_dir = deliver_dir
         zip_target = None
     else:
@@ -1537,11 +1537,20 @@ def _model_exists(filename: str) -> bool:
         if filename in alias_list:
             names.add(canon)
             names.update(alias_list)
+
+    def _casefold_exists(path: Path) -> bool:
+        if path.exists():
+            return True
+        if not path.parent.exists():
+            return False
+        target_lower = path.name.lower()
+        return any(p.name.lower() == target_lower for p in path.parent.iterdir())
+
     targets = []
     for name in names:
         targets.append(MODEL_DIR / name)
         targets.append(Path.home() / "Library/Application Support/stems" / name)
-    return any(path.exists() for path in targets)
+    return any(_casefold_exists(path) for path in targets)
 
 
 @app.get("/models_status")
@@ -1613,6 +1622,13 @@ async def stop_task(task_id: str):
 async def index():
     html_path = BASE_DIR / "web" / "index.html"
     return HTMLResponse(html_path.read_text())
+
+@app.get("/favicon.ico")
+async def favicon():
+    icon_path = BASE_DIR / "web" / "favicon.ico"
+    if icon_path.exists():
+        return FileResponse(icon_path, media_type="image/x-icon")
+    raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
 
 
 @app.api_route("/shutdown", methods=["POST", "GET"])
