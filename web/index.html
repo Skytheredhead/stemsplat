@@ -164,7 +164,7 @@
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">voc/inst (deux)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -233,6 +233,7 @@
     const startBtn  = document.getElementById('start-btn');
 
     let startPressed = false;
+    let startGeneration = 0;
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
@@ -422,12 +423,13 @@
     function applyLabels(container, stemsList){
       if(!container || !stemsList) return;
       container.innerHTML='';
+      const pretty = { deux: 'both' };
       stemsList.forEach(name => {
         const base = name.split(' - ').pop() || name;
         const stem = base.replace(/\.wav$/i,'');
         const chip = document.createElement('span');
         chip.className = 'chip chip-dim text-[11px]';
-        chip.textContent = stem;
+        chip.textContent = pretty[stem] || stem;
         container.appendChild(chip);
       });
     }
@@ -445,7 +447,7 @@
 
     function setStopVisibility(stopPad, stage, forceShow = false){
       if(!stopPad) return;
-      const active = forceShow || (stage && !['ready','queued','done','stopped','error'].includes(stage));
+      const active = forceShow || (stage && !['ready','queued','done','stopped','error','errored'].includes(stage));
       const show = !!active;
       stopPad.style.display = show ? '' : 'none';
       stopPad.classList.toggle('show', show);
@@ -509,7 +511,7 @@
       } catch (_) {}
       if (!ok || !newId) {
         // Treat it as a stopped/error card with rerun available
-        if (st) { st.textContent = 'error'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
+        if (st) { st.textContent = 'errored'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
         const parent = st && st.closest ? st.closest('.card') : null;
         if (parent) parent.classList.add('done');
 
@@ -590,7 +592,7 @@
       }
       else if (task.stage === 'error' || task.pct < 0) {
         // Treat like stopped; keep label visible for context
-        st.textContent = 'error';
+        st.textContent = 'errored';
         const parent = st.closest('.card'); if (parent) parent.classList.add('done');
         if (stopPad){
           stopPad.style.display = '';
@@ -603,7 +605,7 @@
       }
       else {
       const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
-        st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
+        st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
         smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
       }
@@ -794,6 +796,11 @@
     /* === upload & progress logic === */
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
+    function dropPendingById(id){
+      if(!id) return;
+      const idx = pendingItems.findIndex(p => p && p.id === id);
+      if(idx >= 0) pendingItems.splice(idx,1);
+    }
     function getTaskById(id){
       return tasks.find(t => t && t.id === id);
     }
@@ -851,7 +858,7 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey };
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:false, startedProcessing:false };
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
@@ -892,7 +899,7 @@
           }
         };
         xhr.onload = () => {
-          if(xhr.status >= 400){ st.textContent = 'error'; return resolve(); }
+          if(xhr.status >= 400){ st.textContent = 'errored'; return resolve(); }
           st.classList.remove('chip-dim');
           st.textContent = 'ready';
           smooth.setImmediate(0);
@@ -901,7 +908,7 @@
             res = JSON.parse(xhr.responseText || '{}');
             const msg = res.detail && res.detail.message;
             if(msg){
-              st.textContent = 'error';
+              st.textContent = 'errored';
               st.classList.add('chip-dim');
               if (stopPad) stopPad.style.display = 'none';
               else showError(msg);
@@ -910,7 +917,7 @@
           if(res.detail && res.detail.message){
             try{
               const msg = res.detail.message;
-              st.textContent = 'error'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
+              st.textContent = 'errored'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
               else showError(msg);
             }catch(_){ }
             return resolve();
@@ -938,7 +945,7 @@
               t.pct = 0;
               saveTasks();
               // update visuals
-              if(st){ st.classList.add('hidden'); }
+              if(st){ st.textContent = 'stopped'; st.classList.remove('hidden'); }
               const parent = st && st.closest('.card');
               if(parent){ parent.classList.add('done'); }
               // swap to rerun icon+handler
@@ -955,12 +962,12 @@
           }
           // start polling
           trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
-          if(startPressed){
+          if(pending.autoStart){
             startTaskWhenReady(pending);
           }
           resolve();
         };
-        xhr.onerror = () => { st.textContent = 'error'; resolve(); };
+        xhr.onerror = () => { st.textContent = 'errored'; resolve(); };
         xhr.send(data);
       });
       return pending.uploadPromise;
@@ -980,9 +987,12 @@
       if(startBtn && startBtn.disabled) return;
       const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+      startGeneration += 1;
       startPressed = true;
+      const batch = pendingItems.slice();
+      batch.forEach(p => { p.autoStart = true; });
       revealStatusesAfterStart();
-      for(const p of pendingItems){
+      for(const p of batch){
         if(!p.uploadPromise){
           await uploadWithStems(p, stems);
         }
@@ -991,10 +1001,31 @@
         }
         startTaskWhenReady(p);
       }
+      startPressed = false;
+      batch.forEach(p => { p.autoStart = false; });
+      updateUI();
     }
     if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);
 
     // --- Progress tracking for uploads (SSE) ---
+    function displayStage(stage){
+      if(!stage) return 'queued';
+      const lower = stage.toLowerCase();
+      if(lower.includes('deux')) return 'voc/inst';
+      if(lower.includes('vocals')) return 'vocals';
+      if(lower.includes('instrumental')) return 'instrumental';
+      if(lower.includes('drums')) return 'drums';
+      if(lower.includes('bass')) return 'bass';
+      if(lower.includes('other')) return 'other';
+      if(lower.includes('guitar')) return 'guitar';
+      if(lower.includes('error')) return 'errored';
+      if(lower.startsWith('prepare')) return 'preparing';
+      if(lower.startsWith('load_audio')) return 'loading';
+      if(lower.startsWith('write')) return 'finishing';
+      const parts = lower.split('.');
+      return parts[parts.length-1] || lower;
+    }
+
     function trackProgress(taskId, bar, st, dl, _a, _b, taskRef, _c, smooth, stopPad){
       try{
         const es = new EventSource('/progress/' + taskId);
@@ -1010,11 +1041,13 @@
             if(dl){ dl.href = '/download/' + taskId; dl.classList.add('show'); }
             if(stopPad) stopPad.remove();
             const parent = st.closest('.card'); if(parent) parent.classList.add('done');
+            dropPendingById(taskId);
             es.close(); updateUI(); return;
           }
           if (stage === 'stopped') {
             if (taskRef) { taskRef.stage = 'stopped'; taskRef.pct = 0; saveTasks(); }
-            st.classList.add('hidden');
+            st.textContent = 'stopped';
+            st.classList.remove('hidden');
             const parent = st.closest('.card'); if (parent) parent.classList.add('done');
             if (stopPad) {
               stopPad.style.display = '';
@@ -1024,11 +1057,13 @@
               setRerunIcon(stopPad);
               stopPad.onclick = (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); };
             }
+            dropPendingById(taskId);
             es.close(); updateUI(); return;
           }
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
-            st.textContent = stage ? `${stage} (${sp}%)` : 'queued';
+            const friendlyStage = displayStage(stage);
+            st.textContent = friendlyStage ? `${friendlyStage} (${sp}%)` : 'queued';
             if (stage === 'queued' || stage === 'ready') {
               smooth.setImmediate(0);
             } else {
@@ -1042,12 +1077,12 @@
         });
         es.addEventListener('error', () => {
           if (taskRef) {
-            taskRef.stage = 'stopped';
-            taskRef.pct = 0;
+            taskRef.stage = 'error';
+            taskRef.pct = -1;
             saveTasks();
           }
           if (st) {
-            st.textContent = 'error';
+            st.textContent = 'errored';
             st.classList.remove('hidden');
           }
           setStatusVisibility(st, 'error');
@@ -1065,11 +1100,12 @@
               if (taskRef) rerunTask(taskRef, { bar, st, dl, stopPad, smooth });
             };
           }
+          dropPendingById(taskId);
           es.close();
           updateUI();
         });
               }catch(e){
-        st.textContent = 'error';
+        st.textContent = 'errored';
         if(taskRef){ taskRef.stage = 'error'; taskRef.pct = -1; saveTasks(); }
         updateUI();
       }

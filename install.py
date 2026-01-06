@@ -185,15 +185,15 @@ def _port_available(port: int) -> bool:
 
 
 def _models_missing():
-    base = Path(".")
+    base_candidates = {Path("."), BASE_DIR}
     for item in DL_FILES:
         name = item["filename"]
         aliases = ALIAS_MAP.get(item["subdir"], {}).get(name, [])
         candidates = [name] + aliases
         dirs = [
-            base / item["subdir"],
-            base,
-            base / "models",
+            *(b / item["subdir"] for b in base_candidates),
+            *base_candidates,
+            *(b / "models" for b in base_candidates),
             Path.home() / "Library/Application Support/stems",
         ]
         found = False

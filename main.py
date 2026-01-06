@@ -219,6 +219,14 @@ class StemModel:
         self.net.eval()
         self.kind = "torchscript"
 
+    def _move_to(self, device: torch.device) -> None:
+        """Move model to a different device (no-op for ONNX)."""
+        if self.kind == "onnx":
+            return
+        if self.net is not None:
+            self.net = self.net.to(device)
+        self.device = device
+
     def __call__(self, mag: "torch.Tensor") -> "torch.Tensor":
         if self.kind == "onnx" and self.session is not None:
             inp_name = self.session.get_inputs()[0].name
@@ -262,13 +270,13 @@ class ModelManager:
                 return cand_fb
         raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
 
-def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
-    if not filename:
-        return None
-    cand = CONFIG_DIR / filename
-    if cand.exists():
-        return cand
-    raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
+    def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
+        if not filename:
+            return None
+        cand = CONFIG_DIR / filename
+        if cand.exists():
+            return cand
+        raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
     def _load_model(self, name: str) -> StemModel:
         if name in self.model_cache:
@@ -484,6 +492,13 @@ def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
             if delay:
                 time.sleep(delay)
         return drums, bass, other, karaoke, guitar
+
+
+# Ensure core helper methods remain bound to ModelManager
+_REQUIRED_MANAGER_HELPERS = ("split_vocals", "split_pair_with_model", "split_instrumental")
+_missing_helpers = [name for name in _REQUIRED_MANAGER_HELPERS if not hasattr(ModelManager, name)]
+if _missing_helpers:
+    raise AppError(ErrorCode.SPLIT_IMPORT_FAILED, f"ModelManager missing helpers: {', '.join(_missing_helpers)}")
 
 
 # ── Task orchestration ─────────────────────────────────────────────────────-
@@ -833,6 +848,13 @@ def _separate_waveform(
             return x
         return x.repeat(2, 1)
 
+    def ensure_mono(x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 1:
+            return x.unsqueeze(0)
+        if x.shape[0] == 1:
+            return x
+        return x.mean(dim=0, keepdim=True)
+
     if "deux" in stem_list:
         cb("deux.start", 2)
         deux_model = manager.deux
@@ -898,11 +920,45 @@ def _separate_waveform(
             else:
                 inst_wave = chan_wave
 
+            def _run_stem_model(model: StemModel, wave: torch.Tensor) -> torch.Tensor:
+                """Normalize tensor shape/device for model expectations."""
+                prefer_stereo = getattr(model.net, "stereo", True) if model.net is not None else True
+                def _normalize_waveform_input(target_model: StemModel, tensor: torch.Tensor) -> torch.Tensor:
+                    prepared = ensure_stereo(tensor) if prefer_stereo else ensure_mono(tensor)
+                    if prepared.dim() == 2:
+                        prepared = prepared.unsqueeze(0)
+                    return prepared.to(target_model.device)
+
+                if model.expects_waveform:
+                    prepared = _normalize_waveform_input(model, wave)
+                    try:
+                        with torch.no_grad():
+                            pred = model(prepared)
+                    except RuntimeError as exc:
+                        if model.device.type == "mps" and ("MPSGaph" in str(exc) or "MPSGraph" in str(exc)):
+                            logger.warning("MPSGraph failed; retrying %s on CPU", model.kind)
+                            model._move_to(torch.device("cpu"))
+                            prepared = _normalize_waveform_input(model, wave)
+                            with torch.no_grad():
+                                pred = model(prepared)
+                        else:
+                            raise
+                    if pred.dim() == 2:
+                        pred = pred[:, None, :]
+                    elif pred.dim() == 3 and pred.shape[1] not in (1, prepared.shape[1]):
+                        pred = pred.permute(1, 0, 2)
+                    pred = pred[..., : prepared.shape[-1]]
+                    if pred.dim() == 3 and pred.shape[0] == 1:
+                        pred = pred[0]
+                    return pred
+                prepared = ensure_stereo(wave).to(model.device)
+                return model(prepared)
+
             if need_instrumental_model:
                 ch("instrumental.start", 84)
                 inst_model = manager.instrumental
-                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-                inst_pred = inst_model(ensure_stereo(use_wave))
+                use_wave = inst_wave if inst_wave is not None else chan_wave
+                inst_pred = _run_stem_model(inst_model, use_wave)
                 chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
                 ch("instrumental.done", 90)
 
@@ -911,8 +967,11 @@ def _separate_waveform(
                     continue
                 ch(f"{stem_name}.start", 90)
                 inst_model = getattr(manager, stem_name)
-                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-                pred = inst_model(ensure_stereo(use_wave))
+                use_wave = inst_wave if inst_wave is not None else chan_wave
+                if inst_model.expects_waveform:
+                    pred = _run_stem_model(inst_model, use_wave)
+                else:
+                    pred = inst_model(ensure_stereo(use_wave))
                 chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
                 ch(f"{stem_name}.done", 96)
 
