@@ -914,7 +914,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                         shutil.rmtree(staging_dir)
                 except Exception:
                     logger.debug("failed to clean staging dir %s", staging_dir, exc_info=True)
-                tasks[task_id]["zip"] = zip_path
+                tasks[task_id]["zip"] = str(zip_path)
                 deliver_dir = zip_path.parent
             else:
                 tasks[task_id]["zip"] = None
@@ -1337,6 +1337,9 @@ async def start_task(task_id: str):
 @app.get("/progress/{task_id}")
 async def progress_stream(task_id: str):
     async def event_generator():
+        def _json_safe(val: object) -> object:
+            return str(val) if isinstance(val, Path) else val
+
         last = None
         while True:
             info = progress.get(task_id, {"stage": "queued", "pct": 0})
@@ -1347,8 +1350,8 @@ async def progress_stream(task_id: str):
                         "stage": "stopped",
                         "pct": 0,
                         "stems": info.get("stems"),
-                        "out_dir": info.get("out_dir"),
-                        "zip": info.get("zip"),
+                        "out_dir": _json_safe(info.get("out_dir")),
+                        "zip": _json_safe(info.get("zip")),
                     }
                     yield {"event": "message", "data": json.dumps(payload)}
                 elif info.get("pct", 0) < 0:
@@ -1358,8 +1361,8 @@ async def progress_stream(task_id: str):
                         "stage": info["stage"],
                         "pct": info["pct"],
                         "stems": info.get("stems"),
-                        "out_dir": info.get("out_dir"),
-                        "zip": info.get("zip"),
+                        "out_dir": _json_safe(info.get("out_dir")),
+                        "zip": _json_safe(info.get("zip")),
                     }
                     yield {"event": "message", "data": json.dumps(payload)}
                 last = current
