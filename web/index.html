@@ -431,6 +431,34 @@
       return t && (t.pct >= 100 || t.stage === 'stopped');
     }
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
+
+    async function rehydrateTasks(){
+      if(!Array.isArray(tasks) || tasks.length === 0) return;
+      try{
+        const res = await fetch('/rehydrate_tasks', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ tasks })
+        });
+        if(!res.ok) return;
+        const data = await res.json();
+        if(!data || !Array.isArray(data.tasks)) return;
+        const keep = new Set();
+        data.tasks.forEach(t => {
+          if(!t || !t.id) return;
+          const idx = tasks.findIndex(x => x && x.id === t.id);
+          const merged = idx >= 0 ? { ...tasks[idx], ...t } : t;
+          if(idx >= 0) tasks[idx] = merged;
+          else tasks.push(merged);
+          keep.add(t.id);
+        });
+        // drop any tasks that were not completed on disk (e.g., force-quit)
+        tasks = tasks.filter(t => t && keep.has(t.id));
+        saveTasks();
+      }catch(err){
+        console.debug('rehydration skipped', err);
+      }
+    }
     // processing-state helper
     function isProcessing(t){
       return t && t.pct >= 0 && t.pct < 100 && t.stage !== 'stopped';
@@ -762,22 +790,24 @@
       });
     });
 
-    // restore previous tasks
-    tasks.forEach(t => {
-      const {bar, st, dl, stopPad, smooth} = createItem(t);
-      const last = queue.lastElementChild;
-      if(last){
-        requestAnimationFrame(() => {
-          last.classList.add('enter-pre');
-          requestAnimationFrame(() => last.classList.add('enter-active'));
-        });
-      }
-      if(t.id && t.pct < 100 && t.pct >= 0){
-        trackProgress(t.id, bar, st, dl, null, null, t, null, smooth, stopPad);
-      }
+    rehydrateTasks().finally(() => {
+      // restore previous tasks
+      tasks.forEach(t => {
+        const {bar, st, dl, stopPad, smooth} = createItem(t);
+        const last = queue.lastElementChild;
+        if(last){
+          requestAnimationFrame(() => {
+            last.classList.add('enter-pre');
+            requestAnimationFrame(() => last.classList.add('enter-active'));
+          });
+        }
+        if(t.id && t.pct < 100 && t.pct >= 0){
+          trackProgress(t.id, bar, st, dl, null, null, t, null, smooth, stopPad);
+        }
+      });
+      updateUI();
+      window.addEventListener('scroll', updateVigs);
     });
-    updateUI();
-    window.addEventListener('scroll', updateVigs);
     topBtn.addEventListener('click', () => window.scrollTo({top:0, behavior:'smooth'}));
 
     // settings button → open overlay
@@ -1162,6 +1192,7 @@
             taskRef.pct = pct;
             if(data.stems) taskRef.stems = data.stems;
             if(data.out_dir) taskRef.out_dir = data.out_dir;
+            if(data.zip) taskRef.zip = data.zip;
             saveTasks();
           }
           if(data.stems && st){

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 import urllib.request
 import argparse
 import asyncio
@@ -859,6 +859,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                 "pct": pct,
                 "stems": tasks.get(task_id, {}).get("stems"),
                 "out_dir": tasks.get(task_id, {}).get("dir"),
+                "zip": tasks.get(task_id, {}).get("zip"),
             }
             time.sleep(0.5)
         if stop_evt.is_set():
@@ -867,6 +868,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                 "pct": 0,
                 "stems": tasks.get(task_id, {}).get("stems"),
                 "out_dir": tasks.get(task_id, {}).get("dir"),
+                "zip": tasks.get(task_id, {}).get("zip"),
             }
             raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
         logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
@@ -875,6 +877,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             "pct": pct,
             "stems": tasks.get(task_id, {}).get("stems"),
             "out_dir": tasks.get(task_id, {}).get("dir"),
+            "zip": tasks.get(task_id, {}).get("zip"),
         }
 
     def run() -> None:
@@ -919,7 +922,13 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             tasks[task_id]["stems"] = stems_out
             tasks[task_id]["dir"] = str(deliver_dir)
             cb("finalizing", 99)
-            progress[task_id] = {"stage": "done", "pct": 100, "stems": stems_out, "out_dir": str(deliver_dir)}
+            progress[task_id] = {
+                "stage": "done",
+                "pct": 100,
+                "stems": stems_out,
+                "out_dir": str(deliver_dir),
+                "zip": tasks.get(task_id, {}).get("zip"),
+            }
             tasks[task_id]["status"] = "done"
             logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
         except AppError as exc:
@@ -928,6 +937,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                 "pct": -1,
                 "stems": tasks.get(task_id, {}).get("stems"),
                 "out_dir": tasks.get(task_id, {}).get("dir"),
+                "zip": tasks.get(task_id, {}).get("zip"),
             }
             errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
             tasks[task_id]["status"] = "error"
@@ -940,13 +950,20 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                 "pct": -1,
                 "stems": tasks.get(task_id, {}).get("stems"),
                 "out_dir": tasks.get(task_id, {}).get("dir"),
+                "zip": tasks.get(task_id, {}).get("zip"),
             }
             errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
             tasks[task_id]["status"] = "error"
             logger.exception("task %s crashed", task_id)
 
     tasks[task_id]["status"] = "queued"
-    progress[task_id] = {"stage": "queued", "pct": 0, "stems": tasks.get(task_id, {}).get("stems"), "out_dir": tasks.get(task_id, {}).get("dir")}
+    progress[task_id] = {
+        "stage": "queued",
+        "pct": 0,
+        "stems": tasks.get(task_id, {}).get("stems"),
+        "out_dir": tasks.get(task_id, {}).get("dir"),
+        "zip": tasks.get(task_id, {}).get("zip"),
+    }
     process_queue.put(run)
 
 
@@ -1326,7 +1343,13 @@ async def progress_stream(task_id: str):
             current = (info["stage"], info["pct"])
             if current != last:
                 if info.get("stage") == "stopped":
-                    payload = {"stage": "stopped", "pct": 0, "stems": info.get("stems"), "out_dir": info.get("out_dir")}
+                    payload = {
+                        "stage": "stopped",
+                        "pct": 0,
+                        "stems": info.get("stems"),
+                        "out_dir": info.get("out_dir"),
+                        "zip": info.get("zip"),
+                    }
                     yield {"event": "message", "data": json.dumps(payload)}
                 elif info.get("pct", 0) < 0:
                     yield {"event": "error", "data": errors.get(task_id, "processing failed")}
@@ -1336,6 +1359,7 @@ async def progress_stream(task_id: str):
                         "pct": info["pct"],
                         "stems": info.get("stems"),
                         "out_dir": info.get("out_dir"),
+                        "zip": info.get("zip"),
                     }
                     yield {"event": "message", "data": json.dumps(payload)}
                 last = current
@@ -1344,6 +1368,83 @@ async def progress_stream(task_id: str):
             await asyncio.sleep(0.5)
 
     return EventSourceResponse(event_generator())
+
+
+def _detect_output(out_dir: Path, stems: list[str], zip_hint: str | None = None) -> tuple[bool, str | None]:
+    """
+    Determine whether an export is complete based on output artifacts.
+
+    Returns a tuple of (is_complete, zip_path_if_found).
+    """
+
+    def _all_stems_present() -> bool:
+        if not stems:
+            return False
+        return all((out_dir / stem).exists() for stem in stems)
+
+    zip_path: Path | None = None
+    if zip_hint:
+        zp = Path(zip_hint)
+        if zp.exists():
+            zip_path = zp
+    if not out_dir.exists() and not zip_path:
+        return False, None
+
+    if out_dir.is_file() and out_dir.suffix.lower() == ".zip":
+        zip_path = out_dir
+        out_dir = out_dir.parent
+
+    if _all_stems_present():
+        return True, str(zip_path) if zip_path else None
+
+    if zip_path and Path(zip_path).exists():
+        return True, str(zip_path)
+
+    zips = list(out_dir.glob("*.zip"))
+    if len(zips) == 1 and zips[0].exists():
+        return True, str(zips[0])
+
+    return False, None
+
+
+@app.post("/rehydrate_tasks")
+async def rehydrate_tasks(request: Request):
+    """
+    Reconcile client-side tasks with on-disk outputs.
+
+    Any task without completed outputs is omitted so abandoned/force-quit jobs
+    do not reappear as queued entries.
+    """
+
+    payload: dict[str, Any] = await request.json()
+    incoming = payload.get("tasks", [])
+    if not isinstance(incoming, list):
+        raise AppError(ErrorCode.INVALID_REQUEST, "tasks payload must be a list").to_http()
+
+    refreshed: list[dict[str, Any]] = []
+    for raw in incoming:
+        if not isinstance(raw, dict):
+            continue
+        out_dir = raw.get("out_dir")
+        stems = raw.get("stems") or []
+        zip_hint = raw.get("zip")
+        if not out_dir:
+            continue
+        complete, zip_path = _detect_output(Path(out_dir), stems, zip_hint)
+        if not complete:
+            continue
+        refreshed.append(
+            {
+                "id": raw.get("id"),
+                "name": raw.get("name"),
+                "stage": "done",
+                "pct": 100,
+                "stems": stems,
+                "out_dir": out_dir,
+                "zip": zip_path,
+            }
+        )
+    return {"tasks": refreshed}
 
 
 @app.post("/rerun/{task_id}")
