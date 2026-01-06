@@ -241,7 +241,7 @@
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
-    let settingsState = { output_root: '', structure_mode: 'structured', metadata_enabled: true, debug_metadata: false };
+    let settingsState = { output_root: '', structure_mode: 'flat', metadata_enabled: true, debug_metadata: false };
     let defaultOutputPath = '';
     updateStartButton();
     function updateStartButton(){
@@ -293,9 +293,9 @@
         defaultOutputPath = defaultOutputPath || settingsState.output_root;
       }
       if(structureCheck && structurelessCheck){
-        const structured = settingsState.structure_mode !== 'flat';
-        structureCheck.checked = structured;
-        structurelessCheck.checked = !structured;
+          const structured = settingsState.structure_mode === 'structured';
+          structureCheck.checked = structured;
+          structurelessCheck.checked = !structured;
       }
       if(metadataCheck){
         metadataCheck.checked = !!settingsState.metadata_enabled;
@@ -659,7 +659,7 @@
       const smooth = makeProgressSmoother(bar);
       const initOverall = Math.max(0, Math.min(100, task.pct || 0));
       smooth.setImmediate(initOverall);
-      if(task.pct >= 100){
+      if(task.stage === 'done'){
         st.classList.add('hidden');
         dl.classList.add('show');
         dl.title = 'open folder';
@@ -698,6 +698,13 @@
         st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
         smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
+      }
+      if(task.stage !== 'done' && dl && !isProcessing(task)){
+        dl.classList.add('show');
+        dl.title = 'retry';
+        dl.innerHTML = '';
+        setRerunIcon(dl);
+        dl.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
       }
       setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
@@ -926,7 +933,16 @@
       setTimeout(() => card.remove(), 3000);
     }
 
-    function showModelsPopup(onCancel){
+    async function showModelsPopup(onCancel){
+      try{
+        const res = await fetch('/models_status');
+        if(res.ok){
+          const data = await res.json();
+          if(Array.isArray(data.missing) && data.missing.length === 0){
+            return;
+          }
+        }
+      }catch(_){}
       const declined = localStorage.getItem('declinedModels');
       const msg = declined ? "you didn't put the models in :(" : 'models not found! would you like me to download them?';
       const yes = declined ? 'download' : 'yes please';
@@ -1242,6 +1258,9 @@
             } else {
               smooth.setTarget(sp);
             }
+            if(stage !== 'done' && dl){
+              dl.classList.remove('show');
+            }
           } else {
             st.textContent = 'queued';
           }
@@ -1313,7 +1332,7 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
-          <div class="text-sm opacity-80">output folder</div>
+          <div class="text-sm opacity-80">output folder (leave blank for Downloads folder)</div>
           <div class="flex items-center gap-2">
             <input id="output-path" type="text" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40" readonly value="">
             <button id="output-choose" class="p-2 rounded-lg hover:bg-white/10 border border-white/10" title="choose folder">
@@ -1325,42 +1344,51 @@
           </div>
           <div class="flex gap-4 text-sm">
             <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" type="checkbox" class="pretty">folder structure</label>
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" type="checkbox" class="pretty">structureless</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" type="checkbox" class="pretty">structureless (zip)</label>
           </div>
         </div>
 
-        <div class="space-y-2">
-          <div class="flex items-center gap-2">
-            <input id="metadata-check" type="checkbox" class="pretty" checked>
-            <span>embed metadata</span>
+        <div class="border-t border-white/10 my-4"></div>
+
+        <div class="space-y-3">
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 text-[var(--txt-main)]">
+              <input id="metadata-check" type="checkbox" class="pretty" checked>
+              <span>embed metadata</span>
+            </label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)]">
+              <input id="debug-metadata-check" type="checkbox" class="pretty">
+              <span>debug metadata</span>
+            </label>
           </div>
-          <details id="metadata-details" class="ml-6 glass-light rounded-lg px-3 py-2 text-xs text-[var(--txt-main)]/90">
-            <summary class="cursor-pointer select-none">included</summary>
+          <details id="metadata-details" class="ml-2 glass-light rounded-lg px-3 py-2 text-xs text-[var(--txt-main)]/90">
+            <summary class="cursor-pointer select-none">example</summary>
             <ul class="list-disc ml-4 mt-2 space-y-1">
               <li>Software: Stemsplat</li>
               <li>SoftwareVersion: app version</li>
               <li>Model: model file</li>
+              <li class="mt-2">- Debug metadata -</li>
+              <li>Chunks</li>
+              <li>Overlap</li>
+              <li>TimetoProcess</li>
+              <li>ProcessedDate</li>
             </ul>
           </details>
-          <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="debug-metadata-check" type="checkbox" class="pretty">debug metadata</label>
-          <div class="ml-6 text-xs opacity-70 space-y-1">
-            <div>Chunks</div>
-            <div>Overlap</div>
-            <div>TimetoProcess</div>
-            <div>ProcessedDate</div>
-          </div>
         </div>
+
+        <div class="border-t border-white/10 my-4"></div>
 
         <div class="flex flex-col gap-3">
           <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs" style="border-radius:12px;">force clear</button>
           <div class="text-xs opacity-60">Stops all processing, removes all items, and clears uploaded files.</div>
         </div>
+        <div class="border-t border-white/10 my-4"></div>
+
         <div class="flex gap-3 mt-3">
           <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
           <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
-          <a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">becruily models</a>
         </div>
-        <div class="text-xs opacity-70 text-center">models by becruily</div>
+        <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
       <div class="mt-6 text-center opacity-70 text-sm">v0.1</div>
