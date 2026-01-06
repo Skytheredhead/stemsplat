@@ -283,8 +283,8 @@
         await Promise.allSettled(tasks);
       };
       const closeWindow = () => {
-        try { window.close(); } catch(_) {}
-        setTimeout(() => { window.location.replace('about:blank'); }, 140);
+        try { window.open('','_self'); window.close(); } catch(_) {}
+        window.location.replace('about:blank');
       };
       closeBtn.addEventListener('click', async () => {
         closeBtn.disabled = true;
@@ -591,7 +591,11 @@
     }
     // processing-state helper
     function isProcessing(t){
-      return t && t.pct >= 0 && t.pct < 100 && t.stage !== 'stopped';
+      if(!t) return false;
+      const stage = (t.stage || '').toLowerCase();
+      const inactive = ['ready','queued','done','stopped','error'];
+      if(inactive.includes(stage)) return false;
+      return typeof t.pct === 'number' ? (t.pct >= 0 && t.pct < 100) : true;
     }
     
     function updateClear(){
@@ -633,7 +637,7 @@
       if(full){
         const now = Date.now();
         if(!enforceCapacity._lastNotice || now - enforceCapacity._lastNotice > 8000){
-          showPopup('maximum number of songs reached! Please hit the clear all button');
+          showPopup('maximum number of songs reached! Please clear all to upload more songs');
           enforceCapacity._lastNotice = now;
         }
       }
@@ -731,16 +735,14 @@
       svg.classList.add('w-7','h-7');
       svg.setAttribute('fill','none');
       svg.setAttribute('stroke','#0F2027');
-      svg.setAttribute('stroke-width','2');
+      svg.setAttribute('stroke-width','2.4');
       svg.setAttribute('stroke-linecap','round');
       svg.setAttribute('stroke-linejoin','round');
-      const arc = document.createElementNS(NS,'path');
-      arc.setAttribute('d','M4 12a8 8 0 1 1 4.5 7.2');
-      const arrow = document.createElementNS(NS,'path');
-      arrow.setAttribute('d','M4 12V6m0 0h6');
-      const spark = document.createElementNS(NS,'path');
-      spark.setAttribute('d','M14.5 5.5l2-2m0 0v4m0-4h-4');
-      svg.append(arc, arrow, spark);
+      const chevron1 = document.createElementNS(NS,'path');
+      chevron1.setAttribute('d','M13.5 6l-6 6 6 6');
+      const chevron2 = document.createElementNS(NS,'path');
+      chevron2.setAttribute('d','M18 6l-6 6 6 6');
+      svg.append(chevron1, chevron2);
       stopPad.appendChild(svg);
     }
 
@@ -923,13 +925,17 @@
       });
     }
 
-    guardClick(clearBtn, () => {
+    guardClick(clearBtn, async () => {
       const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
-      if(hasRunning && !confirm('A process is still running. Clear all anyway?')) return;
+      if(hasRunning){
+        const ok = await showConfirm('A process is still running. Clear all anyway?');
+        if(!ok) return;
+      }
       if (!startPressed) {
         return withPageFade(() => {
           for (const el of Array.from(queue.children)) { el.remove(); }
           tasks = [];
+          pendingItems.length = 0;
           saveTasks();
           try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
           updateUI();
@@ -955,6 +961,7 @@
             if(id && clearable.has(id)) el.remove();
           }
           tasks = tasks.filter(t => !clearable.has(t.id));
+          pendingItems.length = 0;
           saveTasks();
           fetch('/clear_all_uploads', {method:'POST'});
           updateUI();
@@ -1002,6 +1009,7 @@
           // remove all UI items and reset local state
           for(const el of Array.from(queue.children)){ el.remove(); }
           tasks = [];
+          pendingItems.length = 0;
           saveTasks();
           updateUI();
           closeSettings();
@@ -1086,6 +1094,33 @@
       setTimeout(() => card.remove(), 3000);
     }
 
+    function showConfirm(msg){
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+        overlay.innerHTML = `
+          <div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)] max-w-sm w-11/12">
+            <p class="text-center">${msg}</p>
+            <div class="flex justify-center gap-3">
+              <button id="cfm-cancel" class="px-3 py-1 bg-gray-600 rounded">cancel</button>
+              <button id="cfm-ok" class="px-3 py-1 bg-[var(--accent)] text-black rounded">ok</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const ok = overlay.querySelector('#cfm-ok');
+        const cancel = overlay.querySelector('#cfm-cancel');
+        const done = (val) => { overlay.remove(); resolve(val); };
+        ok.onclick = () => done(true);
+        cancel.onclick = () => done(false);
+        overlay.addEventListener('keydown', (e) => {
+          if(e.key === 'Escape') done(false);
+          if(e.key === 'Enter') done(true);
+        });
+        overlay.tabIndex = 0;
+        overlay.focus();
+      });
+    }
+
     async function showModelsPopup(onCancel){
       try{
         const res = await fetch('/models_status');
@@ -1152,7 +1187,7 @@
       const existingCount = tasks.filter(Boolean).length;
       let availableSlots = Math.max(0, MAX_TASKS - existingCount);
       if(availableSlots <= 0){
-        showPopup('maximum number of songs reached! Please hit the clear all button');
+        showPopup('maximum number of songs reached! Please clear all to upload more songs');
         return;
       }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
@@ -1214,7 +1249,7 @@
       if (fileInput) fileInput.value = '';
 
       if (files.length > newPending.length) {
-        showPopup('maximum number of songs reached! Please hit the clear all button');
+        showPopup('maximum number of songs reached! Please clear all to upload more songs');
       }
 
       if(newPending.length && stems.length === 0){
