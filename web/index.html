@@ -234,7 +234,6 @@
     const outputChoose = document.getElementById('output-choose');
     const structureCheck = document.getElementById('structure-check');
     const structurelessCheck = document.getElementById('structureless-check');
-    const metadataCheck = document.getElementById('metadata-check');
 
     let startPressed = false;
     let startGeneration = 0;
@@ -294,9 +293,6 @@
           const structured = settingsState.structure_mode === 'structured';
           structureCheck.checked = structured;
           structurelessCheck.checked = !structured;
-      }
-      if(metadataCheck){
-        metadataCheck.checked = true;
       }
     }
 
@@ -866,16 +862,6 @@
           persistSettings({ structure_mode: 'flat' });
         });
       }
-      if(metadataCheck){
-        metadataCheck.addEventListener('change', () => {
-          persistSettings({ metadata_enabled: metadataCheck.checked });
-        });
-      }
-      if(debugMetadataCheck){
-        debugMetadataCheck.addEventListener('change', () => {
-          persistSettings({ debug_metadata: debugMetadataCheck.checked });
-        });
-      }
     });
 
     // drag-and-drop highlights
@@ -1341,23 +1327,6 @@
             <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" type="checkbox" class="pretty">folder structure</label>
             <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" type="checkbox" class="pretty" checked>structureless (zip)</label>
           </div>
-        </div>
-
-        <div class="border-t border-white/10 my-4"></div>
-
-        <div class="space-y-3">
-          <div class="flex items-center gap-4">
-            <label class="flex items-center gap-2 text-[var(--txt-main)]">
-              <input id="metadata-check" type="checkbox" class="pretty" checked disabled>
-              <span>embed model info</span>
-            </label>
-          </div>
-          <details id="metadata-details" class="ml-2 glass-light rounded-lg px-3 py-2 text-xs text-[var(--txt-main)]/90">
-            <summary class="cursor-pointer select-none">example</summary>
-            <ul class="list-disc ml-4 mt-2 space-y-1">
-              <li>Model: model file</li>
-            </ul>
-          </details>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>

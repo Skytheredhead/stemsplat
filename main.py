@@ -161,6 +161,20 @@ def ensure_unique_dir(path: Path) -> Path:
         counter += 1
 
 
+def _locate_case_insensitive(path: Path) -> Path | None:
+    """Return a filesystem entry matching ``path`` regardless of case."""
+    if path.exists():
+        return path
+    parent = path.parent
+    if not parent.exists():
+        return None
+    target_lower = path.name.lower()
+    for candidate in parent.iterdir():
+        if candidate.name.lower() == target_lower:
+            return candidate
+    return None
+
+
 @dataclass
 class UserSettings:
     output_root: Path = DEFAULT_OUTPUT_ROOT
@@ -349,28 +363,21 @@ class ModelManager:
         self.model_cache: dict[str, StemModel] = {}
 
     def _resolve_path(self, filename: str) -> Path:
-        preferred = MODEL_DIR / filename
-        if preferred.exists():
-            return preferred
-        fallback = Path.home() / "Library/Application Support/stems" / filename
-        if fallback.exists():
-            return fallback
-        aliases = MODEL_ALIAS_MAP.get(filename, [])
-        for alt in aliases:
-            cand = MODEL_DIR / alt
-            if cand.exists():
-                return cand
-            cand_fb = Path.home() / "Library/Application Support/stems" / alt
-            if cand_fb.exists():
-                return cand_fb
+        search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+        search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
+        for name in search_names:
+            for base in search_dirs:
+                match = _locate_case_insensitive(base / name)
+                if match:
+                    return match
         raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
 
     def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
         if not filename:
             return None
-        cand = CONFIG_DIR / filename
-        if cand.exists():
-            return cand
+        found = _locate_case_insensitive(CONFIG_DIR / filename)
+        if found:
+            return found
         raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
     def _load_model(self, name: str) -> StemModel:
@@ -982,7 +989,11 @@ def _write_wave(
     out_dir.mkdir(parents=True, exist_ok=True)
     candidate = ensure_unique_path(out_dir / fname)
     logger.info("writing stem %s to %s", candidate.name, candidate.parent)
-    sf.write(candidate, tensor.T.cpu().numpy(), 44100)
+    data = tensor.detach().cpu()
+    if not torch.isfinite(data).all():
+        data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+    data = torch.clamp(data.float(), -1.0, 1.0)
+    sf.write(candidate, data.T.contiguous().numpy(), 44100, subtype="PCM_16")
     return candidate
 
 
@@ -1437,20 +1448,12 @@ def _model_exists(filename: str) -> bool:
         if filename in alias_list:
             names.add(canon)
             names.update(alias_list)
-
-    def _casefold_exists(path: Path) -> bool:
-        if path.exists():
-            return True
-        if not path.parent.exists():
-            return False
-        target_lower = path.name.lower()
-        return any(p.name.lower() == target_lower for p in path.parent.iterdir())
-
-    targets = []
     for name in names:
-        targets.append(MODEL_DIR / name)
-        targets.append(Path.home() / "Library/Application Support/stems" / name)
-    return any(_casefold_exists(path) for path in targets)
+        if _locate_case_insensitive(MODEL_DIR / name):
+            return True
+        if _locate_case_insensitive(Path.home() / "Library/Application Support/stems" / name):
+            return True
+    return False
 
 
 @app.get("/models_status")
