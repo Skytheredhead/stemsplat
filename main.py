@@ -19,11 +19,15 @@ import os
 import queue
 import shutil
 import socket
+import subprocess
 import tempfile
 import threading
 import time
 import uuid
 import zipfile
+import sys
+from datetime import datetime
+import math
 
 import torch
 import soundfile as sf
@@ -46,7 +50,6 @@ except Exception as _exc:  # pragma: no cover - capture import issues for error 
     _load_roformer = None  # type: ignore
     split_main = None  # type: ignore
     _import_error = _exc
-
 
 class ErrorCode(str, Enum):
     TORCH_MISSING = "E001"
@@ -116,6 +119,104 @@ for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 
 # Silence extremely noisy multipart debug logs
 logging.getLogger("python_multipart").setLevel(logging.INFO)
+
+DEFAULT_OUTPUT_ROOT = (Path.home() / "Downloads" / "stemsplat").expanduser()
+MODEL_FILE_MAP = {
+    "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "Mel Band Roformer Vocals Config.yaml"),
+    "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
+    "deux": ("becruily_deux.ckpt", "config_deux_becruily.yaml"),
+    "drums": ("kuielab_a_drums.onnx", None),
+    "bass": ("kuielab_a_bass.onnx", None),
+    "other": ("kuielab_a_other.onnx", None),
+    "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
+    "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
+}
+
+
+def _ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ensure_unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    counter = 2
+    stem, suffix = path.stem, path.suffix
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def ensure_unique_dir(path: Path) -> Path:
+    if not path.exists():
+        return path
+    counter = 2
+    while True:
+        candidate = path.with_name(f"{path.name}_{counter}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+@dataclass
+class UserSettings:
+    output_root: Path = DEFAULT_OUTPUT_ROOT
+    structure_mode: str = "flat"  # structured|flat
+
+    def as_dict(self) -> dict[str, str | bool]:
+        return {
+            "output_root": str(self.output_root),
+            "structure_mode": self.structure_mode,
+        }
+
+    def resolve_output_dir(self, base_name: str) -> Path:
+        root = self.output_root.expanduser()
+        if not root.exists():
+            raise AppError(ErrorCode.INVALID_REQUEST, "output root missing")
+        target = root if self.structure_mode == "flat" else ensure_unique_dir(root / base_name)
+        return _ensure_dir(target)
+
+    def update(
+        self,
+        *,
+        output_root: Optional[str] = None,
+        structure_mode: Optional[str] = None,
+    ) -> None:
+        if output_root is not None:
+            candidate = Path(output_root).expanduser()
+            if not candidate.exists():
+                raise AppError(ErrorCode.INVALID_REQUEST, "folder does not exist")
+            self.output_root = candidate
+        if structure_mode in {"structured", "flat"}:
+            self.structure_mode = structure_mode
+
+
+settings = UserSettings()
+_ensure_dir(settings.output_root)
+
+
+def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> dict[str, Path | str | None]:
+    base_name = Path(info.get("orig_name") or info.get("conv_src", "stems")).stem
+    mode = structure_mode or settings.structure_mode
+    try:
+        _ensure_dir(settings.output_root)
+    except Exception:
+        pass
+    root = settings.output_root
+    if mode == "structured":
+        deliver_dir = settings.resolve_output_dir(base_name) / "stems"
+        staging_dir = deliver_dir
+        zip_target = None
+    else:
+        flat_root = root.parent if root.name == "stemsplat" else root
+        staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        deliver_dir = flat_root
+        zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
+    return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": mode}
 
 MODEL_URLS = [
     (
@@ -244,16 +345,7 @@ class StemModel:
 class ModelManager:
     def __init__(self):
         self.device = select_device()
-        self.model_info = {
-            "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "Mel Band Roformer Vocals Config.yaml"),
-            "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
-            "deux": ("becruily_deux.ckpt", "config_deux_becruily.yaml"),
-            "drums": ("kuielab_a_drums.onnx", None),
-            "bass": ("kuielab_a_bass.onnx", None),
-            "other": ("kuielab_a_other.onnx", None),
-            "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
-            "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
-        }
+        self.model_info = dict(MODEL_FILE_MAP)
         self.model_cache: dict[str, StemModel] = {}
 
     def _resolve_path(self, filename: str) -> Path:
@@ -760,13 +852,28 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
 
     def cb(stage: str, pct: int):
         while pause_evt.is_set():
-            progress[task_id] = {"stage": "paused", "pct": pct}
+            progress[task_id] = {
+                "stage": "paused",
+                "pct": pct,
+                "stems": tasks.get(task_id, {}).get("stems"),
+                "out_dir": tasks.get(task_id, {}).get("dir"),
+            }
             time.sleep(0.5)
         if stop_evt.is_set():
-            progress[task_id] = {"stage": "stopped", "pct": 0}
+            progress[task_id] = {
+                "stage": "stopped",
+                "pct": 0,
+                "stems": tasks.get(task_id, {}).get("stems"),
+                "out_dir": tasks.get(task_id, {}).get("dir"),
+            }
             raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
         logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
-        progress[task_id] = {"stage": stage, "pct": pct}
+        progress[task_id] = {
+            "stage": stage,
+            "pct": pct,
+            "stems": tasks.get(task_id, {}).get("stems"),
+            "out_dir": tasks.get(task_id, {}).get("dir"),
+        }
 
     def run() -> None:
         try:
@@ -775,43 +882,69 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             cb("preparing", 0)
             cb("prepare.complete", 1)
             audio_path = conv_path
-            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
+            plan_mode = tasks.get(task_id, {}).get("structure_mode", settings.structure_mode)
+            staging_dir = Path(tasks.get(task_id, {}).get("staging_dir") or out_dir)
+            deliver_dir = Path(tasks.get(task_id, {}).get("dir") or out_dir)
+            zip_target = tasks.get(task_id, {}).get("zip_target")
+            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir)
 
-            zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
-            cb("zip.start", 99)
-            try:
-                with zipfile.ZipFile(zip_path, "w") as zf:
-                    for name in stems_out:
-                        fp = out_dir / name
-                        if fp.exists():
-                            zf.write(fp, arcname=name)
-                            logger.debug("added %s to %s", fp, zip_path)
-                        else:
-                            logger.warning("expected stem %s missing at %s", name, fp)
-            except Exception as exc:
-                raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-            cb("zip.done", 99)
-            tasks[task_id]["zip"] = zip_path
+            zip_path: Path | None = None
+            if plan_mode != "structured":
+                zip_path = ensure_unique_path(Path(zip_target) if zip_target else deliver_dir / f"{audio_path.stem}.zip")
+                cb("zip.start", 99)
+                try:
+                    with zipfile.ZipFile(zip_path, "w") as zf:
+                        for name in stems_out:
+                            fp = staging_dir / name
+                            if fp.exists():
+                                zf.write(fp, arcname=name)
+                                logger.debug("added %s to %s", fp, zip_path)
+                            else:
+                                logger.warning("expected stem %s missing at %s", name, fp)
+                except Exception as exc:
+                    raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
+                cb("zip.done", 99)
+                try:
+                    if staging_dir.exists():
+                        shutil.rmtree(staging_dir)
+                except Exception:
+                    logger.debug("failed to clean staging dir %s", staging_dir, exc_info=True)
+                tasks[task_id]["zip"] = zip_path
+                deliver_dir = zip_path.parent
+            else:
+                tasks[task_id]["zip"] = None
+
             tasks[task_id]["stems"] = stems_out
+            tasks[task_id]["dir"] = str(deliver_dir)
             cb("finalizing", 99)
-            progress[task_id] = {"stage": "done", "pct": 100}
+            progress[task_id] = {"stage": "done", "pct": 100, "stems": stems_out, "out_dir": str(deliver_dir)}
             tasks[task_id]["status"] = "done"
             logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
         except AppError as exc:
-            progress[task_id] = {"stage": "error", "pct": -1}
+            progress[task_id] = {
+                "stage": "error",
+                "pct": -1,
+                "stems": tasks.get(task_id, {}).get("stems"),
+                "out_dir": tasks.get(task_id, {}).get("dir"),
+            }
             errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
             tasks[task_id]["status"] = "error"
             logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
             logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
         except Exception as exc:  # pragma: no cover - safety net
             logging.exception("processing failed")
-            progress[task_id] = {"stage": "error", "pct": -1}
+            progress[task_id] = {
+                "stage": "error",
+                "pct": -1,
+                "stems": tasks.get(task_id, {}).get("stems"),
+                "out_dir": tasks.get(task_id, {}).get("dir"),
+            }
             errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
             tasks[task_id]["status"] = "error"
             logger.exception("task %s crashed", task_id)
 
     tasks[task_id]["status"] = "queued"
-    progress[task_id] = {"stage": "queued", "pct": 0}
+    progress[task_id] = {"stage": "queued", "pct": 0, "stems": tasks.get(task_id, {}).get("stems"), "out_dir": tasks.get(task_id, {}).get("dir")}
     process_queue.put(run)
 
 
@@ -841,10 +974,16 @@ def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
     return converted
 
 
-def _write_wave(out_dir: Path, fname: str, tensor: torch.Tensor, sr: int = 44100) -> None:
+def _write_wave(
+    out_dir: Path,
+    fname: str,
+    tensor: torch.Tensor,
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("writing stem %s to %s", fname, out_dir)
-    sf.write(out_dir / fname, tensor.T.cpu().numpy(), sr)
+    candidate = ensure_unique_path(out_dir / fname)
+    logger.info("writing stem %s to %s", candidate.name, candidate.parent)
+    sf.write(candidate, tensor.T.cpu().numpy(), 44100)
+    return candidate
 
 
 def _separate_waveform(
@@ -860,6 +999,8 @@ def _separate_waveform(
 
     stems_out: list[str] = []
     remaining_stems = [s for s in stem_list if s != "deux"]
+    processing_started_at = time.time()
+    chunk_count = math.ceil(waveform.shape[1] / max(1, SEGMENT - OVERLAP))
 
     def ensure_stereo(x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 1:
@@ -886,11 +1027,11 @@ def _separate_waveform(
         voc_d, inst_d = manager.split_pair_with_model(deux_model, deux_wave, DEUX_SEGMENT, OVERLAP, progress_cb=_cb)
         fname_v = f"{audio_path.stem} - vocals (deux).wav"
         fname_i = f"{audio_path.stem} - instrumental (deux).wav"
-        _write_wave(out_dir, fname_v, voc_d)
+        path_v = _write_wave(out_dir, fname_v, voc_d)
         cb("write.vocals_deux", 97)
-        _write_wave(out_dir, fname_i, inst_d)
+        path_i = _write_wave(out_dir, fname_i, inst_d)
         cb("write.instrumental_deux", 98)
-        stems_out.extend([fname_v, fname_i])
+        stems_out.extend([path_v.name, path_i.name])
 
     channel_count = waveform.shape[0]
     channel_specs: list[tuple[int, str, int, int]] = []
@@ -1080,8 +1221,8 @@ def _separate_waveform(
                 continue
             combined = torch.cat(tensors, dim=0)
             fname = f"{audio_path.stem} - {stem_name}.wav"
-            _write_wave(out_dir, fname, combined)
-            stems_out.append(fname)
+            written = _write_wave(out_dir, fname, combined)
+            stems_out.append(written.name)
             cb(f"write.{stem_name}", 98)
 
     cb("merge.done", 99)
@@ -1123,7 +1264,6 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         conv_size = "unknown"
     logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
 
-    out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
     expected: list[str] = []
     for s in stem_list:
         if s == "deux":
@@ -1134,13 +1274,17 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     progress[task_id] = {"stage": "ready", "pct": 0}
     tasks[task_id] = {
-        "dir": out_dir,
+        "dir": None,
         "stems": expected,
         "controls": controls[task_id],
         "conv_src": str(conv_path),
         "orig_src": str(path),
+        "orig_name": file.filename,
         "stem_list": stem_list,
         "status": "ready",
+        "structure_mode": settings.structure_mode,
+        "staging_dir": None,
+        "zip_target": None,
     }
     return {"task_id": task_id, "stems": expected, "status": "ready"}
 
@@ -1155,10 +1299,15 @@ async def start_task(task_id: str):
     conv_src = Path(info.get("conv_src", ""))
     if not conv_src.exists():
         raise AppError(ErrorCode.UPLOAD_FAILED, "Converted source missing; please re-upload.").to_http()
-    out_dir = Path(info.get("dir", conv_src.parent / f"{conv_src.stem}—stems"))
+    plan = resolve_output_plan(info, structure_mode=settings.structure_mode)
+    out_dir = plan["staging_dir"] or plan["deliver_dir"]
+    tasks[task_id]["dir"] = str(plan["deliver_dir"])
+    tasks[task_id]["structure_mode"] = plan["structure_mode"]
+    tasks[task_id]["staging_dir"] = str(plan["staging_dir"])
+    tasks[task_id]["zip_target"] = str(plan["zip_target"]) if plan.get("zip_target") else None
     stem_list = info.get("stem_list") or []
     logger.info("starting task %s on demand", task_id)
-    _queue_processing(task_id, conv_src, out_dir, stem_list)
+    _queue_processing(task_id, conv_src, Path(out_dir), stem_list)
     return {"task_id": task_id, "status": "queued"}
 
 
@@ -1171,11 +1320,18 @@ async def progress_stream(task_id: str):
             current = (info["stage"], info["pct"])
             if current != last:
                 if info.get("stage") == "stopped":
-                    yield {"event": "message", "data": json.dumps({"stage": "stopped", "pct": 0})}
+                    payload = {"stage": "stopped", "pct": 0, "stems": info.get("stems"), "out_dir": info.get("out_dir")}
+                    yield {"event": "message", "data": json.dumps(payload)}
                 elif info.get("pct", 0) < 0:
                     yield {"event": "error", "data": errors.get(task_id, "processing failed")}
                 else:
-                    yield {"event": "message", "data": json.dumps({"stage": info["stage"], "pct": info["pct"]})}
+                    payload = {
+                        "stage": info["stage"],
+                        "pct": info["pct"],
+                        "stems": info.get("stems"),
+                        "out_dir": info.get("out_dir"),
+                    }
+                    yield {"event": "message", "data": json.dumps(payload)}
                 last = current
                 if info.get("stage") == "stopped" or info.get("pct", 0) >= 100 or info.get("pct", 0) < 0:
                     break
@@ -1197,8 +1353,8 @@ async def rerun(task_id: str):
 
     new_id = str(uuid.uuid4())
     controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
-    conv_dir = conv_src.parent
-    out_dir = conv_dir / f"{conv_src.stem}—stems"
+    plan = resolve_output_plan(old, structure_mode=settings.structure_mode)
+    out_dir = plan["staging_dir"] or plan["deliver_dir"]
     expected: list[str] = []
     for s in stem_list:
         if s == "deux":
@@ -1209,17 +1365,101 @@ async def rerun(task_id: str):
 
     progress[new_id] = {"stage": "queued", "pct": 0}
     tasks[new_id] = {
-        "dir": out_dir,
+        "dir": str(plan["deliver_dir"]),
         "stems": expected,
         "controls": controls[new_id],
         "conv_src": str(conv_src),
         "orig_src": old.get("orig_src"),
+        "orig_name": old.get("orig_name"),
         "stem_list": stem_list,
         "zip": old.get("zip"),
         "status": "queued",
+        "structure_mode": plan["structure_mode"],
+        "staging_dir": str(plan["staging_dir"]),
+        "zip_target": str(plan["zip_target"]) if plan.get("zip_target") else None,
     }
-    _queue_processing(new_id, conv_src, out_dir, stem_list)
+    _queue_processing(new_id, conv_src, Path(out_dir), stem_list)
     return {"task_id": new_id, "stems": expected}
+
+
+@app.get("/settings")
+async def get_settings():
+    return settings.as_dict()
+
+
+@app.post("/settings")
+async def update_settings(request: Request):
+    payload = await request.json()
+    output_root = payload.get("output_root")
+    structure_mode = payload.get("structure_mode")
+    try:
+        settings.update(
+            output_root=output_root,
+            structure_mode=structure_mode,
+        )
+    except AppError as exc:
+        settings.output_root = DEFAULT_OUTPUT_ROOT
+        _ensure_dir(DEFAULT_OUTPUT_ROOT)
+        logger.warning("invalid settings update, resetting output root to default: %s", exc.message)
+        raise AppError(exc.code, "folder doesn't exist").to_http(400)
+    _ensure_dir(settings.output_root)
+    return settings.as_dict()
+
+
+@app.post("/reveal/{task_id}")
+async def reveal_output(task_id: str):
+    info = tasks.get(task_id)
+    if not info:
+        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
+    out_dir = info.get("dir")
+    if not out_dir:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output not ready").to_http(409)
+    out_path = Path(out_dir)
+    if not out_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output path missing").to_http(404)
+    try:
+        if sys.platform.startswith("darwin"):
+            subprocess.Popen(["open", str(out_path)])
+        elif sys.platform.startswith("win"):
+            os.startfile(str(out_path))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(out_path)])
+    except Exception as exc:
+        logger.warning("failed to reveal folder %s: %s", out_path, exc)
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unable to open folder").to_http(500)
+    return {"status": "opened", "path": str(out_path)}
+
+
+def _model_exists(filename: str) -> bool:
+    names: set[str] = {filename}
+    names.update(MODEL_ALIAS_MAP.get(filename, []))
+    for canon, alias_list in MODEL_ALIAS_MAP.items():
+        if filename in alias_list:
+            names.add(canon)
+            names.update(alias_list)
+
+    def _casefold_exists(path: Path) -> bool:
+        if path.exists():
+            return True
+        if not path.parent.exists():
+            return False
+        target_lower = path.name.lower()
+        return any(p.name.lower() == target_lower for p in path.parent.iterdir())
+
+    targets = []
+    for name in names:
+        targets.append(MODEL_DIR / name)
+        targets.append(Path.home() / "Library/Application Support/stems" / name)
+    return any(_casefold_exists(path) for path in targets)
+
+
+@app.get("/models_status")
+async def models_status():
+    missing = []
+    for _, (fname, _) in MODEL_FILE_MAP.items():
+        if not _model_exists(fname):
+            missing.append(fname)
+    return {"missing": missing}
 
 
 @app.get("/download/{task_id}")
@@ -1282,6 +1522,13 @@ async def stop_task(task_id: str):
 async def index():
     html_path = BASE_DIR / "web" / "index.html"
     return HTMLResponse(html_path.read_text())
+
+@app.get("/favicon.ico")
+async def favicon():
+    icon_path = BASE_DIR / "web" / "favicon.ico"
+    if icon_path.exists():
+        return FileResponse(icon_path, media_type="image/x-icon")
+    raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
 
 
 @app.api_route("/shutdown", methods=["POST", "GET"])
