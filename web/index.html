@@ -53,7 +53,7 @@
     .settings-card-in  { animation: settingsCardIn  .28s cubic-bezier(.2,.7,.2,1) both; }
     .settings-card-out { animation: settingsCardOut .18s ease both; }
 
-    body { background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); }
+    body { background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); padding-top:48px; padding-bottom:48px; }
 
     .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none;
       background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
@@ -90,7 +90,8 @@
     input.pretty:checked{ background: linear-gradient(135deg, #96c5d6, #5fa3b5); border-color: transparent; }
     input.pretty:checked::after{ content:""; width:6px; height:10px; border:2px solid #0F2027; border-top:0; border-left:0; transform: rotate(45deg); }
 
-    #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:40px; background:linear-gradient(to bottom,rgba(0,0,0,.45),transparent); opacity:0; transition:opacity .3s; }
+    #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:48px; background:linear-gradient(to bottom,rgba(0,0,0,.45),transparent); opacity:0; transition:opacity .25s ease; }
+    #top-vig{ top:0; bottom:auto; transform:none; }
     #bot-vig{ top:auto; bottom:0; transform:rotate(180deg); }
 
     .dl-pad,
@@ -179,7 +180,7 @@
   <div id="queue" class="pre-hide w-11/12 max-w-2xl flex flex-col gap-4"></div>
   <div id="queue-spacer" class="w-11/12 max-w-2xl"></div>
   <button id="clear-btn" class="pre-hide mt-4 text-white underline">clear all</button>
-  <button id="top-btn" class="hidden fixed top-4 right-4 bg-white text-black rounded px-3 py-1">top</button>
+  <div id="queue-bottom-pad" class="w-11/12 max-w-2xl"></div>
   <div id="top-vig"></div>
   <div id="bot-vig"></div>
 
@@ -215,6 +216,14 @@
 
   <script>
     /* helpers */
+    const MAX_TASKS = 50;
+    const STORAGE_WARN_GB = 1;
+    const STORAGE_BLOCK_GB = 0.5;
+    const MEMORY_LIMIT_RATIO = 0.9;
+    const MEMORY_LIMIT_MB = 700;
+    const FIVE_HOURS_SEC = 5 * 60 * 60;
+    const LONG_TRACK_SEC = 15 * 60;
+
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
     const vocalsBox = document.getElementById('vocals-box');
@@ -222,9 +231,9 @@
     const deuxBox   = document.getElementById('deux-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
-    const topBtn    = document.getElementById('top-btn');
     const topVig    = document.getElementById('top-vig');
     const botVig    = document.getElementById('bot-vig');
+    const bottomPad = document.getElementById('queue-bottom-pad');
     const template  = document.getElementById('item-template');
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
@@ -234,6 +243,10 @@
     const outputChoose = null;
     const structureCheck = null;
     const structurelessCheck = null;
+    let storageBlocked = false;
+    let memoryBlocked = false;
+    let lastStorageWarning = 0;
+    let lastMemoryWarning = 0;
 
     let startPressed = false;
     let startGeneration = 0;
@@ -245,7 +258,7 @@
     function updateStartButton(){
       if(!startBtn) return;
       const hasItems = queue.children.length > 0;
-      if(!hasItems || startLock){
+      if(!hasItems || startLock || storageBlocked || memoryBlocked){
         startBtn.disabled = true;
         const icon = startBtn.querySelector('svg');
         if(icon){ icon.style.animation = 'none'; }
@@ -270,8 +283,8 @@
         await Promise.allSettled(tasks);
       };
       const closeWindow = () => {
-        try { window.close(); } catch(_) {}
-        setTimeout(() => { window.location.replace('about:blank'); }, 140);
+        try { window.open('','_self'); window.close(); } catch(_) {}
+        window.location.replace('about:blank');
       };
       closeBtn.addEventListener('click', async () => {
         closeBtn.disabled = true;
@@ -287,6 +300,29 @@
 
     function applySettingsUI(){
       // settings UI disabled; outputs always go to default zip
+    }
+
+    function guardClick(el, handler, cooldown = 600){
+      if(!el || typeof handler !== 'function') return;
+      if(el.__guardedHandler){
+        el.removeEventListener('click', el.__guardedHandler);
+      }
+      let busy = false;
+      const wrapped = async (e) => {
+        if(busy){
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        busy = true;
+        try{
+          await handler(e);
+        }finally{
+          setTimeout(() => { busy = false; }, cooldown);
+        }
+      };
+      el.__guardedHandler = wrapped;
+      el.addEventListener('click', wrapped);
     }
 
     async function loadSettings(){
@@ -324,6 +360,100 @@
         if(showMissingPopup) showPopup("folder doesn't exist");
         await loadSettings();
       }
+    }
+
+    async function checkStorage(){
+      if(!navigator.storage || !navigator.storage.estimate) return true;
+      try{
+        const {usage = 0, quota = 0} = await navigator.storage.estimate();
+        const free = Math.max(0, quota - usage);
+        const freeGb = free / (1024 ** 3);
+        if(freeGb < STORAGE_BLOCK_GB){
+          storageBlocked = true;
+          showPopup('storage critically low (<0.5 GB). uploads are blocked');
+          updateStartButton();
+          return false;
+        }
+        if(freeGb < STORAGE_WARN_GB){
+          const now = Date.now();
+          if(now - lastStorageWarning > 10000){
+            showPopup('storage low (<1 GB remaining)');
+            lastStorageWarning = now;
+          }
+        }
+        storageBlocked = false;
+        updateStartButton();
+      }catch(_){}
+      return !storageBlocked;
+    }
+
+    function checkMemory(){
+      const perf = performance || window.performance;
+      const mem = perf && perf.memory;
+      if(!mem) return true;
+      const { jsHeapSizeLimit = 0, usedJSHeapSize = 0 } = mem;
+      const limit = jsHeapSizeLimit ? jsHeapSizeLimit * MEMORY_LIMIT_RATIO : MEMORY_LIMIT_MB * 1024 * 1024;
+      if(usedJSHeapSize > limit){
+        memoryBlocked = true;
+        const now = Date.now();
+        if(now - lastMemoryWarning > 10000){
+          showPopup('memory use is high; uploads paused to prevent leaks');
+          lastMemoryWarning = now;
+        }
+        updateStartButton();
+        return false;
+      }
+      memoryBlocked = false;
+      updateStartButton();
+      return true;
+    }
+
+    function estimateDecodeMb(seconds){
+      // Roughly 0.34 MB/sec for 44.1kHz stereo float
+      return seconds * 0.34;
+    }
+
+    function hasMemoryForDuration(seconds){
+      if(seconds <= LONG_TRACK_SEC) return true;
+      const perf = performance || window.performance;
+      const mem = perf && perf.memory;
+      if(!mem || !mem.jsHeapSizeLimit) return true;
+      const { jsHeapSizeLimit = 0, usedJSHeapSize = 0 } = mem;
+      const freeMb = Math.max(0, jsHeapSizeLimit - usedJSHeapSize) / (1024 * 1024);
+      const needMb = estimateDecodeMb(seconds) * 1.5; // headroom
+      if(freeMb <= needMb){
+        showPopup('song is too long for available memory right now');
+        return false;
+      }
+      return true;
+    }
+
+    function getAudioDuration(file){
+      return new Promise((resolve) => {
+        let url = null;
+        try{
+          const audio = document.createElement('audio');
+          audio.preload = 'metadata';
+          url = URL.createObjectURL(file);
+          const cleanup = () => {
+            if(url){ URL.revokeObjectURL(url); url = null; }
+            audio.removeAttribute('src');
+            audio.load();
+          };
+          const timeout = setTimeout(() => { cleanup(); resolve(-1); }, 3000);
+          audio.onloadedmetadata = () => {
+            clearTimeout(timeout);
+            const d = audio.duration;
+            cleanup();
+            resolve(isFinite(d) ? d : -1);
+          };
+          audio.onerror = () => { clearTimeout(timeout); cleanup(); resolve(-1); };
+          audio.src = url;
+        }catch(_){
+          if(url){ URL.revokeObjectURL(url); }
+          resolve(-1);
+        }
+      });
     }
 
     // settings overlay refs (assigned on load)
@@ -461,7 +591,11 @@
     }
     // processing-state helper
     function isProcessing(t){
-      return t && t.pct >= 0 && t.pct < 100 && t.stage !== 'stopped';
+      if(!t) return false;
+      const stage = (t.stage || '').toLowerCase();
+      const inactive = ['ready','queued','done','stopped','error'];
+      if(inactive.includes(stage)) return false;
+      return typeof t.pct === 'number' ? (t.pct >= 0 && t.pct < 100) : true;
     }
     
     function updateClear(){
@@ -471,8 +605,12 @@
       } else {
         hasClearable = tasks && tasks.some(t => t && (t.stage === 'stopped' || (typeof t.pct === 'number' && t.pct >= 100)));
       }
+      const manyItems = queue.children.length > 6;
       // Reserve fixed vertical space to avoid layout jump whether visible or not
-      spacer.style.height = '32px';
+      spacer.style.height = hasClearable ? '18px' : '12px';
+      if (bottomPad) {
+        bottomPad.style.height = manyItems ? '110px' : '52px';
+      }
       if (hasClearable) {
         clearBtn.classList.add('show');
         clearBtn.style.pointerEvents = 'auto';
@@ -483,15 +621,34 @@
     }
     function updateVigs(){
       const rect = queue.getBoundingClientRect();
+      topVig.style.top = '0px';
+      topVig.style.bottom = 'auto';
+      topVig.style.transform = 'none';
       topVig.style.opacity = window.scrollY > 0 ? '1' : '0';
       botVig.style.opacity = rect.bottom > window.innerHeight ? '1' : '0';
-      if(rect.bottom > window.innerHeight) topBtn.classList.remove('hidden');
-      else topBtn.classList.add('hidden');
     }
+
+    function enforceCapacity(){
+      const total = tasks.filter(Boolean).length;
+      const full = total >= MAX_TASKS;
+      dropzone.classList.toggle('pointer-events-none', full);
+      dropzone.classList.toggle('opacity-60', full);
+      if(fileInput) fileInput.disabled = full;
+      if(full){
+        const now = Date.now();
+        if(!enforceCapacity._lastNotice || now - enforceCapacity._lastNotice > 8000){
+          showPopup('maximum number of songs reached! Please clear all to upload more songs');
+          enforceCapacity._lastNotice = now;
+        }
+      }
+      return full;
+    }
+
     function updateUI(){
       updateClear();
       updateVigs();
       updateStartButton();
+      enforceCapacity();
     }
 
 
@@ -517,8 +674,20 @@
 
     function setStatusVisibility(st, stage){
       if(!st) return;
-      const visible = shouldShowStatus(stage);
+      const visible = stage !== 'done' && shouldShowStatus(stage);
       st.classList.toggle('hidden', !visible);
+    }
+
+    function hideStatus(st){
+      if(!st) return;
+      st.textContent = '';
+      st.classList.add('hidden');
+      st.style.display = 'none';
+    }
+
+    function showStatus(st){
+      if(!st) return;
+      st.style.display = '';
     }
 
     function setStopVisibility(stopPad, stage, forceShow = false){
@@ -538,7 +707,7 @@
 
     function bindFolderButton(btn, taskRef){
       if(!btn || !taskRef) return;
-      btn.onclick = async (e) => {
+      guardClick(btn, async (e) => {
         e.preventDefault();
         if(btn.dataset.busy === '1') return;
         btn.dataset.busy = '1';
@@ -552,27 +721,29 @@
           showPopup('output not ready');
         }
         setTimeout(() => { btn.dataset.busy = ''; }, 250);
-      };
+      });
     }
 
     // --- Helper to set rerun and stop icons ---
     
-    function setRerunIcon(stopPad){
+    function setRetryIcon(stopPad){
       if(!stopPad) return;
       while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
       const NS = 'http://www.w3.org/2000/svg';
-      const ccw = document.createElementNS(NS,'svg');
-      ccw.setAttribute('viewBox','0 0 24 24');
-      ccw.classList.add('w-7','h-7');
-      ccw.setAttribute('fill','none');
-      ccw.setAttribute('stroke','#222');
-      ccw.setAttribute('stroke-width','2');
-      ccw.setAttribute('stroke-linecap','round');
-      ccw.setAttribute('stroke-linejoin','round');
-      const path = document.createElementNS(NS,'path');
-      path.setAttribute('d','M4.93 4.93a10 10 0 1 1-1.41 1.41L1 5v6h6l-2.22-2.22a8 8 0 1 0 1.41-1.41z');
-      ccw.appendChild(path);
-      stopPad.appendChild(ccw);
+      const svg = document.createElementNS(NS,'svg');
+      svg.setAttribute('viewBox','0 0 24 24');
+      svg.classList.add('w-7','h-7');
+      svg.setAttribute('fill','none');
+      svg.setAttribute('stroke','#0F2027');
+      svg.setAttribute('stroke-width','2.4');
+      svg.setAttribute('stroke-linecap','round');
+      svg.setAttribute('stroke-linejoin','round');
+      const chevron1 = document.createElementNS(NS,'path');
+      chevron1.setAttribute('d','M13.5 6l-6 6 6 6');
+      const chevron2 = document.createElementNS(NS,'path');
+      chevron2.setAttribute('d','M18 6l-6 6 6 6');
+      svg.append(chevron1, chevron2);
+      stopPad.appendChild(svg);
     }
 
     function setStopSquareIcon(stopPad){
@@ -606,24 +777,24 @@
       } catch (_) {}
       if (!ok || !newId) {
         // Treat it as a stopped/error card with rerun available
-        if (st) { st.textContent = 'errored'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
+        if (st) { showStatus(st); st.textContent = 'error'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
         const parent = st && st.closest ? st.closest('.card') : null;
         if (parent) parent.classList.add('done');
 
         if (stopPad) {
           stopPad.title = 'rerun';
           stopPad.innerHTML = '';          // prevent double icon
-          setRerunIcon(stopPad);
+          setRetryIcon(stopPad);
           stopPad.style.pointerEvents = '';
           stopPad.style.opacity = '';
-          stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, ui); };
+          guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(task, ui); });
         }
         updateUI();
         showError('rerun failed');
         return;
       }
       // reset visual state
-      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
+      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
       if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
       const card = stopPad && stopPad.closest('.card');
       if(card){ card.classList.remove('done'); }
@@ -635,13 +806,13 @@
         setStopSquareIcon(stopPad);
         stopPad.style.pointerEvents = '';
         stopPad.style.opacity = '';
-        stopPad.onclick = async (e) => {
+        guardClick(stopPad, async (e) => {
           if(stopPad.dataset.busy === '1') return;
           stopPad.dataset.busy = '1';
           e.preventDefault();
           try{ await fetch('/stop/'+task.id,{method:'POST'}); }catch(_){ }
           setTimeout(() => { stopPad.dataset.busy = ''; }, 250);
-        };
+        });
         setStopVisibility(stopPad, 'preparing');
       }
       task.stage = 'preparing';
@@ -672,7 +843,7 @@
       const initOverall = Math.max(0, Math.min(100, task.pct || 0));
       smooth.setImmediate(initOverall);
       if(task.stage === 'done'){
-        st.classList.add('hidden');
+        hideStatus(st);
         dl.classList.add('show');
         dl.title = 'open folder';
         bindFolderButton(dl, task);
@@ -681,32 +852,35 @@
       }
       else if(task.stage === 'stopped'){
         // Treat as finished visually
+        showStatus(st);
         st.classList.add('hidden');
         card.classList.add('done');
         if (stopPad){
           stopPad.style.display = '';
           stopPad.classList.add('show');
           stopPad.innerHTML = '';
-        setRerunIcon(stopPad);
+          setRetryIcon(stopPad);
           stopPad.title = 'rerun';
-          stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
-        }
+        guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
+      }
       }
       else if (task.stage === 'error' || task.pct < 0) {
         // Treat like stopped; keep label visible for context
-        st.textContent = 'errored';
+        showStatus(st);
+        st.textContent = 'error';
         const parent = st.closest('.card'); if (parent) parent.classList.add('done');
         if (stopPad){
           stopPad.style.display = '';
           stopPad.classList.add('show');
           stopPad.title = 'rerun';
           stopPad.innerHTML = '';
-          setRerunIcon(stopPad);
-          stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
-        }
+          setRetryIcon(stopPad);
+        guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
+      }
       }
       else {
-      const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
+        const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
+        showStatus(st);
         st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
         smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
@@ -715,8 +889,8 @@
         dl.classList.add('show');
         dl.title = 'retry';
         dl.innerHTML = '';
-        setRerunIcon(dl);
-        dl.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
+        setRetryIcon(dl);
+        guardClick(dl, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
       }
       setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
@@ -751,13 +925,17 @@
       });
     }
 
-    clearBtn.addEventListener('click', () => {
+    guardClick(clearBtn, async () => {
       const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
-      if(hasRunning && !confirm('A process is still running. Clear all anyway?')) return;
+      if(hasRunning){
+        const ok = await showConfirm('A process is still running. Clear all anyway?');
+        if(!ok) return;
+      }
       if (!startPressed) {
         return withPageFade(() => {
           for (const el of Array.from(queue.children)) { el.remove(); }
           tasks = [];
+          pendingItems.length = 0;
           saveTasks();
           try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
           updateUI();
@@ -783,6 +961,7 @@
             if(id && clearable.has(id)) el.remove();
           }
           tasks = tasks.filter(t => !clearable.has(t.id));
+          pendingItems.length = 0;
           saveTasks();
           fetch('/clear_all_uploads', {method:'POST'});
           updateUI();
@@ -808,8 +987,6 @@
       updateUI();
       window.addEventListener('scroll', updateVigs);
     });
-    topBtn.addEventListener('click', () => window.scrollTo({top:0, behavior:'smooth'}));
-
     // settings button → open overlay
     const settingsBtn = document.getElementById('settings-btn');
     if(settingsBtn){ settingsBtn.addEventListener('click', openSettings); }
@@ -832,13 +1009,19 @@
           // remove all UI items and reset local state
           for(const el of Array.from(queue.children)){ el.remove(); }
           tasks = [];
+          pendingItems.length = 0;
           saveTasks();
           updateUI();
           closeSettings();
           showPopup('all tasks cleared');
         }catch(err){ showError('force clear failed'); }
       });
+      checkStorage();
+      checkMemory();
+      setInterval(checkStorage, 15000);
+      setInterval(checkMemory, 12000);
       loadSettings();
+      persistSettings({ structure_mode: 'flat' }, { showMissingPopup:false });
       if(outputInput){
         // output selection disabled
       }
@@ -911,6 +1094,33 @@
       setTimeout(() => card.remove(), 3000);
     }
 
+    function showConfirm(msg){
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+        overlay.innerHTML = `
+          <div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)] max-w-sm w-11/12">
+            <p class="text-center">${msg}</p>
+            <div class="flex justify-center gap-3">
+              <button id="cfm-cancel" class="px-3 py-1 bg-gray-600 rounded">cancel</button>
+              <button id="cfm-ok" class="px-3 py-1 bg-[var(--accent)] text-black rounded">ok</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const ok = overlay.querySelector('#cfm-ok');
+        const cancel = overlay.querySelector('#cfm-cancel');
+        const done = (val) => { overlay.remove(); resolve(val); };
+        ok.onclick = () => done(true);
+        cancel.onclick = () => done(false);
+        overlay.addEventListener('keydown', (e) => {
+          if(e.key === 'Escape') done(false);
+          if(e.key === 'Enter') done(true);
+        });
+        overlay.tabIndex = 0;
+        overlay.focus();
+      });
+    }
+
     async function showModelsPopup(onCancel){
       try{
         const res = await fetch('/models_status');
@@ -968,14 +1178,41 @@
     }
 
     async function handleFiles(fileList){
+      const storageOk = await checkStorage();
+      const memoryOk = checkMemory();
+      if(!storageOk || !memoryOk){
+        showPopup('cannot add songs until resources are available');
+        return;
+      }
+      const existingCount = tasks.filter(Boolean).length;
+      let availableSlots = Math.max(0, MAX_TASKS - existingCount);
+      if(availableSlots <= 0){
+        showPopup('maximum number of songs reached! Please clear all to upload more songs');
+        return;
+      }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
       const stems = selectedStems();
       const newPending = [];
-      [...fileList].forEach(file => {
+      const files = [...fileList];
+      for(const file of files){
+        if(availableSlots <= 0) break;
         // accept common audio even when type is empty
         const looksAudio = (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
+        if(!looksAudio) continue;
+
+        const duration = await getAudioDuration(file);
+        if(duration > 0){
+          if(duration > FIVE_HOURS_SEC){
+            showPopup('single song limit is 5 hours');
+            continue;
+          }
+          if(duration > LONG_TRACK_SEC && !hasMemoryForDuration(duration)){
+            continue;
+          }
+        }
+
         const tempKey = makeTempKey();
-        if(!looksAudio) return;
+        availableSlots -= 1;
         // build UI row (ready state)
         const frag = template.content.cloneNode(true);
         const item = frag.firstElementChild;
@@ -1008,8 +1245,12 @@
         tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null });
         saveTasks();
         updateUI();
-      });
+      }
       if (fileInput) fileInput.value = '';
+
+      if (files.length > newPending.length) {
+        showPopup('maximum number of songs reached! Please clear all to upload more songs');
+      }
 
       if(newPending.length && stems.length === 0){
         showPopup('please select at least one stem before uploading');
@@ -1042,7 +1283,7 @@
           }
         };
         xhr.onload = () => {
-          if(xhr.status >= 400){ st.textContent = 'errored'; return resolve(); }
+          if(xhr.status >= 400){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'error'; return resolve(); }
           st.classList.remove('chip-dim');
           st.textContent = 'ready';
           smooth.setImmediate(0);
@@ -1051,7 +1292,8 @@
             res = JSON.parse(xhr.responseText || '{}');
             const msg = res.detail && res.detail.message;
             if(msg){
-              st.textContent = 'errored';
+              showStatus(st);
+              st.textContent = 'error';
               st.classList.add('chip-dim');
               if (stopPad) stopPad.style.display = 'none';
               else showError(msg);
@@ -1060,7 +1302,7 @@
           if(res.detail && res.detail.message){
             try{
               const msg = res.detail.message;
-              st.textContent = 'errored'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
+              showStatus(st); st.textContent = 'error'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
               else showError(msg);
             }catch(_){ }
             return resolve();
@@ -1080,7 +1322,7 @@
             stopPad.style.pointerEvents = '';
             stopPad.style.opacity = '';
             stopPad.title = 'stop';
-            stopPad.onclick = async (e) => {
+            guardClick(stopPad, async (e) => {
               if(stopPad.dataset.busy === '1') return;
               stopPad.dataset.busy = '1';
               e.preventDefault();
@@ -1090,7 +1332,7 @@
               t.pct = 0;
               saveTasks();
               // update visuals
-              if(st){ st.textContent = 'stopped'; st.classList.remove('hidden'); }
+              if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
               const parent = st && st.closest('.card');
               if(parent){ parent.classList.add('done'); }
               // swap to rerun icon+handler
@@ -1098,12 +1340,12 @@
                 stopPad.style.pointerEvents = '';
                 stopPad.style.opacity = '';
                 stopPad.title = 'rerun';
-                setRerunIcon(stopPad);
-                stopPad.onclick = (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); };
+                setRetryIcon(stopPad);
+                guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); });
               }
               stopPad.dataset.busy = '';
               updateUI();
-            };
+            });
             setStopVisibility(stopPad, 'ready');
           }
           // start polling
@@ -1113,7 +1355,7 @@
           }
           resolve();
         };
-        xhr.onerror = () => { st.textContent = 'errored'; resolve(); };
+        xhr.onerror = () => { showStatus(st); st.classList.remove('hidden'); st.textContent = 'error'; resolve(); };
         xhr.send(data);
       });
       return pending.uploadPromise;
@@ -1131,6 +1373,12 @@
 
     async function startSequentialProcessing(){
       if(startLock || (startBtn && startBtn.disabled)) return;
+      const storageOk = await checkStorage();
+      const memoryOk = checkMemory();
+      if(!storageOk || !memoryOk){
+        showPopup('cannot start until storage and memory are sufficient');
+        return;
+      }
       startLock = true;
       updateStartButton();
       try{
@@ -1158,7 +1406,7 @@
         updateStartButton();
       }
     }
-    if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);
+    if(startBtn) guardClick(startBtn, startSequentialProcessing);
 
     // --- Progress tracking for uploads (SSE) ---
     function displayStage(stage){
@@ -1171,7 +1419,7 @@
       if(lower.includes('bass')) return 'bass';
       if(lower.includes('other')) return 'other';
       if(lower.includes('guitar')) return 'guitar';
-      if(lower.includes('error')) return 'errored';
+      if(lower.includes('error')) return 'error';
       if(lower.startsWith('prepare')) return 'preparing';
       if(lower.startsWith('load_audio')) return 'loading';
       if(lower.startsWith('write')) return 'finishing';
@@ -1186,7 +1434,9 @@
           let data = null;
           try { data = JSON.parse(ev.data); } catch(_) {}
           if(!data) return;
-          const {stage, pct} = data;
+          const rawStage = data.stage;
+          const stage = rawStage === 'errored' ? 'error' : rawStage;
+          const pct = data.pct;
           if(taskRef){
             taskRef.stage = stage;
             taskRef.pct = pct;
@@ -1199,12 +1449,10 @@
             const parentRow = st.closest('.item-row');
             applyLabels(parentRow ? parentRow.querySelector('.labels') : null, data.stems);
           }
+          if(st){ showStatus(st); }
           if(stage === 'done'){
             smooth.setTarget(100);
-            if(st){
-              st.textContent = '';
-              st.classList.add('hidden');
-            }
+            hideStatus(st);
             if(dl){
               dl.classList.add('show');
               dl.title = 'open folder';
@@ -1217,6 +1465,7 @@
           }
           if (stage === 'stopped') {
             if (taskRef) { taskRef.stage = 'stopped'; taskRef.pct = 0; saveTasks(); }
+            showStatus(st);
             st.textContent = 'stopped';
             st.classList.remove('hidden');
             const parent = st.closest('.card'); if (parent) parent.classList.add('done');
@@ -1225,8 +1474,8 @@
               stopPad.classList.add('show');
               stopPad.title = 'rerun';
               stopPad.innerHTML = '';
-              setRerunIcon(stopPad);
-              stopPad.onclick = (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); };
+              setRetryIcon(stopPad);
+              guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
             }
             dropPendingById(taskId);
             es.close(); updateUI(); return;
@@ -1250,6 +1499,11 @@
           setStopVisibility(stopPad, stage);
         });
         es.addEventListener('error', (ev) => {
+          if (taskRef && taskRef.stage === 'stopped') {
+            es.close();
+            updateUI();
+            return;
+          }
           let errPayload = null;
           let errCode = null;
           let errMsg = null;
@@ -1266,7 +1520,8 @@
             saveTasks();
           }
           if (st) {
-            st.textContent = 'errored';
+            showStatus(st);
+            st.textContent = 'error';
             st.classList.remove('hidden');
           }
           setStatusVisibility(st, 'error');
@@ -1278,11 +1533,11 @@
             stopPad.classList.add('show');
             stopPad.title = 'rerun';
             stopPad.innerHTML = '';
-            setRerunIcon(stopPad);
-            stopPad.onclick = (e) => {
+            setRetryIcon(stopPad);
+            guardClick(stopPad, (e) => {
               e.preventDefault();
               if (taskRef) rerunTask(taskRef, { bar, st, dl, stopPad, smooth });
-            };
+            });
           }
           dropPendingById(taskId);
           es.close();
@@ -1294,7 +1549,8 @@
           updateUI();
         });
               }catch(e){
-        st.textContent = 'errored';
+        showStatus(st);
+        st.textContent = 'error';
         if(taskRef){ taskRef.stage = 'error'; taskRef.pct = -1; saveTasks(); }
         updateUI();
       }
