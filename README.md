@@ -3,7 +3,7 @@ Status: 1/5/26
 
 # stemsplat - DEVELOPER PREVIEW
 
-**MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers you need to ask ChatGPT what they mean. Back when I used UVR, there were too many settings
+**MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers in UVR you need to ask ChatGPT what they mean. Back when I used UVR, there were too many settings
 and the default models provided super mediocre results. I've found [Becruily's models on Huggingface](https://huggingface.co/becruily) to be consistently good, so I'm using
 them for this project.
 
