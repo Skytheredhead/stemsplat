@@ -942,6 +942,7 @@
         for (const el of Array.from(queue.children)) { el.remove(); }
         tasks = [];
         pendingItems.length = 0;
+        startLock = false;
         startPressed = false;
         saveTasks();
         try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
@@ -1402,7 +1403,10 @@
       };
       try{
         const stems = selectedStems();
-        if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+        if(stems.length === 0){
+          showPopup('please select at least one stem');
+          return;
+        }
         startGeneration += 1;
         startPressed = true;
         markedStarted = true;

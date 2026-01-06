@@ -220,6 +220,7 @@ def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> 
     base_name = Path(info.get("orig_name") or info.get("conv_src", "stems")).stem
     root = DEFAULT_OUTPUT_ROOT
     flat_root = root.parent if root.name == "stemsplat" else root
+    _ensure_dir(flat_root)
     staging_dir = Path(tempfile.mkdtemp(prefix="stemsplat_stage_", dir=str(CONVERTED_DIR)))
     deliver_dir = flat_root
     zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
