@@ -912,15 +912,32 @@ def _separate_waveform(
             else:
                 inst_wave = chan_wave
 
+            def _run_stem_model(model: StemModel, wave: torch.Tensor) -> torch.Tensor:
+                """Normalize tensor shape/device for model expectations."""
+                prefer_stereo = getattr(model.net, "stereo", True) if model.net is not None else True
+                if model.expects_waveform:
+                    prepared = ensure_stereo(wave) if prefer_stereo else ensure_mono(wave)
+                    if prepared.dim() == 2:
+                        prepared = prepared.unsqueeze(0)
+                    prepared = prepared.to(model.device)
+                    with torch.no_grad():
+                        pred = model(prepared)
+                    if pred.dim() == 2:
+                        pred = pred[:, None, :]
+                    elif pred.dim() == 3 and pred.shape[1] not in (1, prepared.shape[1]):
+                        pred = pred.permute(1, 0, 2)
+                    pred = pred[..., : prepared.shape[-1]]
+                    if pred.dim() == 3 and pred.shape[0] == 1:
+                        pred = pred[0]
+                    return pred
+                prepared = ensure_stereo(wave).to(model.device)
+                return model(prepared)
+
             if need_instrumental_model:
                 ch("instrumental.start", 84)
                 inst_model = manager.instrumental
-                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-                if inst_model.expects_waveform and getattr(inst_model.net, "stereo", True) is False:
-                    input_wave = ensure_mono(use_wave)
-                else:
-                    input_wave = ensure_stereo(use_wave)
-                inst_pred = inst_model(input_wave)
+                use_wave = inst_wave if inst_wave is not None else chan_wave
+                inst_pred = _run_stem_model(inst_model, use_wave)
                 chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
                 ch("instrumental.done", 90)
 
@@ -929,8 +946,11 @@ def _separate_waveform(
                     continue
                 ch(f"{stem_name}.start", 90)
                 inst_model = getattr(manager, stem_name)
-                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-                pred = inst_model(ensure_stereo(use_wave))
+                use_wave = inst_wave if inst_wave is not None else chan_wave
+                if inst_model.expects_waveform:
+                    pred = _run_stem_model(inst_model, use_wave)
+                else:
+                    pred = inst_model(ensure_stereo(use_wave))
                 chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
                 ch(f"{stem_name}.done", 96)
 
