@@ -290,6 +290,14 @@
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
+          if(Array.isArray(tasks)){
+            for(const t of tasks){
+              if(t && t.id){
+                try { fetch('/stop/' + t.id, { method:'POST', keepalive:true }); } catch(_){}
+              }
+            }
+          }
+          try { fetch('/clear_all_uploads', { method:'POST', keepalive:true }); } catch(_){}
           await sendShutdown();
         } catch (err) {
           console.error('shutdown failed', err);
@@ -762,6 +770,53 @@
       sq.appendChild(rect);
       stopPad.appendChild(sq);
     }
+
+    function setDownloadIcon(btn){
+      if(!btn) return;
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS,'svg');
+      svg.setAttribute('viewBox','0 0 24 24');
+      svg.classList.add('w-7','h-7');
+      svg.setAttribute('fill','none');
+      svg.setAttribute('stroke','#0F2027');
+      svg.setAttribute('stroke-width','2.2');
+      svg.setAttribute('stroke-linecap','round');
+      svg.setAttribute('stroke-linejoin','round');
+      const arr = document.createElementNS(NS,'path');
+      arr.setAttribute('d','M12 5v10m0 0l-4-4m4 4l4-4');
+      const base = document.createElementNS(NS,'path');
+      base.setAttribute('d','M5 19h14');
+      svg.append(arr, base);
+      btn.appendChild(svg);
+    }
+
+    function setFolderIcon(btn){
+      if(!btn) return;
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      btn.insertAdjacentHTML('afterbegin', '<svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 3h11v9H3z"/><path d="M3 7v12"/></svg>');
+    }
+
+    function bindDownloadButton(btn, taskRef){
+      if(!btn || !taskRef || !taskRef.id) return;
+      btn.classList.add('show');
+      setDownloadIcon(btn);
+      btn.title = 'download';
+      guardClick(btn, (e) => {
+        e.preventDefault();
+        const a = document.createElement('a');
+        a.href = '/download/' + taskRef.id;
+        a.rel = 'noopener';
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { try{ a.remove(); }catch(_){}} , 250);
+        taskRef.downloaded = true;
+        saveTasks();
+        setFolderIcon(btn);
+        bindFolderButton(btn, taskRef);
+      });
+    }
 // --- Helper to rerun a task server-side ---
     async function rerunTask(task, ui){
       const {bar, st, dl, stopPad, smooth} = ui;
@@ -817,6 +872,7 @@
       }
       task.stage = 'preparing';
       task.pct = 0;
+      task.downloaded = false;
       saveTasks();
       updateUI();
       // resume tracking
@@ -1223,7 +1279,7 @@
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null });
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false });
         saveTasks();
         updateUI();
       }
@@ -1294,7 +1350,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null };
+          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
@@ -1396,6 +1452,7 @@
             await fetch('/start/' + t.id, { method:'POST' });
             t.stage = 'queued';
             t.pct = 0;
+            if(typeof t.downloaded === 'undefined'){ t.downloaded = false; }
           }catch(_){}
         }
         saveTasks();
@@ -1473,6 +1530,7 @@
             if(data.stems) taskRef.stems = data.stems;
             if(data.out_dir) taskRef.out_dir = data.out_dir;
             if(data.zip) taskRef.zip = data.zip;
+            if(typeof taskRef.downloaded === 'undefined'){ taskRef.downloaded = false; }
             saveTasks();
           }
           if(data.stems && st){
@@ -1484,9 +1542,15 @@
             smooth.setTarget(100);
             hideStatus(st);
             if(dl){
-              dl.classList.add('show');
-              dl.title = 'open folder';
-              bindFolderButton(dl, taskRef || { id: taskId, out_dir: data.out_dir });
+              const ref = taskRef || { id: taskId, out_dir: data.out_dir, zip: data.zip, downloaded:false };
+              if(ref.downloaded){
+                setFolderIcon(dl);
+                dl.classList.add('show');
+                dl.title = 'open folder';
+                bindFolderButton(dl, ref);
+              }else{
+                bindDownloadButton(dl, ref);
+              }
             }
             if(stopPad) stopPad.remove();
             const parent = st.closest('.card'); if(parent) parent.classList.add('done');
