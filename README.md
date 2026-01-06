@@ -1,5 +1,5 @@
-Status: 1/5/26
-- broken, will be fixed by tmrw, currently some issues with refrencing the configs
+Status: 1/5/26 8p PST
+- currently working. just don't hit the clear all button and then process with a different model. Memory leak.
 
 # stemsplat - DEVELOPER PREVIEW
 
