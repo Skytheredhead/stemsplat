@@ -201,7 +201,11 @@ class UserSettings:
     ) -> None:
         if output_root is not None:
             candidate = Path(output_root).expanduser()
-            if not candidate.exists():
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                raise AppError(ErrorCode.INVALID_REQUEST, f"unable to create folder: {exc}")
+            if not candidate.is_dir():
                 raise AppError(ErrorCode.INVALID_REQUEST, "folder does not exist")
             self.output_root = candidate
         if structure_mode in {"structured", "flat"}:

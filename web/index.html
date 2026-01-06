@@ -826,7 +826,6 @@
           }else{
             persistSettings({ output_root: val });
           }
-          outputInput.readOnly = true;
         };
         outputInput.readOnly = false;
         outputInput.addEventListener('focus', () => { outputInput.readOnly = false; outputInput.select(); });
@@ -879,11 +878,20 @@
             picker.value = '';
             resolve(dirPath);
           };
-          if(picker.showPicker){
-            picker.showPicker().catch(() => resolve(null));
-          }else{
-            picker.click();
-          }
+          const launch = () => {
+            try{
+              if(picker.showPicker){
+                picker.showPicker().catch(() => {
+                  try{ picker.click(); }catch(_){ resolve(null); }
+                });
+              }else{
+                picker.click();
+              }
+            }catch(_){
+              resolve(null);
+            }
+          };
+          launch();
         });
 
         outputChoose.addEventListener('click', async () => {
@@ -1265,7 +1273,10 @@
           }
           if(stage === 'done'){
             smooth.setTarget(100);
-            st.classList.add('hidden');
+            if(st){
+              st.textContent = '';
+              st.classList.add('hidden');
+            }
             if(dl){
               dl.classList.add('show');
               dl.title = 'open folder';
