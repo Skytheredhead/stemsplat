@@ -1,5 +1,5 @@
-Status: 1/5/26 8p PST
-- voc working, inst not working. deux i think working
+Status: 1/5/26 9:30p PST
+- working. Adding finishing touches before first compile.
 
 # stemsplat - DEVELOPER PREVIEW
 
