@@ -53,7 +53,7 @@
     .settings-card-in  { animation: settingsCardIn  .28s cubic-bezier(.2,.7,.2,1) both; }
     .settings-card-out { animation: settingsCardOut .18s ease both; }
 
-    body { background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); }
+    body { background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); padding-top:48px; padding-bottom:48px; }
 
     .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none;
       background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
@@ -221,6 +221,8 @@
     const STORAGE_BLOCK_GB = 0.5;
     const MEMORY_LIMIT_RATIO = 0.9;
     const MEMORY_LIMIT_MB = 700;
+    const FIVE_HOURS_SEC = 5 * 60 * 60;
+    const LONG_TRACK_SEC = 15 * 60;
 
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
@@ -404,6 +406,54 @@
       memoryBlocked = false;
       updateStartButton();
       return true;
+    }
+
+    function estimateDecodeMb(seconds){
+      // Roughly 0.34 MB/sec for 44.1kHz stereo float
+      return seconds * 0.34;
+    }
+
+    function hasMemoryForDuration(seconds){
+      if(seconds <= LONG_TRACK_SEC) return true;
+      const perf = performance || window.performance;
+      const mem = perf && perf.memory;
+      if(!mem || !mem.jsHeapSizeLimit) return true;
+      const { jsHeapSizeLimit = 0, usedJSHeapSize = 0 } = mem;
+      const freeMb = Math.max(0, jsHeapSizeLimit - usedJSHeapSize) / (1024 * 1024);
+      const needMb = estimateDecodeMb(seconds) * 1.5; // headroom
+      if(freeMb <= needMb){
+        showPopup('song is too long for available memory right now');
+        return false;
+      }
+      return true;
+    }
+
+    function getAudioDuration(file){
+      return new Promise((resolve) => {
+        let url = null;
+        try{
+          const audio = document.createElement('audio');
+          audio.preload = 'metadata';
+          url = URL.createObjectURL(file);
+          const cleanup = () => {
+            if(url){ URL.revokeObjectURL(url); url = null; }
+            audio.removeAttribute('src');
+            audio.load();
+          };
+          const timeout = setTimeout(() => { cleanup(); resolve(-1); }, 3000);
+          audio.onloadedmetadata = () => {
+            clearTimeout(timeout);
+            const d = audio.duration;
+            cleanup();
+            resolve(isFinite(d) ? d : -1);
+          };
+          audio.onerror = () => { clearTimeout(timeout); cleanup(); resolve(-1); };
+          audio.src = url;
+        }catch(_){
+          if(url){ URL.revokeObjectURL(url); }
+          resolve(-1);
+        }
+      });
     }
 
     // settings overlay refs (assigned on load)
@@ -1108,12 +1158,25 @@
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
       const stems = selectedStems();
       const newPending = [];
-      [...fileList].forEach(file => {
-        if(availableSlots <= 0) return;
+      const files = [...fileList];
+      for(const file of files){
+        if(availableSlots <= 0) break;
         // accept common audio even when type is empty
         const looksAudio = (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
+        if(!looksAudio) continue;
+
+        const duration = await getAudioDuration(file);
+        if(duration > 0){
+          if(duration > FIVE_HOURS_SEC){
+            showPopup('single song limit is 5 hours');
+            continue;
+          }
+          if(duration > LONG_TRACK_SEC && !hasMemoryForDuration(duration)){
+            continue;
+          }
+        }
+
         const tempKey = makeTempKey();
-        if(!looksAudio) return;
         availableSlots -= 1;
         // build UI row (ready state)
         const frag = template.content.cloneNode(true);
@@ -1147,10 +1210,10 @@
         tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null });
         saveTasks();
         updateUI();
-      });
+      }
       if (fileInput) fileInput.value = '';
 
-      if ([...fileList].length > newPending.length) {
+      if (files.length > newPending.length) {
         showPopup('maximum number of songs reached! Please hit the clear all button');
       }
 
