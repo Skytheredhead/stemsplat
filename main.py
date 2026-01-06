@@ -51,14 +51,6 @@ except Exception as _exc:  # pragma: no cover - capture import issues for error 
     split_main = None  # type: ignore
     _import_error = _exc
 
-try:
-    from mutagen.id3 import ID3, TXXX
-    from mutagen.wave import WAVE
-except Exception:  # pragma: no cover - optional dependency for metadata
-    ID3 = None  # type: ignore
-    TXXX = None  # type: ignore
-    WAVE = None  # type: ignore
-
 class ErrorCode(str, Enum):
     TORCH_MISSING = "E001"
     MPS_UNAVAILABLE = "E002"
@@ -96,7 +88,6 @@ DEUX_SEGMENT = 573_300
 OVERLAP = 12
 LOG_PATH = BASE_DIR / "main_stemsplat.log"
 LEGACY_LOG = BASE_DIR / "stemsplat.log"
-APP_VERSION = "0.1.0"
 if LEGACY_LOG.exists():
     try:
         LEGACY_LOG.unlink()
@@ -174,15 +165,11 @@ def ensure_unique_dir(path: Path) -> Path:
 class UserSettings:
     output_root: Path = DEFAULT_OUTPUT_ROOT
     structure_mode: str = "flat"  # structured|flat
-    metadata_enabled: bool = True
-    debug_metadata: bool = False
 
     def as_dict(self) -> dict[str, str | bool]:
         return {
             "output_root": str(self.output_root),
             "structure_mode": self.structure_mode,
-            "metadata_enabled": self.metadata_enabled,
-            "debug_metadata": self.debug_metadata,
         }
 
     def resolve_output_dir(self, base_name: str) -> Path:
@@ -197,8 +184,6 @@ class UserSettings:
         *,
         output_root: Optional[str] = None,
         structure_mode: Optional[str] = None,
-        metadata_enabled: Optional[bool] = None,
-        debug_metadata: Optional[bool] = None,
     ) -> None:
         if output_root is not None:
             candidate = Path(output_root).expanduser()
@@ -207,10 +192,6 @@ class UserSettings:
             self.output_root = candidate
         if structure_mode in {"structured", "flat"}:
             self.structure_mode = structure_mode
-        if metadata_enabled is not None:
-            self.metadata_enabled = metadata_enabled
-        if debug_metadata is not None:
-            self.debug_metadata = debug_metadata
 
 
 settings = UserSettings()
@@ -993,70 +974,15 @@ def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
     return converted
 
 
-def _apply_metadata(
-    wav_path: Path,
-    *,
-    model_label: Optional[str],
-    chunk_count: Optional[int],
-    overlap: int,
-    started_at: Optional[float],
-) -> None:
-    if not settings.metadata_enabled:
-        return
-    if ID3 is None or TXXX is None or WAVE is None:
-        logger.debug("metadata libraries missing; skipping metadata for %s", wav_path)
-        return
-    try:
-        audio = WAVE(str(wav_path))
-        tags = audio.tags or ID3()
-        if not isinstance(tags, ID3):
-            tags = ID3()
-
-        def _set_frame(desc: str, value: str) -> None:
-            # remove existing frame with same desc
-            for frame in list(tags.getall("TXXX")):
-                if getattr(frame, "desc", None) == desc:
-                    tags.delall("TXXX:" + desc)
-                    break
-            tags.add(TXXX(encoding=3, desc=desc, text=[value]))
-
-        _set_frame("Software", "Stemsplat")
-        _set_frame("SoftwareVersion", APP_VERSION)
-        if model_label:
-            _set_frame("Model", model_label)
-
-        if settings.debug_metadata:
-            if chunk_count is not None:
-                _set_frame("Chunks", str(chunk_count))
-            _set_frame("Overlap", str(overlap))
-            elapsed = None
-            if started_at is not None:
-                elapsed = time.time() - started_at
-                _set_frame("TimetoProcess", f"{elapsed:.3f}")
-            _set_frame("ProcessedDate", datetime.utcnow().isoformat())
-
-        audio.tags = tags
-        audio.save()
-        logger.debug("applied metadata to %s", wav_path)
-    except Exception as exc:
-        logger.warning("failed to write metadata to %s: %s", wav_path, exc)
-
-
 def _write_wave(
     out_dir: Path,
     fname: str,
     tensor: torch.Tensor,
-    *,
-    sr: int = 44100,
-    model_label: Optional[str] = None,
-    chunk_count: Optional[int] = None,
-    started_at: Optional[float] = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     candidate = ensure_unique_path(out_dir / fname)
     logger.info("writing stem %s to %s", candidate.name, candidate.parent)
-    sf.write(candidate, tensor.T.cpu().numpy(), sr)
-    _apply_metadata(candidate, model_label=model_label, chunk_count=chunk_count, overlap=OVERLAP, started_at=started_at)
+    sf.write(candidate, tensor.T.cpu().numpy(), 44100)
     return candidate
 
 
@@ -1101,23 +1027,9 @@ def _separate_waveform(
         voc_d, inst_d = manager.split_pair_with_model(deux_model, deux_wave, DEUX_SEGMENT, OVERLAP, progress_cb=_cb)
         fname_v = f"{audio_path.stem} - vocals (deux).wav"
         fname_i = f"{audio_path.stem} - instrumental (deux).wav"
-        path_v = _write_wave(
-            out_dir,
-            fname_v,
-            voc_d,
-            model_label=manager.model_info.get("deux", ("deux", None))[0],
-            chunk_count=chunk_count,
-            started_at=processing_started_at,
-        )
+        path_v = _write_wave(out_dir, fname_v, voc_d)
         cb("write.vocals_deux", 97)
-        path_i = _write_wave(
-            out_dir,
-            fname_i,
-            inst_d,
-            model_label=manager.model_info.get("deux", ("deux", None))[0],
-            chunk_count=chunk_count,
-            started_at=processing_started_at,
-        )
+        path_i = _write_wave(out_dir, fname_i, inst_d)
         cb("write.instrumental_deux", 98)
         stems_out.extend([path_v.name, path_i.name])
 
@@ -1309,15 +1221,7 @@ def _separate_waveform(
                 continue
             combined = torch.cat(tensors, dim=0)
             fname = f"{audio_path.stem} - {stem_name}.wav"
-            model_label = manager.model_info.get(stem_name, (stem_name, None))[0]
-            written = _write_wave(
-                out_dir,
-                fname,
-                combined,
-                model_label=model_label,
-                chunk_count=chunk_count,
-                started_at=processing_started_at,
-            )
+            written = _write_wave(out_dir, fname, combined)
             stems_out.append(written.name)
             cb(f"write.{stem_name}", 98)
 
@@ -1488,14 +1392,10 @@ async def update_settings(request: Request):
     payload = await request.json()
     output_root = payload.get("output_root")
     structure_mode = payload.get("structure_mode")
-    metadata_enabled = payload.get("metadata_enabled")
-    debug_metadata = payload.get("debug_metadata")
     try:
         settings.update(
             output_root=output_root,
             structure_mode=structure_mode,
-            metadata_enabled=metadata_enabled,
-            debug_metadata=debug_metadata,
         )
     except AppError as exc:
         settings.output_root = DEFAULT_OUTPUT_ROOT
