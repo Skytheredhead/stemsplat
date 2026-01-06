@@ -629,8 +629,8 @@
     }
 
     function enforceCapacity(){
-      const total = tasks.filter(Boolean).length;
-      const full = total >= MAX_TASKS;
+      const activeCount = tasks.filter(t => t && !isFinished(t)).length;
+      const full = activeCount >= MAX_TASKS;
       dropzone.classList.toggle('pointer-events-none', full);
       dropzone.classList.toggle('opacity-60', full);
       if(fileInput) fileInput.disabled = full;
@@ -1362,6 +1362,30 @@
       startLock = true;
       updateStartButton();
       let markedStarted = false;
+      const markReadyQueuedUI = () => {
+        const rows = Array.from(queue.children);
+        let changed = false;
+        rows.forEach(row => {
+          const id = row.__taskId;
+          const task = id ? getTaskById(id) : null;
+          if(task && (!task.stage || task.stage === 'ready' || task.stage === 'queued')){
+            if(task.stage !== 'queued' || task.pct !== 0){
+              task.stage = 'queued';
+              task.pct = 0;
+              changed = true;
+            }
+            const chip = row.querySelector('.chip');
+            if(chip){
+              showStatus(chip);
+              chip.textContent = 'queued';
+              chip.classList.remove('hidden');
+            }
+          }
+        });
+        if(changed){
+          saveTasks();
+        }
+      };
       const startReadyTasks = async () => {
         const ready = Array.isArray(tasks)
           ? tasks.filter(t => t && t.id && (!t.stage || t.stage === 'ready' || t.stage === 'queued'))
@@ -1374,6 +1398,7 @@
           }catch(_){}
         }
         saveTasks();
+        markReadyQueuedUI();
       };
       try{
         const stems = selectedStems();
@@ -1381,6 +1406,7 @@
         startGeneration += 1;
         startPressed = true;
         markedStarted = true;
+        markReadyQueuedUI();
         const batch = pendingItems.slice();
         batch.forEach(p => { p.autoStart = true; });
         revealStatusesAfterStart();
@@ -1483,10 +1509,11 @@
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
             const friendlyStage = displayStage(stage);
-            st.textContent = friendlyStage ? `${friendlyStage} (${sp}%)` : 'queued';
             if (stage === 'queued' || stage === 'ready') {
+              st.textContent = friendlyStage || 'queued';
               smooth.setImmediate(0);
             } else {
+              st.textContent = friendlyStage ? `${friendlyStage} (${sp}%)` : `${sp}%`;
               smooth.setTarget(sp);
             }
             if(stage !== 'done' && dl){
