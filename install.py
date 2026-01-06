@@ -152,10 +152,7 @@ def run_server():
                 httpd.shutdown()
                 httpd.server_close()
                 server_thread.join(timeout=2)
-                try:
-                    webbrowser.open(f"http://localhost:{MAIN_PORT}/", new=0)
-                except Exception:
-                    logger.debug("failed to open browser after installer shutdown", exc_info=True)
+                logger.debug("installer ui closed; main app launch handled by installer page")
             except KeyboardInterrupt:
                 logger.info("installer interrupted; shutting down")
                 httpd.shutdown()
@@ -218,19 +215,13 @@ def _start_server():
     logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
     if not _port_available(MAIN_PORT):
         logger.info("main server already running on port %s; opening browser", MAIN_PORT)
-        try:
-            webbrowser.open(f"http://localhost:{MAIN_PORT}/", new=0)
-        except Exception:
-            logger.debug("failed to open browser for existing server", exc_info=True)
+        logger.debug("main server already running; installer page will navigate")
         shutdown_event.set()
         return
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
-    try:
-        webbrowser.open(f"http://localhost:{MAIN_PORT}/", new=0)
-    except Exception:
-        logger.debug("failed to open browser after starting server", exc_info=True)
+    logger.debug("main server started; installer page will navigate")
 
 
 def _download_models(selection: Optional[list[str]] = None):
