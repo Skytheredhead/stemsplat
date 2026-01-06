@@ -198,13 +198,12 @@
         </div>
         <div class="bar"><div class="bar-fill progress"></div></div>
       </div>
-      <a class="dl-pad self-center" href="#" title="download">
+      <button class="dl-pad self-center" type="button" title="open folder">
         <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3v9"/>
-          <path d="M8 10l4 4 4-4"/>
-          <path d="M4 16h16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3z"/>
+          <path d="M3 7h5l2 3h11v9H3z"/>
+          <path d="M3 7v12"/>
         </svg>
-      </a>
+      </button>
       <a class="stop-pad self-center" href="#" title="stop" style="display:none;">
         <!-- square icon -->
         <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -231,14 +230,24 @@
     const spacer    = document.getElementById('queue-spacer');
     const closeBtn  = document.getElementById('close-app');
     const startBtn  = document.getElementById('start-btn');
+    const outputInput = document.getElementById('output-path');
+    const outputChoose = document.getElementById('output-choose');
+    const structureCheck = document.getElementById('structure-check');
+    const structurelessCheck = document.getElementById('structureless-check');
+    const metadataCheck = document.getElementById('metadata-check');
+    const debugMetadataCheck = document.getElementById('debug-metadata-check');
+    const metadataDetails = document.getElementById('metadata-details');
 
     let startPressed = false;
     let startGeneration = 0;
+    let startLock = false;
+    let settingsState = { output_root: '', structure_mode: 'structured', metadata_enabled: true, debug_metadata: false };
+    let defaultOutputPath = '';
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
       const hasItems = queue.children.length > 0;
-      if(!hasItems){
+      if(!hasItems || startLock){
         startBtn.disabled = true;
         const icon = startBtn.querySelector('svg');
         if(icon){ icon.style.animation = 'none'; }
@@ -276,6 +285,61 @@
         }
         setTimeout(closeWindow, 220);
       });
+    }
+
+    function applySettingsUI(){
+      if(outputInput && settingsState.output_root){
+        outputInput.value = settingsState.output_root;
+        defaultOutputPath = defaultOutputPath || settingsState.output_root;
+      }
+      if(structureCheck && structurelessCheck){
+        const structured = settingsState.structure_mode !== 'flat';
+        structureCheck.checked = structured;
+        structurelessCheck.checked = !structured;
+      }
+      if(metadataCheck){
+        metadataCheck.checked = !!settingsState.metadata_enabled;
+      }
+      if(debugMetadataCheck){
+        debugMetadataCheck.checked = !!settingsState.debug_metadata;
+      }
+    }
+
+    async function loadSettings(){
+      try{
+        const res = await fetch('/settings');
+        if(!res.ok) return;
+        const data = await res.json();
+        settingsState = { ...settingsState, ...data };
+        defaultOutputPath = data.output_root || defaultOutputPath;
+        applySettingsUI();
+      }catch(err){
+        console.warn('failed to load settings', err);
+      }
+    }
+
+    async function persistSettings(patch, {showMissingPopup = true} = {}){
+      settingsState = { ...settingsState, ...patch };
+      try{
+        const res = await fetch('/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settingsState),
+        });
+        if(!res.ok){
+          if(showMissingPopup) showPopup('folder doesn\\'t exist');
+          await loadSettings();
+          return;
+        }
+        const data = await res.json();
+        settingsState = { ...settingsState, ...data };
+        defaultOutputPath = defaultOutputPath || data.output_root;
+        applySettingsUI();
+      }catch(err){
+        console.warn('settings update failed', err);
+        if(showMissingPopup) showPopup('folder doesn\\'t exist');
+        await loadSettings();
+      }
     }
 
     // settings overlay refs (assigned on load)
@@ -460,6 +524,25 @@
       }
     }
 
+    function bindFolderButton(btn, taskRef){
+      if(!btn || !taskRef) return;
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        if(btn.dataset.busy === '1') return;
+        btn.dataset.busy = '1';
+        try{
+          const res = await fetch('/reveal/' + taskRef.id, { method: 'POST' });
+          if(!res.ok){
+            const msg = taskRef.out_dir ? `folder missing: ${taskRef.out_dir}` : 'output not ready';
+            showPopup(msg);
+          }
+        }catch(err){
+          showPopup('output not ready');
+        }
+        setTimeout(() => { btn.dataset.busy = ''; }, 250);
+      };
+    }
+
     // --- Helper to set rerun and stop icons ---
     
     function setRerunIcon(stopPad){
@@ -540,7 +623,13 @@
         setStopSquareIcon(stopPad);
         stopPad.style.pointerEvents = '';
         stopPad.style.opacity = '';
-        stopPad.onclick = (e) => { e.preventDefault(); fetch('/stop/'+task.id,{method:'POST'}); };
+        stopPad.onclick = async (e) => {
+          if(stopPad.dataset.busy === '1') return;
+          stopPad.dataset.busy = '1';
+          e.preventDefault();
+          try{ await fetch('/stop/'+task.id,{method:'POST'}); }catch(_){ }
+          setTimeout(() => { stopPad.dataset.busy = ''; }, 250);
+        };
         setStopVisibility(stopPad, 'preparing');
       }
       task.stage = 'preparing';
@@ -572,8 +661,9 @@
       smooth.setImmediate(initOverall);
       if(task.pct >= 100){
         st.classList.add('hidden');
-        dl.href = '/download/' + task.id;
         dl.classList.add('show');
+        dl.title = 'open folder';
+        bindFolderButton(dl, task);
         card.classList.add('done');
         if(stopPad) stopPad.remove();
       }
@@ -643,6 +733,8 @@
     }
 
     clearBtn.addEventListener('click', () => {
+      const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
+      if(hasRunning && !confirm('A process is still running. Clear all anyway?')) return;
       if (!startPressed) {
         return withPageFade(() => {
           for (const el of Array.from(queue.children)) { el.remove(); }
@@ -725,6 +817,63 @@
           showPopup('all tasks cleared');
         }catch(err){ showError('force clear failed'); }
       });
+      loadSettings();
+      if(outputInput){
+        const commitOutput = () => {
+          const val = (outputInput.value || '').trim();
+          if(!val){
+            outputInput.value = defaultOutputPath;
+            persistSettings({ output_root: defaultOutputPath });
+          }else{
+            persistSettings({ output_root: val });
+          }
+          outputInput.readOnly = true;
+        };
+        outputInput.addEventListener('focus', () => { outputInput.readOnly = false; outputInput.select(); });
+        outputInput.addEventListener('click', () => { outputInput.readOnly = false; outputInput.select(); });
+        outputInput.addEventListener('blur', commitOutput);
+        outputInput.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); commitOutput(); outputInput.blur(); } });
+      }
+      if(outputChoose){
+        outputChoose.addEventListener('click', async () => {
+          const suggestion = settingsState.output_root || defaultOutputPath;
+          let nextPath = suggestion;
+          try{
+            const manual = prompt('choose folder path', suggestion);
+            if(manual === null) return;
+            nextPath = (manual || '').trim() || suggestion;
+          }catch(err){
+            console.warn('folder prompt failed', err);
+            nextPath = suggestion;
+          }
+          await persistSettings({ output_root: nextPath });
+          applySettingsUI();
+        });
+      }
+      if(structureCheck){
+        structureCheck.addEventListener('change', () => {
+          if(!structureCheck.checked){ structureCheck.checked = true; return; }
+          structurelessCheck.checked = false;
+          persistSettings({ structure_mode: 'structured' });
+        });
+      }
+      if(structurelessCheck){
+        structurelessCheck.addEventListener('change', () => {
+          if(!structurelessCheck.checked){ structurelessCheck.checked = true; return; }
+          structureCheck.checked = false;
+          persistSettings({ structure_mode: 'flat' });
+        });
+      }
+      if(metadataCheck){
+        metadataCheck.addEventListener('change', () => {
+          persistSettings({ metadata_enabled: metadataCheck.checked });
+        });
+      }
+      if(debugMetadataCheck){
+        debugMetadataCheck.addEventListener('change', () => {
+          persistSettings({ debug_metadata: debugMetadataCheck.checked });
+        });
+      }
     });
 
     // drag-and-drop highlights
@@ -862,7 +1011,7 @@
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey });
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null });
         saveTasks();
         updateUI();
       });
@@ -928,7 +1077,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey };
+          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
@@ -938,6 +1087,8 @@
             stopPad.style.opacity = '';
             stopPad.title = 'stop';
             stopPad.onclick = async (e) => {
+              if(stopPad.dataset.busy === '1') return;
+              stopPad.dataset.busy = '1';
               e.preventDefault();
               try{ await fetch('/stop/'+parsed.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
               // mark as stopped locally so UI updates right away
@@ -956,6 +1107,7 @@
                 setRerunIcon(stopPad);
                 stopPad.onclick = (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); };
               }
+              stopPad.dataset.busy = '';
               updateUI();
             };
             setStopVisibility(stopPad, 'ready');
@@ -984,26 +1136,33 @@
     }
 
     async function startSequentialProcessing(){
-      if(startBtn && startBtn.disabled) return;
-      const stems = selectedStems();
-      if(stems.length === 0){ showPopup('please select at least one stem'); return; }
-      startGeneration += 1;
-      startPressed = true;
-      const batch = pendingItems.slice();
-      batch.forEach(p => { p.autoStart = true; });
-      revealStatusesAfterStart();
-      for(const p of batch){
-        if(!p.uploadPromise){
-          await uploadWithStems(p, stems);
+      if(startLock || (startBtn && startBtn.disabled)) return;
+      startLock = true;
+      updateStartButton();
+      try{
+        const stems = selectedStems();
+        if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+        startGeneration += 1;
+        startPressed = true;
+        const batch = pendingItems.slice();
+        batch.forEach(p => { p.autoStart = true; });
+        revealStatusesAfterStart();
+        for(const p of batch){
+          if(!p.uploadPromise){
+            await uploadWithStems(p, stems);
+          }
+          if(p.uploadPromise){
+            await p.uploadPromise;
+          }
+          startTaskWhenReady(p);
         }
-        if(p.uploadPromise){
-          await p.uploadPromise;
-        }
-        startTaskWhenReady(p);
+        startPressed = false;
+        batch.forEach(p => { p.autoStart = false; });
+        updateUI();
+      } finally {
+        startLock = false;
+        updateStartButton();
       }
-      startPressed = false;
-      batch.forEach(p => { p.autoStart = false; });
-      updateUI();
     }
     if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);
 
@@ -1034,11 +1193,25 @@
           try { data = JSON.parse(ev.data); } catch(_) {}
           if(!data) return;
           const {stage, pct} = data;
-          if(taskRef){ taskRef.stage = stage; taskRef.pct = pct; saveTasks(); }
+          if(taskRef){
+            taskRef.stage = stage;
+            taskRef.pct = pct;
+            if(data.stems) taskRef.stems = data.stems;
+            if(data.out_dir) taskRef.out_dir = data.out_dir;
+            saveTasks();
+          }
+          if(data.stems && st){
+            const parentRow = st.closest('.item-row');
+            applyLabels(parentRow ? parentRow.querySelector('.labels') : null, data.stems);
+          }
           if(stage === 'done'){
             smooth.setTarget(100);
             st.classList.add('hidden');
-            if(dl){ dl.href = '/download/' + taskId; dl.classList.add('show'); }
+            if(dl){
+              dl.classList.add('show');
+              dl.title = 'open folder';
+              bindFolderButton(dl, taskRef || { id: taskId, out_dir: data.out_dir });
+            }
             if(stopPad) stopPad.remove();
             const parent = st.closest('.card'); if(parent) parent.classList.add('done');
             dropPendingById(taskId);
@@ -1075,7 +1248,17 @@
           setStatusVisibility(st, stage);
           setStopVisibility(stopPad, stage);
         });
-        es.addEventListener('error', () => {
+        es.addEventListener('error', (ev) => {
+          let errPayload = null;
+          let errCode = null;
+          let errMsg = null;
+          try{
+            if(ev && ev.data){ errPayload = JSON.parse(ev.data); }
+          }catch(_){}
+          if(errPayload){
+            errCode = errPayload.code || (errPayload.detail && errPayload.detail.code);
+            errMsg = errPayload.message || (errPayload.detail && errPayload.detail.message);
+          }
           if (taskRef) {
             taskRef.stage = 'error';
             taskRef.pct = -1;
@@ -1102,6 +1285,11 @@
           }
           dropPendingById(taskId);
           es.close();
+          if(errCode === 'E004'){
+            showModelsPopup();
+          }else if(errMsg){
+            showPopup(errMsg);
+          }
           updateUI();
         });
               }catch(e){
@@ -1121,16 +1309,58 @@
          class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
          style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
       <button id="settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
-      <h2 class="text-2xl font-light mb-1 select-none">stemsplat</h2>
-      <div class="opacity-80 mb-4">settings</div>
+      <h2 class="text-2xl font-light mb-3 select-none">settings</h2>
 
       <div class="flex flex-col gap-3">
-        <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs" style="border-radius:12px;">force clear</button>
-        <div class="text-xs opacity-60">Stops all processing, removes all items, and clears uploaded files.</div>
-      </div>
-      <div class="flex gap-3 mt-3">
-        <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
-        <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
+        <div class="space-y-2">
+          <div class="text-sm opacity-80">output folder</div>
+          <div class="flex items-center gap-2">
+            <input id="output-path" type="text" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40" readonly value="">
+            <button id="output-choose" class="p-2 rounded-lg hover:bg-white/10 border border-white/10" title="choose folder">
+              <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7h5l2 3h11v9H3z"/>
+                <path d="M3 7v12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="flex gap-4 text-sm">
+            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" type="checkbox" class="pretty">folder structure</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" type="checkbox" class="pretty">structureless</label>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <input id="metadata-check" type="checkbox" class="pretty" checked>
+            <span>embed metadata</span>
+          </div>
+          <details id="metadata-details" class="ml-6 glass-light rounded-lg px-3 py-2 text-xs text-[var(--txt-main)]/90">
+            <summary class="cursor-pointer select-none">included</summary>
+            <ul class="list-disc ml-4 mt-2 space-y-1">
+              <li>Software: Stemsplat</li>
+              <li>SoftwareVersion: app version</li>
+              <li>Model: model file</li>
+            </ul>
+          </details>
+          <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="debug-metadata-check" type="checkbox" class="pretty">debug metadata</label>
+          <div class="ml-6 text-xs opacity-70 space-y-1">
+            <div>Chunks</div>
+            <div>Overlap</div>
+            <div>TimetoProcess</div>
+            <div>ProcessedDate</div>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-3">
+          <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs" style="border-radius:12px;">force clear</button>
+          <div class="text-xs opacity-60">Stops all processing, removes all items, and clears uploaded files.</div>
+        </div>
+        <div class="flex gap-3 mt-3">
+          <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
+          <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
+          <a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">becruily models</a>
+        </div>
+        <div class="text-xs opacity-70 text-center">models by becruily</div>
       </div>
 
       <div class="mt-6 text-center opacity-70 text-sm">v0.1</div>

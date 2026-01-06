@@ -16,3 +16,4 @@ beartype>=0.17
 librosa
 imageio-ffmpeg
 certifi
+mutagen
