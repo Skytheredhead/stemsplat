@@ -1362,6 +1362,19 @@
       startLock = true;
       updateStartButton();
       let markedStarted = false;
+      const startReadyTasks = async () => {
+        const ready = Array.isArray(tasks)
+          ? tasks.filter(t => t && t.id && (!t.stage || t.stage === 'ready' || t.stage === 'queued'))
+          : [];
+        for(const t of ready){
+          try{
+            await fetch('/start/' + t.id, { method:'POST' });
+            t.stage = 'queued';
+            t.pct = 0;
+          }catch(_){}
+        }
+        saveTasks();
+      };
       try{
         const stems = selectedStems();
         if(stems.length === 0){ showPopup('please select at least one stem'); return; }
@@ -1380,6 +1393,7 @@
           }
           startTaskWhenReady(p);
         }
+        await startReadyTasks();
         startPressed = false;
         markedStarted = false;
         batch.forEach(p => { p.autoStart = false; });
