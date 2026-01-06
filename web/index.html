@@ -931,41 +931,21 @@
         const ok = await showConfirm('A process is still running. Clear all anyway?');
         if(!ok) return;
       }
-      if (!startPressed) {
-        return withPageFade(() => {
-          for (const el of Array.from(queue.children)) { el.remove(); }
-          tasks = [];
-          pendingItems.length = 0;
-          saveTasks();
-          try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
-          updateUI();
-        });
-      }
-
       withPageFade(() => {
-        const children = Array.from(queue.children);
-        const clearable = new Set(tasks.filter(t => isFinished(t)).map(t => t.id));
-        if(clearable.size === 0){ updateUI(); return; }
-        // fade out only clearable ones
-        children.forEach(el => {
-          const id = el.__taskId || null;
-          if(id && clearable.has(id)){
-            el.classList.add('fade');
-            el.style.opacity = '0';
-          }
-        });
-        setTimeout(() => {
-          // remove DOM + prune tasks
-          for(const el of Array.from(queue.children)){
-            const id = el.__taskId || null;
-            if(id && clearable.has(id)) el.remove();
-          }
-          tasks = tasks.filter(t => !clearable.has(t.id));
-          pendingItems.length = 0;
-          saveTasks();
-          fetch('/clear_all_uploads', {method:'POST'});
-          updateUI();
-        }, 240);
+        if(Array.isArray(tasks)){
+          tasks.forEach(t => {
+            if(t && t.id){
+              try { fetch('/stop/' + t.id, {method:'POST'}); } catch(_){}
+            }
+          });
+        }
+        for (const el of Array.from(queue.children)) { el.remove(); }
+        tasks = [];
+        pendingItems.length = 0;
+        startPressed = false;
+        saveTasks();
+        try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
+        updateUI();
       });
     });
 
@@ -1381,11 +1361,13 @@
       }
       startLock = true;
       updateStartButton();
+      let markedStarted = false;
       try{
         const stems = selectedStems();
         if(stems.length === 0){ showPopup('please select at least one stem'); return; }
         startGeneration += 1;
         startPressed = true;
+        markedStarted = true;
         const batch = pendingItems.slice();
         batch.forEach(p => { p.autoStart = true; });
         revealStatusesAfterStart();
@@ -1399,9 +1381,13 @@
           startTaskWhenReady(p);
         }
         startPressed = false;
+        markedStarted = false;
         batch.forEach(p => { p.autoStart = false; });
         updateUI();
       } finally {
+        if(markedStarted){
+          startPressed = false;
+        }
         startLock = false;
         updateStartButton();
       }

@@ -1601,6 +1601,29 @@ async def download(task_id: str):
 
 @app.post("/clear_all_uploads")
 async def clear_all_uploads():
+    # stop any running tasks
+    for ctrl in controls.values():
+        try:
+            ctrl.get("pause", threading.Event()).set()
+            ctrl.get("stop", threading.Event()).set()
+        except Exception:
+            logger.debug("failed to signal stop for control %s", ctrl, exc_info=True)
+
+    # drain any queued items so they don't start after clearing
+    try:
+        while True:
+            fn = process_queue.get_nowait()
+            process_queue.task_done()
+            logger.debug("discarded queued task %s during clear_all_uploads", fn)
+    except queue.Empty:
+        pass
+
+    # reset in-memory state
+    progress.clear()
+    tasks.clear()
+    errors.clear()
+    controls.clear()
+
     dirs = [UPLOAD_DIR, CONVERTED_DIR]
     for dir_path in dirs:
         if dir_path.exists():
@@ -1609,7 +1632,7 @@ async def clear_all_uploads():
                     shutil.rmtree(entry)
                 else:
                     entry.unlink()
-    logger.info("cleared upload directories")
+    logger.info("cleared upload directories and reset task state")
     return {"status": "cleared"}
 
 
