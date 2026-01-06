@@ -96,11 +96,7 @@ MODEL_ALIAS_MAP = {
     "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
 }
 
-CONFIG_ALIAS_MAP = {
-    "config_vocals_becruily.yaml": ["Mel Band Roformer Vocals Config.yaml"],
-    "config_instrumental_becruily.yaml": ["Mel Band Roformer Instrumental Config.yaml"],
-    "config_deux_becruily.yaml": [],
-}
+CONFIG_ALIAS_MAP: dict[str, list[str]] = {}
 
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 stream_handler = logging.StreamHandler()
@@ -238,8 +234,8 @@ class ModelManager:
     def __init__(self):
         self.device = select_device()
         self.model_info = {
-            "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "config_vocals_becruily.yaml"),
-            "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "config_instrumental_becruily.yaml"),
+            "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "Mel Band Roformer Vocals Config.yaml"),
+            "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
             "deux": ("becruily_deux.ckpt", "config_deux_becruily.yaml"),
             "drums": ("kuielab_a_drums.onnx", None),
             "bass": ("kuielab_a_bass.onnx", None),
@@ -269,18 +265,9 @@ class ModelManager:
 def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
     if not filename:
         return None
-    search_names = [filename] + CONFIG_ALIAS_MAP.get(filename, [])
-    search_dirs = [
-        CONFIG_DIR,
-        BASE_DIR,
-        MODEL_DIR,
-        Path.home() / "Library/Application Support/stems",
-    ]
-    for name in search_names:
-        for root in search_dirs:
-            cand = root / name
-            if cand.exists():
-                return cand
+    cand = CONFIG_DIR / filename
+    if cand.exists():
+        return cand
     raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
     def _load_model(self, name: str) -> StemModel:

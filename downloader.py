@@ -18,12 +18,6 @@ FILES = [
         "filename": "mel_band_roformer_vocals_becruily.ckpt",
         "tag": "vocals",
     },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/config_vocals_becruily.yaml?download=true",
-        "subdir": "configs",
-        "filename": "config_vocals_becruily.yaml",
-        "tag": "vocals",
-    },
     # Instrumental
     {
         "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
@@ -31,23 +25,11 @@ FILES = [
         "filename": "mel_band_roformer_instrumental_becruily.ckpt",
         "tag": "instrumental",
     },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/config_instrumental_becruily.yaml?download=true",
-        "subdir": "configs",
-        "filename": "config_instrumental_becruily.yaml",
-        "tag": "instrumental",
-    },
     # Deux (new)
     {
         "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
         "subdir": "models",
         "filename": "becruily_deux.ckpt",
-        "tag": "deux",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/config_deux_becruily.yaml?download=true",
-        "subdir": "configs",
-        "filename": "config_deux_becruily.yaml",
         "tag": "deux",
     },
     # Additional legacy/support models (always fetched)

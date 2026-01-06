@@ -51,11 +51,7 @@ ALIAS_MAP = {
     "models": {
         "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
         "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
-    },
-    "configs": {
-        "config_vocals_becruily.yaml": ["Mel Band Roformer Vocals Config.yaml"],
-        "config_instrumental_becruily.yaml": ["Mel Band Roformer Instrumental Config.yaml"],
-        "config_deux_becruily.yaml": ["config_deux_becruily.yaml"],
+        "becruily_deux.ckpt": ["becruily_deux.ckpt"],
     },
 }
 
@@ -198,7 +194,6 @@ def _models_missing():
             base / item["subdir"],
             base,
             base / "models",
-            base / "configs",
             Path.home() / "Library/Application Support/stems",
         ]
         found = False
