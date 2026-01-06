@@ -840,6 +840,13 @@ def _separate_waveform(
             return x
         return x.repeat(2, 1)
 
+    def ensure_mono(x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 1:
+            return x.unsqueeze(0)
+        if x.shape[0] == 1:
+            return x
+        return x.mean(dim=0, keepdim=True)
+
     if "deux" in stem_list:
         cb("deux.start", 2)
         deux_model = manager.deux
@@ -909,7 +916,11 @@ def _separate_waveform(
                 ch("instrumental.start", 84)
                 inst_model = manager.instrumental
                 use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
-                inst_pred = inst_model(ensure_stereo(use_wave))
+                if inst_model.expects_waveform and getattr(inst_model.net, "stereo", True) is False:
+                    input_wave = ensure_mono(use_wave)
+                else:
+                    input_wave = ensure_stereo(use_wave)
+                inst_pred = inst_model(input_wave)
                 chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
                 ch("instrumental.done", 90)
 
