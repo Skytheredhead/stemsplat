@@ -486,6 +486,13 @@ class ModelManager:
         return drums, bass, other, karaoke, guitar
 
 
+# Ensure core helper methods remain bound to ModelManager
+_REQUIRED_MANAGER_HELPERS = ("split_vocals", "split_pair_with_model", "split_instrumental")
+_missing_helpers = [name for name in _REQUIRED_MANAGER_HELPERS if not hasattr(ModelManager, name)]
+if _missing_helpers:
+    raise AppError(ErrorCode.SPLIT_IMPORT_FAILED, f"ModelManager missing helpers: {', '.join(_missing_helpers)}")
+
+
 # ── Task orchestration ─────────────────────────────────────────────────────-
 
 app = FastAPI()
