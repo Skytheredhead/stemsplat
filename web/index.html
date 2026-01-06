@@ -162,9 +162,9 @@
           </svg>
         </button>
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both (deux model)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals (fastest)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental (fastest)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both (highest quality)</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -828,6 +828,7 @@
           }
           outputInput.readOnly = true;
         };
+        outputInput.readOnly = false;
         outputInput.addEventListener('focus', () => { outputInput.readOnly = false; outputInput.select(); });
         outputInput.addEventListener('click', () => { outputInput.readOnly = false; outputInput.select(); });
         outputInput.addEventListener('blur', commitOutput);
@@ -878,7 +879,11 @@
             picker.value = '';
             resolve(dirPath);
           };
-          picker.click();
+          if(picker.showPicker){
+            picker.showPicker().catch(() => resolve(null));
+          }else{
+            picker.click();
+          }
         });
 
         outputChoose.addEventListener('click', async () => {
@@ -1372,7 +1377,7 @@
         <div class="space-y-2">
           <div class="text-sm opacity-80">output folder (leave blank for Downloads folder)</div>
           <div class="flex items-center gap-2">
-            <input id="output-path" type="text" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40" readonly value="">
+            <input id="output-path" type="text" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40" value="" style="color: white;">
             <button id="output-choose" class="p-2 rounded-lg hover:bg-white/10 border border-white/10" title="choose folder">
               <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 7h5l2 3h11v9H3z"/>

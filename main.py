@@ -898,7 +898,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir)
 
             zip_path: Path | None = None
-            if plan_mode != "structured":
+            if plan_mode != "structured" and zip_target is not None:
                 zip_path = ensure_unique_path(Path(zip_target) if zip_target else deliver_dir / f"{audio_path.stem}.zip")
                 cb("zip.start", 99)
                 try:
