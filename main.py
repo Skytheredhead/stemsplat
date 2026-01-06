@@ -923,30 +923,79 @@ def _separate_waveform(
             def _run_stem_model(model: StemModel, wave: torch.Tensor) -> torch.Tensor:
                 """Normalize tensor shape/device for model expectations."""
                 prefer_stereo = getattr(model.net, "stereo", True) if model.net is not None else True
+
                 def _normalize_waveform_input(target_model: StemModel, tensor: torch.Tensor) -> torch.Tensor:
                     prepared = ensure_stereo(tensor) if prefer_stereo else ensure_mono(tensor)
                     if prepared.dim() == 2:
                         prepared = prepared.unsqueeze(0)
                     return prepared.to(target_model.device)
 
-                if model.expects_waveform:
-                    prepared = _normalize_waveform_input(model, wave)
+                def _call_model(prepared: torch.Tensor) -> torch.Tensor:
                     try:
                         with torch.no_grad():
-                            pred = model(prepared)
+                            pred_out = model(prepared)
                     except RuntimeError as exc:
                         if model.device.type == "mps" and ("MPSGaph" in str(exc) or "MPSGraph" in str(exc)):
                             logger.error("MPSGraph failed and CPU fallback is disabled; aborting task")
                             raise AppError(ErrorCode.MPS_UNAVAILABLE, "Metal execution failed; CPU fallback disabled.")
                         raise
-                    if pred.dim() == 2:
-                        pred = pred[:, None, :]
-                    elif pred.dim() == 3 and pred.shape[1] not in (1, prepared.shape[1]):
-                        pred = pred.permute(1, 0, 2)
-                    pred = pred[..., : prepared.shape[-1]]
-                    if pred.dim() == 3 and pred.shape[0] == 1:
-                        pred = pred[0]
-                    return pred
+
+                    pred_out = pred_out if pred_out is not None else prepared
+
+                    if pred_out.dim() == 2:
+                        pred_out = pred_out[:, None, :]
+                    elif pred_out.dim() == 3 and pred_out.shape[1] not in (1, prepared.shape[1]):
+                        pred_out = pred_out.permute(1, 0, 2)
+
+                    pred_out = pred_out[..., : prepared.shape[-1]]
+                    if pred_out.dim() == 3 and pred_out.shape[0] == 1:
+                        pred_out = pred_out[0]
+                    return pred_out
+
+                if model.expects_waveform:
+                    prepared = _normalize_waveform_input(model, wave)
+
+                    length = prepared.shape[-1]
+                    # The Roformer-based waveform models can exhaust memory on long tracks.
+                    # Run them in chunks to keep attention buffer sizes manageable.
+                    step = max(1, SEGMENT - OVERLAP)
+                    if length <= SEGMENT:
+                        return _call_model(prepared)
+
+                    acc: Optional[torch.Tensor] = None
+                    counts = torch.zeros((1, length), device=model.device, dtype=prepared.dtype)
+
+                    for start_idx in range(0, length, step):
+                        end_idx = min(start_idx + SEGMENT, length)
+                        seg = prepared[..., start_idx:end_idx]
+                        if seg.shape[-1] < SEGMENT:
+                            padded = torch.zeros(
+                                (prepared.shape[0], prepared.shape[1], SEGMENT),
+                                device=model.device,
+                                dtype=prepared.dtype,
+                            )
+                            padded[..., : seg.shape[-1]] = seg
+                        else:
+                            padded = seg
+
+                        pred_seg = _call_model(padded)
+                        trimmed = pred_seg[..., : seg.shape[-1]]
+
+                        if acc is None:
+                            acc = torch.zeros(
+                                (trimmed.shape[0], length),
+                                device=model.device,
+                                dtype=trimmed.dtype,
+                            )
+
+                        acc[:, start_idx : start_idx + trimmed.shape[-1]] += trimmed
+                        counts[:, start_idx : start_idx + trimmed.shape[-1]] += 1
+
+                    if acc is None:
+                        raise AppError(ErrorCode.MODEL_MISSING, "Model failed to produce output.")
+
+                    denom = counts.clamp_min(1)
+                    return acc / denom
                 prepared = ensure_stereo(wave).to(model.device)
                 return model(prepared)
 
