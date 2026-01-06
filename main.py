@@ -161,6 +161,20 @@ def ensure_unique_dir(path: Path) -> Path:
         counter += 1
 
 
+def _locate_case_insensitive(path: Path) -> Path | None:
+    """Return a filesystem entry matching ``path`` regardless of case."""
+    if path.exists():
+        return path
+    parent = path.parent
+    if not parent.exists():
+        return None
+    target_lower = path.name.lower()
+    for candidate in parent.iterdir():
+        if candidate.name.lower() == target_lower:
+            return candidate
+    return None
+
+
 @dataclass
 class UserSettings:
     output_root: Path = DEFAULT_OUTPUT_ROOT
@@ -187,7 +201,11 @@ class UserSettings:
     ) -> None:
         if output_root is not None:
             candidate = Path(output_root).expanduser()
-            if not candidate.exists():
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                raise AppError(ErrorCode.INVALID_REQUEST, f"unable to create folder: {exc}")
+            if not candidate.is_dir():
                 raise AppError(ErrorCode.INVALID_REQUEST, "folder does not exist")
             self.output_root = candidate
         if structure_mode in {"structured", "flat"}:
@@ -200,23 +218,14 @@ _ensure_dir(settings.output_root)
 
 def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> dict[str, Path | str | None]:
     base_name = Path(info.get("orig_name") or info.get("conv_src", "stems")).stem
-    mode = structure_mode or settings.structure_mode
-    try:
-        _ensure_dir(settings.output_root)
-    except Exception:
-        pass
-    root = settings.output_root
-    if mode == "structured":
-        deliver_dir = settings.resolve_output_dir(base_name) / "stems"
-        staging_dir = deliver_dir
-        zip_target = None
-    else:
-        flat_root = root.parent if root.name == "stemsplat" else root
-        staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        deliver_dir = flat_root
-        zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
-    return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": mode}
+    root = DEFAULT_OUTPUT_ROOT
+    _ensure_dir(root)
+    flat_root = root.parent if root.name == "stemsplat" else root
+    staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    deliver_dir = flat_root
+    zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
+    return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": "flat"}
 
 MODEL_URLS = [
     (
@@ -349,28 +358,21 @@ class ModelManager:
         self.model_cache: dict[str, StemModel] = {}
 
     def _resolve_path(self, filename: str) -> Path:
-        preferred = MODEL_DIR / filename
-        if preferred.exists():
-            return preferred
-        fallback = Path.home() / "Library/Application Support/stems" / filename
-        if fallback.exists():
-            return fallback
-        aliases = MODEL_ALIAS_MAP.get(filename, [])
-        for alt in aliases:
-            cand = MODEL_DIR / alt
-            if cand.exists():
-                return cand
-            cand_fb = Path.home() / "Library/Application Support/stems" / alt
-            if cand_fb.exists():
-                return cand_fb
+        search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+        search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
+        for name in search_names:
+            for base in search_dirs:
+                match = _locate_case_insensitive(base / name)
+                if match:
+                    return match
         raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
 
     def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
         if not filename:
             return None
-        cand = CONFIG_DIR / filename
-        if cand.exists():
-            return cand
+        found = _locate_case_insensitive(CONFIG_DIR / filename)
+        if found:
+            return found
         raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
     def _load_model(self, name: str) -> StemModel:
@@ -889,7 +891,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir)
 
             zip_path: Path | None = None
-            if plan_mode != "structured":
+            if plan_mode != "structured" and zip_target is not None:
                 zip_path = ensure_unique_path(Path(zip_target) if zip_target else deliver_dir / f"{audio_path.stem}.zip")
                 cb("zip.start", 99)
                 try:
@@ -982,7 +984,11 @@ def _write_wave(
     out_dir.mkdir(parents=True, exist_ok=True)
     candidate = ensure_unique_path(out_dir / fname)
     logger.info("writing stem %s to %s", candidate.name, candidate.parent)
-    sf.write(candidate, tensor.T.cpu().numpy(), 44100)
+    data = tensor.detach().cpu()
+    if not torch.isfinite(data).all():
+        data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+    data = torch.clamp(data.float(), -1.0, 1.0)
+    sf.write(candidate, data.T.contiguous().numpy(), 44100, subtype="PCM_16")
     return candidate
 
 
@@ -1417,17 +1423,40 @@ async def reveal_output(task_id: str):
     out_path = Path(out_dir)
     if not out_path.exists():
         raise AppError(ErrorCode.INVALID_REQUEST, "Output path missing").to_http(404)
+
+    def _pick_target() -> Path:
+        zip_path = info.get("zip")
+        if zip_path:
+            zp = Path(zip_path)
+            if zp.exists():
+                return zp
+        stems = info.get("stems") or []
+        for stem in stems:
+            candidate = out_path / stem
+            if candidate.exists():
+                return candidate
+        return out_path
+
+    target = _pick_target()
+    select_path = target if target.is_file() else target
+    reveal_dir = target.parent if target.is_file() else target
     try:
         if sys.platform.startswith("darwin"):
-            subprocess.Popen(["open", str(out_path)])
+            if select_path.is_file():
+                subprocess.Popen(["open", "-R", str(select_path)])
+            else:
+                subprocess.Popen(["open", str(reveal_dir)])
         elif sys.platform.startswith("win"):
-            os.startfile(str(out_path))  # type: ignore[attr-defined]
+            if select_path.is_file():
+                subprocess.Popen(["explorer", "/select,", str(select_path)])
+            else:
+                os.startfile(str(reveal_dir))  # type: ignore[attr-defined]
         else:
-            subprocess.Popen(["xdg-open", str(out_path)])
+            subprocess.Popen(["xdg-open", str(reveal_dir)])
     except Exception as exc:
-        logger.warning("failed to reveal folder %s: %s", out_path, exc)
+        logger.warning("failed to reveal folder %s: %s", reveal_dir, exc)
         raise AppError(ErrorCode.INVALID_REQUEST, "Unable to open folder").to_http(500)
-    return {"status": "opened", "path": str(out_path)}
+    return {"status": "opened", "path": str(select_path if select_path.exists() else reveal_dir)}
 
 
 def _model_exists(filename: str) -> bool:
@@ -1437,20 +1466,12 @@ def _model_exists(filename: str) -> bool:
         if filename in alias_list:
             names.add(canon)
             names.update(alias_list)
-
-    def _casefold_exists(path: Path) -> bool:
-        if path.exists():
-            return True
-        if not path.parent.exists():
-            return False
-        target_lower = path.name.lower()
-        return any(p.name.lower() == target_lower for p in path.parent.iterdir())
-
-    targets = []
     for name in names:
-        targets.append(MODEL_DIR / name)
-        targets.append(Path.home() / "Library/Application Support/stems" / name)
-    return any(_casefold_exists(path) for path in targets)
+        if _locate_case_insensitive(MODEL_DIR / name):
+            return True
+        if _locate_case_insensitive(Path.home() / "Library/Application Support/stems" / name):
+            return True
+    return False
 
 
 @app.get("/models_status")

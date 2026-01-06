@@ -162,9 +162,9 @@
           </svg>
         </button>
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both (deux model)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals (fastest)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental (fastest)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both (highest quality)</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -230,17 +230,17 @@
     const spacer    = document.getElementById('queue-spacer');
     const closeBtn  = document.getElementById('close-app');
     const startBtn  = document.getElementById('start-btn');
-    const outputInput = document.getElementById('output-path');
-    const outputChoose = document.getElementById('output-choose');
-    const structureCheck = document.getElementById('structure-check');
-    const structurelessCheck = document.getElementById('structureless-check');
-    const metadataCheck = document.getElementById('metadata-check');
+    const outputInput = null;
+    const outputChoose = null;
+    const structureCheck = null;
+    const structurelessCheck = null;
 
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
     let settingsState = { output_root: '', structure_mode: 'flat' };
     let defaultOutputPath = '';
+    let dirPickerInput = null;
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
@@ -286,18 +286,7 @@
     }
 
     function applySettingsUI(){
-      if(outputInput && settingsState.output_root){
-        outputInput.value = settingsState.output_root;
-        defaultOutputPath = defaultOutputPath || settingsState.output_root;
-      }
-      if(structureCheck && structurelessCheck){
-          const structured = settingsState.structure_mode === 'structured';
-          structureCheck.checked = structured;
-          structurelessCheck.checked = !structured;
-      }
-      if(metadataCheck){
-        metadataCheck.checked = true;
-      }
+      // settings UI disabled; outputs always go to default zip
     }
 
     async function loadSettings(){
@@ -821,59 +810,23 @@
       });
       loadSettings();
       if(outputInput){
-        const commitOutput = () => {
-          const val = (outputInput.value || '').trim();
-          if(!val){
-            outputInput.value = defaultOutputPath || (settingsState.output_root || '');
-            persistSettings({ output_root: outputInput.value });
-          }else{
-            persistSettings({ output_root: val });
-          }
-          outputInput.readOnly = true;
-        };
-        outputInput.addEventListener('focus', () => { outputInput.readOnly = false; outputInput.select(); });
-        outputInput.addEventListener('click', () => { outputInput.readOnly = false; outputInput.select(); });
-        outputInput.addEventListener('blur', commitOutput);
-        outputInput.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); commitOutput(); outputInput.blur(); } });
+        // output selection disabled
       }
       if(outputChoose){
-        outputChoose.addEventListener('click', async () => {
-          const suggestion = settingsState.output_root || defaultOutputPath;
-          let nextPath = suggestion;
-          try{
-            const manual = prompt('choose folder path', suggestion);
-            if(manual === null) return;
-            nextPath = (manual || '').trim() || suggestion;
-          }catch(err){
-            console.warn('folder prompt failed', err);
-            nextPath = suggestion;
-          }
-          await persistSettings({ output_root: nextPath });
-          applySettingsUI();
-        });
+        // output chooser disabled
       }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
-          if(!structureCheck.checked){ structureCheck.checked = true; return; }
-          structurelessCheck.checked = false;
-          persistSettings({ structure_mode: 'structured' });
+          if(structureCheck.checked){
+            persistSettings({ structure_mode: 'structured' });
+          }
         });
       }
       if(structurelessCheck){
         structurelessCheck.addEventListener('change', () => {
-          if(!structurelessCheck.checked){ structurelessCheck.checked = true; return; }
-          structureCheck.checked = false;
-          persistSettings({ structure_mode: 'flat' });
-        });
-      }
-      if(metadataCheck){
-        metadataCheck.addEventListener('change', () => {
-          persistSettings({ metadata_enabled: metadataCheck.checked });
-        });
-      }
-      if(debugMetadataCheck){
-        debugMetadataCheck.addEventListener('change', () => {
-          persistSettings({ debug_metadata: debugMetadataCheck.checked });
+          if(structurelessCheck.checked){
+            persistSettings({ structure_mode: 'flat' });
+          }
         });
       }
     });
@@ -1217,7 +1170,10 @@
           }
           if(stage === 'done'){
             smooth.setTarget(100);
-            st.classList.add('hidden');
+            if(st){
+              st.textContent = '';
+              st.classList.add('hidden');
+            }
             if(dl){
               dl.classList.add('show');
               dl.title = 'open folder';
@@ -1327,37 +1283,7 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
-          <div class="text-sm opacity-80">output folder (leave blank for Downloads folder)</div>
-          <div class="flex items-center gap-2">
-            <input id="output-path" type="text" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40" readonly value="">
-            <button id="output-choose" class="p-2 rounded-lg hover:bg-white/10 border border-white/10" title="choose folder">
-              <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 7h5l2 3h11v9H3z"/>
-                <path d="M3 7v12"/>
-              </svg>
-            </button>
-          </div>
-          <div class="flex gap-4 text-sm">
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" type="checkbox" class="pretty">folder structure</label>
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" type="checkbox" class="pretty" checked>structureless (zip)</label>
-          </div>
-        </div>
-
-        <div class="border-t border-white/10 my-4"></div>
-
-        <div class="space-y-3">
-          <div class="flex items-center gap-4">
-            <label class="flex items-center gap-2 text-[var(--txt-main)]">
-              <input id="metadata-check" type="checkbox" class="pretty" checked disabled>
-              <span>embed model info</span>
-            </label>
-          </div>
-          <details id="metadata-details" class="ml-2 glass-light rounded-lg px-3 py-2 text-xs text-[var(--txt-main)]/90">
-            <summary class="cursor-pointer select-none">example</summary>
-            <ul class="list-disc ml-4 mt-2 space-y-1">
-              <li>Model: model file</li>
-            </ul>
-          </details>
+          <div class="text-sm opacity-80">outputs will be saved as a zip to your Downloads folder</div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>
