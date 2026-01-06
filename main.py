@@ -78,7 +78,10 @@ class AppError(Exception):
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
+UPLOAD_DIR = BASE_DIR / "uploads"
+CONVERTED_DIR = BASE_DIR / "uploads_converted"
 SEGMENT = 352_800
+DEUX_SEGMENT = 573_300
 OVERLAP = 12
 LOG_PATH = BASE_DIR / "main_stemsplat.log"
 LEGACY_LOG = BASE_DIR / "stemsplat.log"
@@ -87,6 +90,13 @@ if LEGACY_LOG.exists():
         LEGACY_LOG.unlink()
     except Exception:
         pass
+
+MODEL_ALIAS_MAP = {
+    "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
+    "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+}
+
+CONFIG_ALIAS_MAP: dict[str, list[str]] = {}
 
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 stream_handler = logging.StreamHandler()
@@ -224,15 +234,16 @@ class ModelManager:
     def __init__(self):
         self.device = select_device()
         self.model_info = {
-            "vocals": ("Mel Band Roformer Vocals.ckpt", "Mel Band Roformer Vocals Config.yaml"),
-            "instrumental": ("Mel Band Roformer Instrumental.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
+            "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "Mel Band Roformer Vocals Config.yaml"),
+            "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
+            "deux": ("becruily_deux.ckpt", "config_deux_becruily.yaml"),
             "drums": ("kuielab_a_drums.onnx", None),
             "bass": ("kuielab_a_bass.onnx", None),
             "other": ("kuielab_a_other.onnx", None),
             "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
             "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
         }
-        self.refresh_models()
+        self.model_cache: dict[str, StemModel] = {}
 
     def _resolve_path(self, filename: str) -> Path:
         preferred = MODEL_DIR / filename
@@ -241,23 +252,42 @@ class ModelManager:
         fallback = Path.home() / "Library/Application Support/stems" / filename
         if fallback.exists():
             return fallback
+        aliases = MODEL_ALIAS_MAP.get(filename, [])
+        for alt in aliases:
+            cand = MODEL_DIR / alt
+            if cand.exists():
+                return cand
+            cand_fb = Path.home() / "Library/Application Support/stems" / alt
+            if cand_fb.exists():
+                return cand_fb
         raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
 
-    def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
-        if not filename:
-            return None
-        cfg = CONFIG_DIR / filename
-        if cfg.exists():
-            return cfg
-        raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
+def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
+    if not filename:
+        return None
+    cand = CONFIG_DIR / filename
+    if cand.exists():
+        return cand
+    raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
 
-    def refresh_models(self) -> None:
-        for name, (model_fname, cfg_fname) in self.model_info.items():
-            model_path = self._resolve_path(model_fname)
-            cfg_path = self._resolve_config(cfg_fname)
-            setattr(self, name, StemModel(model_path, self.device, cfg_path))
-            if cfg_fname:
-                setattr(self, f"{name}_config", cfg_path)
+    def _load_model(self, name: str) -> StemModel:
+        if name in self.model_cache:
+            return self.model_cache[name]
+        if name not in self.model_info:
+            raise AttributeError(name)
+        model_fname, cfg_fname = self.model_info[name]
+        model_path = self._resolve_path(model_fname)
+        cfg_path = self._resolve_config(cfg_fname)
+        model = StemModel(model_path, self.device, cfg_path)
+        self.model_cache[name] = model
+        if cfg_fname:
+            setattr(self, f"{name}_config", cfg_path)
+        return model
+
+    def __getattr__(self, name: str) -> StemModel:
+        if name in self.model_info:
+            return self._load_model(name)
+        raise AttributeError(name)
 
     # Separation helpers
     def split_vocals(
@@ -541,12 +571,40 @@ async def download_models():
 # ── Separation helpers ─────────────────────────────────────────────────────-
 
 def _prepare_waveform(audio_path: Path) -> torch.Tensor:
+    loaded_via_soundfile = False
     try:
         logger.info("loading audio %s", audio_path)
         waveform, sr = torchaudio.load(str(audio_path))
     except Exception as exc:
-        logger.exception("failed to load %s", audio_path)
-        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
+        needs_fallback = isinstance(exc, ImportError) and ("torchcodec" in str(exc).lower() or "TorchCodec" in str(exc))
+        if not needs_fallback:
+            logger.exception("failed to load %s", audio_path)
+            raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
+
+        logger.warning("torchcodec missing; retrying %s with soundfile backend", audio_path)
+        try:
+            torchaudio.set_audio_backend("soundfile")
+            waveform, sr = torchaudio.load(str(audio_path))
+            logger.info("loaded %s via torchaudio soundfile backend", audio_path)
+        except Exception as sf_exc:
+            logger.debug("torchaudio soundfile backend failed for %s: %s", audio_path, sf_exc)
+            try:
+                data, sr = sf.read(str(audio_path))
+                waveform = torch.from_numpy(data)
+                logger.info("loaded %s via soundfile direct read", audio_path)
+                loaded_via_soundfile = True
+            except Exception as final_exc:
+                logger.exception("failed to load %s via all fallbacks", audio_path)
+                raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {final_exc}") from final_exc
+
+    if loaded_via_soundfile and waveform.ndim == 2:
+        waveform = waveform.transpose(0, 1)
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    if not torch.is_floating_point(waveform):
+        waveform = waveform.float()
+    if waveform.dtype != torch.float32:
+        waveform = waveform.float()
     if sr != 44100:
         try:
             logger.info("resampling %s from %s to 44100", audio_path, sr)
@@ -685,7 +743,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
 
             zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
-            cb("zip.start", 95)
+            cb("zip.start", 99)
             try:
                 with zipfile.ZipFile(zip_path, "w") as zf:
                     for name in stems_out:
@@ -697,7 +755,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                             logger.warning("expected stem %s missing at %s", name, fp)
             except Exception as exc:
                 raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-            cb("zip.done", 98)
+            cb("zip.done", 99)
             tasks[task_id]["zip"] = zip_path
             tasks[task_id]["stems"] = stems_out
             cb("finalizing", 99)
@@ -763,65 +821,121 @@ def _separate_waveform(
 ) -> list[str]:
     logger.info("starting separation for %s with stems %s", audio_path, stem_list)
     waveform = _prepare_waveform(audio_path)
-    cb("load_audio.done", 2)
+    cb("load_audio.done", 1)
 
-    temp_dir = Path(tempfile.gettempdir())
     stems_out: list[str] = []
+    remaining_stems = [s for s in stem_list if s != "deux"]
 
-    need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-    need_instrumental_model = "instrumental" in stem_list
+    def ensure_stereo(x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        if x.shape[0] >= 2:
+            return x
+        return x.repeat(2, 1)
 
-    inst_path: Optional[Path] = None
+    if "deux" in stem_list:
+        cb("deux.start", 2)
+        deux_model = manager.deux
 
-    if need_vocal_pass:
         def _cb(frac: float) -> None:
-            cb("vocals", 1 + int(frac * 99))
+            cb("deux", 2 + int(frac * 94))
 
-        cb("split_vocals.start", 2)
-        voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
-        cb("split_vocals.done", 50)
-        if "vocals" in stem_list:
-            fname = f"{audio_path.stem} - vocals.wav"
-            _write_wave(out_dir, fname, voc)
+        deux_wave = ensure_stereo(waveform)
+        voc_d, inst_d = manager.split_pair_with_model(deux_model, deux_wave, DEUX_SEGMENT, OVERLAP, progress_cb=_cb)
+        fname_v = f"{audio_path.stem} - vocals (deux).wav"
+        fname_i = f"{audio_path.stem} - instrumental (deux).wav"
+        _write_wave(out_dir, fname_v, voc_d)
+        cb("write.vocals_deux", 97)
+        _write_wave(out_dir, fname_i, inst_d)
+        cb("write.instrumental_deux", 98)
+        stems_out.extend([fname_v, fname_i])
+
+    channel_count = waveform.shape[0]
+    channel_specs: list[tuple[int, str, int, int]] = []
+    if channel_count >= 2:
+        channel_specs = [(0, "left", 2, 49), (1, "right", 51, 99)]
+    else:
+        # mono: use most of the range so the bar still progresses smoothly
+        channel_specs = [(0, "left", 2, 99)]
+
+    need_vocal_pass = ("vocals" in remaining_stems) or any(s in remaining_stems for s in ["drums", "bass", "other", "guitar"])
+    need_instrumental_model = "instrumental" in remaining_stems
+
+    if remaining_stems:
+        channel_stems: dict[str, list[torch.Tensor]] = {}
+
+        def map_channel_pct(local_pct: float, start: int, end: int) -> int:
+            span = max(1, end - start)
+            return start + int(span * max(0.0, min(100.0, local_pct)) / 100)
+
+        def process_channel(idx: int, label: str, start: int, end: int) -> None:
+            if idx >= channel_count:
+                return
+            chan_wave = waveform[idx : idx + 1]
+            chan_outputs: dict[str, torch.Tensor] = {}
+
+            def ch(stage: str, local_pct: float) -> None:
+                overall = map_channel_pct(local_pct, start, end)
+                cb(f"{label}.{stage}", overall)
+
+            ch("start", 0)
+            inst_wave: Optional[torch.Tensor] = None
+            vocals_wave: Optional[torch.Tensor] = None
+
+            if need_vocal_pass:
+                ch("split_vocals.start", 2)
+
+                def _cb(frac: float) -> None:
+                    ch("vocals", 5 + (frac * 70))
+
+                voc, inst = manager.split_vocals(ensure_stereo(chan_wave), SEGMENT, OVERLAP, progress_cb=_cb)
+                vocals_wave = voc
+                inst_wave = inst
+                ch("split_vocals.done", 78)
+                if "vocals" in remaining_stems:
+                    chan_outputs["vocals"] = voc[:1]
+                    ch("write.vocals", 82)
+            else:
+                inst_wave = chan_wave
+
+            if need_instrumental_model:
+                ch("instrumental.start", 84)
+                inst_model = manager.instrumental
+                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
+                inst_pred = inst_model(ensure_stereo(use_wave))
+                chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
+                ch("instrumental.done", 90)
+
+            for stem_name in ["drums", "bass", "other", "guitar"]:
+                if stem_name not in remaining_stems:
+                    continue
+                ch(f"{stem_name}.start", 90)
+                inst_model = getattr(manager, stem_name)
+                use_wave = inst_wave if inst_wave is not None else ensure_stereo(chan_wave)
+                pred = inst_model(ensure_stereo(use_wave))
+                chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
+                ch(f"{stem_name}.done", 96)
+
+            ch("channel.done", 100)
+            for stem_name, tensor in chan_outputs.items():
+                channel_stems.setdefault(stem_name, []).append(tensor)
+            # free channel-specific references promptly
+            del chan_outputs, inst_wave, vocals_wave
+
+        for idx, label, start, end in channel_specs:
+            process_channel(idx, label, start, end)
+
+        for stem_name in remaining_stems:
+            tensors = channel_stems.get(stem_name)
+            if not tensors:
+                continue
+            combined = torch.cat(tensors, dim=0)
+            fname = f"{audio_path.stem} - {stem_name}.wav"
+            _write_wave(out_dir, fname, combined)
             stems_out.append(fname)
-            cb("write.vocals", 52)
-        need_inst = any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-        if need_inst:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            _write_wave(temp_dir, inst_path.name, inst)
-        del voc, inst
+            cb(f"write.{stem_name}", 98)
 
-    if need_instrumental_model:
-        cb("instrumental.start", 52)
-        inst_model = manager.instrumental
-        if inst_path is None:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            waveform_np = waveform.cpu().numpy()
-            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
-        inst_wave = _prepare_waveform(inst_path)
-        inst_pred = inst_model(inst_wave)
-        fname = f"{audio_path.stem} - instrumental.wav"
-        _write_wave(out_dir, fname, inst_pred)
-        stems_out.append(fname)
-        cb("instrumental.done", 75)
-
-    for stem_name in ["drums", "bass", "other", "guitar"]:
-        if stem_name not in stem_list:
-            continue
-        cb(f"{stem_name}.start", 75)
-        inst_model = getattr(manager, stem_name)
-        if inst_path is None:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            waveform_np = waveform.cpu().numpy()
-            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
-        inst_wave = _prepare_waveform(inst_path)
-        pred = inst_model(inst_wave)
-        fname = f"{audio_path.stem} - {stem_name}.wav"
-        _write_wave(out_dir, fname, pred)
-        stems_out.append(fname)
-        cb(f"{stem_name}.done", min(98, 75 + len(stems_out)))
-
-    cb("done", 100)
+    cb("merge.done", 99)
     return stems_out
 
 
@@ -836,8 +950,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     stem_list = [s for s in stems.split(",") if s]
     logger.info("upload received task=%s filename=%s stems=%s", task_id, file.filename, stem_list)
     try:
-        path = Path("uploads") / file.filename
-        path.parent.mkdir(exist_ok=True)
+        path = UPLOAD_DIR / file.filename
+        path.parent.mkdir(exist_ok=True, parents=True)
         with path.open("wb") as f:
             content = await file.read()
             f.write(content)
@@ -847,7 +961,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         logger.exception("failed to persist upload %s", file.filename)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
 
-    conv_dir = Path("uploads_converted")
+    conv_dir = CONVERTED_DIR
     conv_dir.mkdir(exist_ok=True)
     try:
         conv_path = _stage_audio_copy(path, conv_dir)
@@ -861,7 +975,13 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
 
     out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
-    expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
+    expected: list[str] = []
+    for s in stem_list:
+        if s == "deux":
+            expected.append(f"{Path(file.filename).stem} - vocals (deux).wav")
+            expected.append(f"{Path(file.filename).stem} - instrumental (deux).wav")
+        else:
+            expected.append(f"{Path(file.filename).stem} - {s}.wav")
 
     progress[task_id] = {"stage": "ready", "pct": 0}
     tasks[task_id] = {
@@ -930,7 +1050,13 @@ async def rerun(task_id: str):
     controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
     conv_dir = conv_src.parent
     out_dir = conv_dir / f"{conv_src.stem}—stems"
-    expected = [f"{conv_src.stem} - {s}.wav" for s in stem_list]
+    expected: list[str] = []
+    for s in stem_list:
+        if s == "deux":
+            expected.append(f"{conv_src.stem} - vocals (deux).wav")
+            expected.append(f"{conv_src.stem} - instrumental (deux).wav")
+        else:
+            expected.append(f"{conv_src.stem} - {s}.wav")
 
     progress[new_id] = {"stage": "queued", "pct": 0}
     tasks[new_id] = {
@@ -961,9 +1087,8 @@ async def download(task_id: str):
 
 @app.post("/clear_all_uploads")
 async def clear_all_uploads():
-    dirs = ["uploads", "uploads_converted"]
-    for d in dirs:
-        dir_path = BASE_DIR / d
+    dirs = [UPLOAD_DIR, CONVERTED_DIR]
+    for dir_path in dirs:
         if dir_path.exists():
             for entry in dir_path.iterdir():
                 if entry.is_dir():
@@ -1010,9 +1135,13 @@ async def index():
     return HTMLResponse(html_path.read_text())
 
 
-@app.post("/shutdown")
+@app.api_route("/shutdown", methods=["POST", "GET"])
 async def shutdown():
     logger.warning("shutdown requested via api; terminating process")
+    try:
+        _close_installer_ui()
+    except Exception:
+        logger.debug("installer ui shutdown during close failed", exc_info=True)
 
     def _stop():
         logger.debug("shutdown thread armed; sleeping briefly to flush logs")
@@ -1027,7 +1156,7 @@ async def shutdown():
 
 
 def _process_local_file(path: Path, stem_list: list[str]) -> list[str]:
-    conv_dir = Path("uploads_converted")
+    conv_dir = CONVERTED_DIR
     conv_path = _stage_audio_copy(path, conv_dir)
     out_dir = conv_dir / f"{conv_path.stem}—stems"
 

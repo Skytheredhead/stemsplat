@@ -164,12 +164,9 @@
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="drums-box" type="checkbox" class="pretty">drums</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="bass-box" type="checkbox" class="pretty">bass</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="other-box" type="checkbox" class="pretty">other</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="guitar-box" type="checkbox" class="pretty">guitar</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">voc/inst (deux)</label>
       </div>
-      <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white">
+      <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M8 5v14l11-7z"/>
         </svg>
@@ -223,10 +220,7 @@
     const fileInput = document.getElementById('file-input');
     const vocalsBox = document.getElementById('vocals-box');
     const instBox   = document.getElementById('inst-box');
-    const drumsBox  = document.getElementById('drums-box');
-    const bassBox   = document.getElementById('bass-box');
-    const otherBox  = document.getElementById('other-box');
-    const guitarBox = document.getElementById('guitar-box');
+    const deuxBox   = document.getElementById('deux-box');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const topBtn    = document.getElementById('top-btn');
@@ -236,10 +230,37 @@
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
     const closeBtn  = document.getElementById('close-app');
+    const startBtn  = document.getElementById('start-btn');
 
     let startPressed = false;
+    updateStartButton();
+    function updateStartButton(){
+      if(!startBtn) return;
+      const hasItems = queue.children.length > 0;
+      if(!hasItems){
+        startBtn.disabled = true;
+        const icon = startBtn.querySelector('svg');
+        if(icon){ icon.style.animation = 'none'; }
+      }else{
+        startBtn.disabled = false;
+        const icon = startBtn.querySelector('svg');
+        if(icon){ icon.style.animation = ''; }
+      }
+    }
 
     if (closeBtn) {
+      const shutdownEndpoints = [
+        { url: '/shutdown', options: { method: 'POST', keepalive: true } },
+        { url: 'http://localhost:6060/installer_shutdown', options: { method: 'POST', mode: 'no-cors', keepalive: true } },
+      ];
+      const sendShutdown = async () => {
+        const tasks = shutdownEndpoints.map(({ url, options }) => (
+          fetch(url, options).catch(() => {
+            try { navigator.sendBeacon(url, new Blob()); } catch(_) {}
+          })
+        ));
+        await Promise.allSettled(tasks);
+      };
       const closeWindow = () => {
         try { window.close(); } catch(_) {}
         setTimeout(() => { window.location.replace('about:blank'); }, 140);
@@ -248,15 +269,11 @@
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
-          if (navigator.sendBeacon) {
-            navigator.sendBeacon('/shutdown', new Blob());
-          } else {
-            await fetch('/shutdown', { method: 'POST', keepalive: true });
-          }
+          await sendShutdown();
         } catch (err) {
           console.error('shutdown failed', err);
         }
-        setTimeout(closeWindow, 120);
+        setTimeout(closeWindow, 220);
       });
     }
 
@@ -360,20 +377,6 @@
     }
 
     let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
-    const STAGE_RANGES = {
-      ready:[0,0],
-      queued:[0,0],
-      preparing:[0,1], 'prepare.complete':[1,1],
-      converting:[1,5],
-      'load_audio.start':[1,2], 'load_audio.done':[2,3],
-      'split_vocals.start':[3,3], vocals:[3,60], 'split_vocals.done':[60,60],
-      instrumental_model:[60,72], 'split_inst_model.start':[60,60], 'split_inst_model.done':[70,72],
-      instrumental:[60,90], 'split_inst.start':[60,90], 'split_inst.masks_ready':[88,90],
-      'write.vocals':[52,55], 'write.instrumental':[72,75], 'write.drums':[92,94], 'write.bass':[92,94], 'write.other':[92,94], 'write.guitar':[92,94],
-      'zip.start':[95,98], 'zip.done':[98,99],
-      finalizing:[99,100], done:[100,100],
-      paused:[0,0], stopped:[0,0], error:[0,0],
-    };
     // Helper: is a task finished? (completed or stopped)
     function isFinished(t){
       return t && (t.pct >= 100 || t.stage === 'stopped');
@@ -411,6 +414,7 @@
     function updateUI(){
       updateClear();
       updateVigs();
+      updateStartButton();
     }
 
 
@@ -426,6 +430,32 @@
         chip.textContent = stem;
         container.appendChild(chip);
       });
+    }
+
+    function shouldShowStatus(stage){
+      const active = stage && stage !== 'ready' && stage !== 'queued';
+      return startPressed || active;
+    }
+
+    function setStatusVisibility(st, stage){
+      if(!st) return;
+      const visible = shouldShowStatus(stage);
+      st.classList.toggle('hidden', !visible);
+    }
+
+    function setStopVisibility(stopPad, stage, forceShow = false){
+      if(!stopPad) return;
+      const active = forceShow || (stage && !['ready','queued','done','stopped','error'].includes(stage));
+      const show = !!active;
+      stopPad.style.display = show ? '' : 'none';
+      stopPad.classList.toggle('show', show);
+      if(!show){
+        stopPad.style.pointerEvents = 'none';
+        stopPad.style.opacity = '0.6';
+      } else {
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+      }
     }
 
     // --- Helper to set rerun and stop icons ---
@@ -479,7 +509,7 @@
       } catch (_) {}
       if (!ok || !newId) {
         // Treat it as a stopped/error card with rerun available
-        if (st) { st.textContent = 'error'; st.classList.remove('hidden'); }
+        if (st) { st.textContent = 'error'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
         const parent = st && st.closest ? st.closest('.card') : null;
         if (parent) parent.classList.add('done');
 
@@ -496,7 +526,7 @@
         return;
       }
       // reset visual state
-      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; }
+      if(st){ st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
       if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
       const card = stopPad && stopPad.closest('.card');
       if(card){ card.classList.remove('done'); }
@@ -509,6 +539,7 @@
         stopPad.style.pointerEvents = '';
         stopPad.style.opacity = '';
         stopPad.onclick = (e) => { e.preventDefault(); fetch('/stop/'+task.id,{method:'POST'}); };
+        setStopVisibility(stopPad, 'preparing');
       }
       task.stage = 'preparing';
       task.pct = 0;
@@ -535,9 +566,7 @@
       li.textContent = task.name;
       const labels = node.querySelector('.labels');
       const smooth = makeProgressSmoother(bar);
-      const initRange = STAGE_RANGES[task.stage] || [0,100];
-      const initSp = Math.round(Math.max(0, Math.min(100, task.pct || 0)));
-      const initOverall = initRange[0] + (initRange[1] - initRange[0]) * (initSp/100);
+      const initOverall = Math.max(0, Math.min(100, task.pct || 0));
       smooth.setImmediate(initOverall);
       if(task.pct >= 100){
         st.classList.add('hidden');
@@ -573,18 +602,12 @@
         }
       }
       else {
-      const [s,e] = STAGE_RANGES[task.stage] || [0,100];
       const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
-      const overallNow = s + (e - s) * (sp/100);
-      st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
-      smooth.setImmediate(overallNow);
-        if (stopPad) {
-          stopPad.style.display = '';
-          stopPad.classList.add('show');
-          // If we don't have a valid id yet, keep it disabled (re-enabled on onload)
-          if (!task.id) { stopPad.style.pointerEvents = 'none'; stopPad.style.opacity = '0.6'; }
-        }
+        st.textContent = task.stage ? `${task.stage} (${sp}%)` : 'queued';
+        smooth.setImmediate(sp);
+        setStopVisibility(stopPad, task.stage);
       }
+      setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
       // Attach task id for later filtering
       inserted.__taskId = task.id;
@@ -598,6 +621,7 @@
       applyLabels(inserted.querySelector('.labels'), task.stems);
       updateClear();
       updateVigs();
+      updateStartButton();
       return {bar, st, dl, stopPad, smooth};
     }
 
@@ -770,16 +794,26 @@
     /* === upload & progress logic === */
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
-    const startBtn = document.getElementById('start-btn');
+    function getTaskById(id){
+      return tasks.find(t => t && t.id === id);
+    }
+
+    function revealStatusesAfterStart(){
+      document.querySelectorAll('#queue .chip').forEach(chip => chip.classList.remove('hidden'));
+      document.querySelectorAll('#queue .stop-pad').forEach(pad => {
+        const row = pad.closest('.item-row');
+        const id = row ? row.__taskId : null;
+        const task = id ? getTaskById(id) : null;
+        const stage = task ? task.stage : null;
+        setStopVisibility(pad, stage);
+      });
+    }
 
     function selectedStems(){
       const stems = [];
       if(vocalsBox.checked) stems.push('vocals');
       if(instBox.checked)   stems.push('instrumental');
-      if(drumsBox.checked)  stems.push('drums');
-      if(bassBox.checked)   stems.push('bass');
-      if(otherBox.checked)  stems.push('other');
-      if(guitarBox.checked) stems.push('guitar');
+      if(deuxBox && deuxBox.checked) stems.push('deux');
       return stems;
     }
 
@@ -804,6 +838,8 @@
         li.textContent = file.name;
         st.textContent = 'ready';
         st.classList.add('chip-dim');
+        st.classList.add('hidden');
+        if(startPressed){ st.classList.remove('hidden'); }
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
         queue.insertBefore(item, queue.firstChild);
@@ -835,6 +871,7 @@
           await uploadWithStems(p, stems);
         }
       }
+      updateStartButton();
     }
 
     function uploadWithStems(pending, stems){
@@ -842,14 +879,6 @@
       pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
-        // enable stop square (disabled until task id assigned)
-        if (stopPad){
-          stopPad.style.display = '';
-          stopPad.classList.add('show');
-          stopPad.style.pointerEvents = 'none';
-          stopPad.style.opacity = '0.6';
-          setStopSquareIcon(stopPad);
-        }
         const data = new FormData();
         data.append('file', file);
         data.append('stems', stems.join(','));
@@ -858,7 +887,6 @@
         xhr.upload.onprogress = (evt) => {
           if(evt.lengthComputable){
             const pct = Math.round(evt.loaded / evt.total * 100);
-            smooth.setTarget(Math.min(pct * 0.2, 20)); // cap at 20% until server stages
             st.textContent = `uploading (${pct}%)`;
             st.classList.remove('chip-dim');
           }
@@ -867,6 +895,7 @@
           if(xhr.status >= 400){ st.textContent = 'error'; return resolve(); }
           st.classList.remove('chip-dim');
           st.textContent = 'ready';
+          smooth.setImmediate(0);
           let res = {};
           try {
             res = JSON.parse(xhr.responseText || '{}');
@@ -886,23 +915,24 @@
             }catch(_){ }
             return resolve();
           }
-          const res = JSON.parse(xhr.responseText);
-          pending.id = res.task_id;
-          pending.stems = res.stems;
-          ui.item.__taskId = res.task_id;
+          const parsed = JSON.parse(xhr.responseText);
+          pending.id = parsed.task_id;
+          pending.stems = parsed.stems;
+          ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:res.task_id, name:file.name, pct:0, stage:'ready', stems:res.stems, tempKey: pending.tempKey };
+          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
           if (stopPad){
+            setStopSquareIcon(stopPad);
             stopPad.style.pointerEvents = '';
             stopPad.style.opacity = '';
             stopPad.title = 'stop';
             stopPad.onclick = async (e) => {
               e.preventDefault();
-              try{ await fetch('/stop/'+res.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
+              try{ await fetch('/stop/'+parsed.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
               // mark as stopped locally so UI updates right away
               t.stage = 'stopped';
               t.pct = 0;
@@ -921,6 +951,7 @@
               }
               updateUI();
             };
+            setStopVisibility(stopPad, 'ready');
           }
           // start polling
           trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
@@ -946,9 +977,11 @@
     }
 
     async function startSequentialProcessing(){
-      startPressed = true;
+      if(startBtn && startBtn.disabled) return;
       const stems = selectedStems();
       if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+      startPressed = true;
+      revealStatusesAfterStart();
       for(const p of pendingItems){
         if(!p.uploadPromise){
           await uploadWithStems(p, stems);
@@ -994,14 +1027,18 @@
             es.close(); updateUI(); return;
           }
           if (typeof pct === 'number' && pct >= 0) {
-            const range = STAGE_RANGES[stage] || [0, 100];
-            const sp = Math.round(Math.max(0, Math.min(100, pct))); // stage-local percent for label
-            const overall = range[0] + (range[1] - range[0]) * (sp / 100);
+            const sp = Math.round(Math.max(0, Math.min(100, pct)));
             st.textContent = stage ? `${stage} (${sp}%)` : 'queued';
-            smooth.setTarget(Math.max(0, Math.min(overall, 100)));
+            if (stage === 'queued' || stage === 'ready') {
+              smooth.setImmediate(0);
+            } else {
+              smooth.setTarget(sp);
+            }
           } else {
             st.textContent = 'queued';
           }
+          setStatusVisibility(st, stage);
+          setStopVisibility(stopPad, stage);
         });
         es.addEventListener('error', () => {
           if (taskRef) {
@@ -1013,6 +1050,7 @@
             st.textContent = 'error';
             st.classList.remove('hidden');
           }
+          setStatusVisibility(st, 'error');
           const parent = st && st.closest ? st.closest('.card') : null;
           if (parent) parent.classList.add('done');
 
