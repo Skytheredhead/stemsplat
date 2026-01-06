@@ -164,7 +164,7 @@
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals</label>
         <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both (deux model)</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -829,8 +829,8 @@
         const commitOutput = () => {
           const val = (outputInput.value || '').trim();
           if(!val){
-            outputInput.value = defaultOutputPath;
-            persistSettings({ output_root: defaultOutputPath });
+            outputInput.value = defaultOutputPath || (settingsState.output_root || '');
+            persistSettings({ output_root: outputInput.value });
           }else{
             persistSettings({ output_root: val });
           }

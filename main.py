@@ -230,10 +230,11 @@ def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> 
         staging_dir = deliver_dir
         zip_target = None
     else:
-        staging_dir = ensure_unique_dir(root / f"{base_name}—stems")
+        flat_root = root.parent if root.name == "stemsplat" else root
+        staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
         staging_dir.mkdir(parents=True, exist_ok=True)
-        deliver_dir = root
-        zip_target = ensure_unique_path(root / f"{base_name}.zip")
+        deliver_dir = flat_root
+        zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
     return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": mode}
 
 MODEL_URLS = [
@@ -1530,11 +1531,16 @@ async def reveal_output(task_id: str):
 
 
 def _model_exists(filename: str) -> bool:
-    targets = [MODEL_DIR / filename, Path.home() / "Library/Application Support/stems" / filename]
-    aliases = MODEL_ALIAS_MAP.get(filename, [])
-    for alt in aliases:
-        targets.append(MODEL_DIR / alt)
-        targets.append(Path.home() / "Library/Application Support/stems" / alt)
+    names: set[str] = {filename}
+    names.update(MODEL_ALIAS_MAP.get(filename, []))
+    for canon, alias_list in MODEL_ALIAS_MAP.items():
+        if filename in alias_list:
+            names.add(canon)
+            names.update(alias_list)
+    targets = []
+    for name in names:
+        targets.append(MODEL_DIR / name)
+        targets.append(Path.home() / "Library/Application Support/stems" / name)
     return any(path.exists() for path in targets)
 
 
