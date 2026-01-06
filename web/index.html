@@ -850,16 +850,16 @@
       }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
-          if(!structureCheck.checked){ structureCheck.checked = true; return; }
-          structurelessCheck.checked = false;
-          persistSettings({ structure_mode: 'structured' });
+          if(structureCheck.checked){
+            persistSettings({ structure_mode: 'structured' });
+          }
         });
       }
       if(structurelessCheck){
         structurelessCheck.addEventListener('change', () => {
-          if(!structurelessCheck.checked){ structurelessCheck.checked = true; return; }
-          structureCheck.checked = false;
-          persistSettings({ structure_mode: 'flat' });
+          if(structurelessCheck.checked){
+            persistSettings({ structure_mode: 'flat' });
+          }
         });
       }
     });
@@ -1324,8 +1324,8 @@
             </button>
           </div>
           <div class="flex gap-4 text-sm">
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" type="checkbox" class="pretty">folder structure</label>
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" type="checkbox" class="pretty" checked>structureless (zip)</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" name="structure-mode" type="radio" class="pretty">folder structure</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" name="structure-mode" type="radio" class="pretty" checked>structureless (zip)</label>
           </div>
         </div>
 

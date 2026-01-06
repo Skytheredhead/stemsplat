@@ -221,7 +221,9 @@ def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> 
         pass
     root = settings.output_root
     if mode == "structured":
-        deliver_dir = settings.resolve_output_dir(base_name) / "stems"
+        stemsplat_dir = root if root.name.lower() == "stemsplat" else root / "stemsplat"
+        song_dir = ensure_unique_dir(stemsplat_dir / base_name)
+        deliver_dir = song_dir
         staging_dir = deliver_dir
         zip_target = None
     else:
