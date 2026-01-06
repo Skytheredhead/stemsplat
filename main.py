@@ -681,19 +681,36 @@ def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
 
     wav_path = audio_path.with_suffix(".wav")
     logger.info("converting %s to wav at %s", audio_path, wav_path)
-    cmd = [ffmpeg_path, "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(audio_path),
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-vn",
+        str(wav_path),
+    ]
     conversion_ok = False
     try:
         import subprocess
 
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        logger.debug("ffmpeg stdout for %s: %s", audio_path, result.stdout)
-        logger.debug("ffmpeg stderr for %s: %s", audio_path, result.stderr)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         conversion_ok = True
     except FileNotFoundError as exc:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
     except Exception as exc:
-        logger.exception("conversion to wav failed for %s", audio_path)
+        logger.error("conversion to wav failed for %s: %s", audio_path, exc)
+        try:
+            if hasattr(exc, "stderr") and exc.stderr:
+                logger.error("ffmpeg stderr: %s", exc.stderr)
+        except Exception:
+            pass
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
 
     if conversion_ok and not wav_path.exists():
@@ -890,8 +907,18 @@ def _separate_waveform(
         channel_stems: dict[str, list[torch.Tensor]] = {}
 
         def map_channel_pct(local_pct: float, start: int, end: int) -> int:
+            """
+            Convert a channel-local percent or fraction into an overall percent.
+
+            If ``local_pct`` is in [0, 1], treat it as a fraction; otherwise treat
+            it as a percent in [0, 100].
+            """
             span = max(1, end - start)
-            return start + int(span * max(0.0, min(100.0, local_pct)) / 100)
+            if 0.0 <= local_pct <= 1.0:
+                scaled = local_pct
+            else:
+                scaled = max(0.0, min(100.0, local_pct)) / 100
+            return start + int(span * scaled)
 
         def process_channel(idx: int, label: str, start: int, end: int) -> None:
             if idx >= channel_count:
@@ -1013,17 +1040,17 @@ def _separate_waveform(
                 return model(prepared)
 
             if need_instrumental_model:
-                ch("instrumental.start", 84)
+                ch("instrumental.start", 0.0)
                 inst_model = manager.instrumental
                 use_wave = inst_wave if inst_wave is not None else chan_wave
 
                 def _inst_progress(frac: float) -> None:
-                    # map chunk progress into the local 84-90% window
-                    ch("instrumental.progress", 84 + (90 - 84) * frac)
+                    # map chunk progress across the full channel span
+                    ch("instrumental.progress", frac)
 
                 inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
                 chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
-                ch("instrumental.done", 90)
+                ch("instrumental.done", 1.0)
 
             for stem_name in ["drums", "bass", "other", "guitar"]:
                 if stem_name not in remaining_stems:
