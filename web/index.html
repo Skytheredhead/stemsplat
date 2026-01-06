@@ -240,6 +240,7 @@
     let startLock = false;
     let settingsState = { output_root: '', structure_mode: 'flat' };
     let defaultOutputPath = '';
+    let dirPickerInput = null;
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
@@ -833,19 +834,75 @@
         outputInput.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); commitOutput(); outputInput.blur(); } });
       }
       if(outputChoose){
+        const ensureDirPicker = () => {
+          if(dirPickerInput) return dirPickerInput;
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.setAttribute('webkitdirectory', '');
+          input.setAttribute('directory', '');
+          input.multiple = true;
+          input.className = 'sr-only';
+          input.style.display = 'none';
+          document.body.appendChild(input);
+          dirPickerInput = input;
+          return dirPickerInput;
+        };
+
+        const extractDirPath = (file) => {
+          if(!file) return null;
+          const abs = file.path || '';
+          const rel = file.webkitRelativePath || '';
+          if(abs && rel){
+            const suffix = rel.replace(/^[\\/]+/, '');
+            if(abs.endsWith(suffix)){
+              return abs.slice(0, abs.length - suffix.length).replace(/[\\/]+$/, '');
+            }
+          }
+          if(abs){
+            const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+            return idx > 0 ? abs.slice(0, idx) : abs;
+          }
+          if(rel){
+            const parts = rel.split(/[\\/]/);
+            parts.pop();
+            return parts.join('/') || null;
+          }
+          return null;
+        };
+
+        const pickDirectory = () => new Promise((resolve) => {
+          const picker = ensureDirPicker();
+          picker.onchange = () => {
+            const file = picker.files && picker.files.length ? picker.files[0] : null;
+            const dirPath = file ? extractDirPath(file) : null;
+            picker.value = '';
+            resolve(dirPath);
+          };
+          picker.click();
+        });
+
         outputChoose.addEventListener('click', async () => {
           const suggestion = settingsState.output_root || defaultOutputPath;
-          let nextPath = suggestion;
+          let nextPath = null;
           try{
-            const manual = prompt('choose folder path', suggestion);
-            if(manual === null) return;
-            nextPath = (manual || '').trim() || suggestion;
+            nextPath = await pickDirectory();
           }catch(err){
-            console.warn('folder prompt failed', err);
-            nextPath = suggestion;
+            console.warn('directory picker failed', err);
           }
-          await persistSettings({ output_root: nextPath });
-          applySettingsUI();
+          if(!nextPath){
+            try{
+              const manual = prompt('choose folder path', suggestion);
+              if(manual === null) return;
+              nextPath = (manual || '').trim() || suggestion;
+            }catch(err){
+              console.warn('folder prompt failed', err);
+              nextPath = suggestion;
+            }
+          }
+          if(nextPath){
+            await persistSettings({ output_root: nextPath });
+            applySettingsUI();
+          }
         });
       }
       if(structureCheck){

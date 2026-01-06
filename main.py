@@ -1430,17 +1430,40 @@ async def reveal_output(task_id: str):
     out_path = Path(out_dir)
     if not out_path.exists():
         raise AppError(ErrorCode.INVALID_REQUEST, "Output path missing").to_http(404)
+
+    def _pick_target() -> Path:
+        zip_path = info.get("zip")
+        if zip_path:
+            zp = Path(zip_path)
+            if zp.exists():
+                return zp
+        stems = info.get("stems") or []
+        for stem in stems:
+            candidate = out_path / stem
+            if candidate.exists():
+                return candidate
+        return out_path
+
+    target = _pick_target()
+    select_path = target if target.is_file() else target
+    reveal_dir = target.parent if target.is_file() else target
     try:
         if sys.platform.startswith("darwin"):
-            subprocess.Popen(["open", str(out_path)])
+            if select_path.is_file():
+                subprocess.Popen(["open", "-R", str(select_path)])
+            else:
+                subprocess.Popen(["open", str(reveal_dir)])
         elif sys.platform.startswith("win"):
-            os.startfile(str(out_path))  # type: ignore[attr-defined]
+            if select_path.is_file():
+                subprocess.Popen(["explorer", "/select,", str(select_path)])
+            else:
+                os.startfile(str(reveal_dir))  # type: ignore[attr-defined]
         else:
-            subprocess.Popen(["xdg-open", str(out_path)])
+            subprocess.Popen(["xdg-open", str(reveal_dir)])
     except Exception as exc:
-        logger.warning("failed to reveal folder %s: %s", out_path, exc)
+        logger.warning("failed to reveal folder %s: %s", reveal_dir, exc)
         raise AppError(ErrorCode.INVALID_REQUEST, "Unable to open folder").to_http(500)
-    return {"status": "opened", "path": str(out_path)}
+    return {"status": "opened", "path": str(select_path if select_path.exists() else reveal_dir)}
 
 
 def _model_exists(filename: str) -> bool:
