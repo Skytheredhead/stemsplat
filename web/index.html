@@ -230,10 +230,10 @@
     const spacer    = document.getElementById('queue-spacer');
     const closeBtn  = document.getElementById('close-app');
     const startBtn  = document.getElementById('start-btn');
-    const outputInput = document.getElementById('output-path');
-    const outputChoose = document.getElementById('output-choose');
-    const structureCheck = document.getElementById('structure-check');
-    const structurelessCheck = document.getElementById('structureless-check');
+    const outputInput = null;
+    const outputChoose = null;
+    const structureCheck = null;
+    const structurelessCheck = null;
 
     let startPressed = false;
     let startGeneration = 0;
@@ -286,15 +286,7 @@
     }
 
     function applySettingsUI(){
-      if(outputInput && settingsState.output_root){
-        outputInput.value = settingsState.output_root;
-        defaultOutputPath = defaultOutputPath || settingsState.output_root;
-      }
-      if(structureCheck && structurelessCheck){
-          const structured = settingsState.structure_mode === 'structured';
-          structureCheck.checked = structured;
-          structurelessCheck.checked = !structured;
-      }
+      // settings UI disabled; outputs always go to default zip
     }
 
     async function loadSettings(){
@@ -818,105 +810,10 @@
       });
       loadSettings();
       if(outputInput){
-        const commitOutput = () => {
-          const val = (outputInput.value || '').trim();
-          if(!val){
-            outputInput.value = defaultOutputPath || (settingsState.output_root || '');
-            persistSettings({ output_root: outputInput.value });
-          }else{
-            persistSettings({ output_root: val });
-          }
-        };
-        outputInput.readOnly = false;
-        outputInput.addEventListener('focus', () => { outputInput.readOnly = false; outputInput.select(); });
-        outputInput.addEventListener('click', () => { outputInput.readOnly = false; outputInput.select(); });
-        outputInput.addEventListener('blur', commitOutput);
-        outputInput.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); commitOutput(); outputInput.blur(); } });
+        // output selection disabled
       }
       if(outputChoose){
-        const ensureDirPicker = () => {
-          if(dirPickerInput) return dirPickerInput;
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.setAttribute('webkitdirectory', '');
-          input.setAttribute('directory', '');
-          input.multiple = true;
-          input.className = 'sr-only';
-          input.style.display = 'none';
-          document.body.appendChild(input);
-          dirPickerInput = input;
-          return dirPickerInput;
-        };
-
-        const extractDirPath = (file) => {
-          if(!file) return null;
-          const abs = file.path || '';
-          const rel = file.webkitRelativePath || '';
-          if(abs && rel){
-            const suffix = rel.replace(/^[\\/]+/, '');
-            if(abs.endsWith(suffix)){
-              return abs.slice(0, abs.length - suffix.length).replace(/[\\/]+$/, '');
-            }
-          }
-          if(abs){
-            const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-            return idx > 0 ? abs.slice(0, idx) : abs;
-          }
-          if(rel){
-            const parts = rel.split(/[\\/]/);
-            parts.pop();
-            return parts.join('/') || null;
-          }
-          return null;
-        };
-
-        const pickDirectory = () => new Promise((resolve) => {
-          const picker = ensureDirPicker();
-          picker.onchange = () => {
-            const file = picker.files && picker.files.length ? picker.files[0] : null;
-            const dirPath = file ? extractDirPath(file) : null;
-            picker.value = '';
-            resolve(dirPath);
-          };
-          const launch = () => {
-            try{
-              if(picker.showPicker){
-                picker.showPicker().catch(() => {
-                  try{ picker.click(); }catch(_){ resolve(null); }
-                });
-              }else{
-                picker.click();
-              }
-            }catch(_){
-              resolve(null);
-            }
-          };
-          launch();
-        });
-
-        outputChoose.addEventListener('click', async () => {
-          const suggestion = settingsState.output_root || defaultOutputPath;
-          let nextPath = null;
-          try{
-            nextPath = await pickDirectory();
-          }catch(err){
-            console.warn('directory picker failed', err);
-          }
-          if(!nextPath){
-            try{
-              const manual = prompt('choose folder path', suggestion);
-              if(manual === null) return;
-              nextPath = (manual || '').trim() || suggestion;
-            }catch(err){
-              console.warn('folder prompt failed', err);
-              nextPath = suggestion;
-            }
-          }
-          if(nextPath){
-            await persistSettings({ output_root: nextPath });
-            applySettingsUI();
-          }
-        });
+        // output chooser disabled
       }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
@@ -1386,20 +1283,7 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
-          <div class="text-sm opacity-80">output folder (leave blank for Downloads folder)</div>
-          <div class="flex items-center gap-2">
-            <input id="output-path" type="text" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40" value="" style="color: white;">
-            <button id="output-choose" class="p-2 rounded-lg hover:bg-white/10 border border-white/10" title="choose folder">
-              <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 7h5l2 3h11v9H3z"/>
-                <path d="M3 7v12"/>
-              </svg>
-            </button>
-          </div>
-          <div class="flex gap-4 text-sm">
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structure-check" name="structure-mode" type="radio" class="pretty">folder structure</label>
-            <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="structureless-check" name="structure-mode" type="radio" class="pretty" checked>structureless (zip)</label>
-          </div>
+          <div class="text-sm opacity-80">outputs will be saved as a zip to your Downloads folder</div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>

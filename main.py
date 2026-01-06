@@ -218,25 +218,14 @@ _ensure_dir(settings.output_root)
 
 def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> dict[str, Path | str | None]:
     base_name = Path(info.get("orig_name") or info.get("conv_src", "stems")).stem
-    mode = structure_mode or settings.structure_mode
-    try:
-        _ensure_dir(settings.output_root)
-    except Exception:
-        pass
-    root = settings.output_root
-    if mode == "structured":
-        stemsplat_dir = root if root.name.lower() == "stemsplat" else root / "stemsplat"
-        song_dir = ensure_unique_dir(stemsplat_dir / base_name)
-        deliver_dir = song_dir
-        staging_dir = deliver_dir
-        zip_target = None
-    else:
-        flat_root = root.parent if root.name == "stemsplat" else root
-        staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        deliver_dir = flat_root
-        zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
-    return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": mode}
+    root = DEFAULT_OUTPUT_ROOT
+    _ensure_dir(root)
+    flat_root = root.parent if root.name == "stemsplat" else root
+    staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    deliver_dir = flat_root
+    zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
+    return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": "flat"}
 
 MODEL_URLS = [
     (
