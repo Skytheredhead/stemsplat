@@ -283,7 +283,7 @@
         await Promise.allSettled(tasks);
       };
       const closeWindow = () => {
-        try { window.open('','_self'); window.close(); } catch(_) {}
+        try { window.close(); } catch(_) {}
         window.location.replace('about:blank');
       };
       closeBtn.addEventListener('click', async () => {

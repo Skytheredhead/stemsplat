@@ -141,7 +141,7 @@ def run_server():
     try:
         with socketserver.TCPServer(("localhost", PORT), handler) as httpd:
             logger.info("installer ui listening on http://localhost:%s", PORT)
-            webbrowser.open(f"http://localhost:{PORT}/")
+            webbrowser.open(f"http://localhost:{PORT}/", new=0)
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
             logger.debug("waiting for installer routine to finish before shutting ui")
@@ -153,7 +153,7 @@ def run_server():
                 httpd.server_close()
                 server_thread.join(timeout=2)
                 try:
-                    webbrowser.open(f"http://localhost:{MAIN_PORT}/")
+                    webbrowser.open(f"http://localhost:{MAIN_PORT}/", new=0)
                 except Exception:
                     logger.debug("failed to open browser after installer shutdown", exc_info=True)
             except KeyboardInterrupt:
@@ -219,7 +219,7 @@ def _start_server():
     if not _port_available(MAIN_PORT):
         logger.info("main server already running on port %s; opening browser", MAIN_PORT)
         try:
-            webbrowser.open(f"http://localhost:{MAIN_PORT}/")
+            webbrowser.open(f"http://localhost:{MAIN_PORT}/", new=0)
         except Exception:
             logger.debug("failed to open browser for existing server", exc_info=True)
         shutdown_event.set()
@@ -228,7 +228,7 @@ def _start_server():
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
     try:
-        webbrowser.open(f"http://localhost:{MAIN_PORT}/")
+        webbrowser.open(f"http://localhost:{MAIN_PORT}/", new=0)
     except Exception:
         logger.debug("failed to open browser after starting server", exc_info=True)
 
