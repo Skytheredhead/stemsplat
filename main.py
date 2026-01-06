@@ -936,13 +936,9 @@ def _separate_waveform(
                             pred = model(prepared)
                     except RuntimeError as exc:
                         if model.device.type == "mps" and ("MPSGaph" in str(exc) or "MPSGraph" in str(exc)):
-                            logger.warning("MPSGraph failed; retrying %s on CPU", model.kind)
-                            model._move_to(torch.device("cpu"))
-                            prepared = _normalize_waveform_input(model, wave)
-                            with torch.no_grad():
-                                pred = model(prepared)
-                        else:
-                            raise
+                            logger.error("MPSGraph failed and CPU fallback is disabled; aborting task")
+                            raise AppError(ErrorCode.MPS_UNAVAILABLE, "Metal execution failed; CPU fallback disabled.")
+                        raise
                     if pred.dim() == 2:
                         pred = pred[:, None, :]
                     elif pred.dim() == 3 and pred.shape[1] not in (1, prepared.shape[1]):
