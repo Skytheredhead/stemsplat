@@ -215,6 +215,7 @@ def _start_server():
     logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
     if not _port_available(MAIN_PORT):
         logger.info("main server already running on port %s; opening browser", MAIN_PORT)
+        progress["main_running"] = True
         logger.debug("main server already running; installer page will navigate")
         shutdown_event.set()
         return

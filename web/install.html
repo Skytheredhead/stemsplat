@@ -53,6 +53,7 @@
     let prompted = false;
     let launched = false;
     let pingTimer = null;
+    let mainAlreadyRunning = false;
     const hasInstalledBefore = localStorage.getItem('installedOnce') === '1';
     const noteOnce = document.getElementById('note');
     if(hasInstalledBefore && noteOnce){ noteOnce.classList.add('hidden'); }
@@ -80,6 +81,9 @@
         err.textContent = data.error || 'installation failed';
         err.classList.remove('hidden');
         return;
+      }
+      if(data.main_running){
+        mainAlreadyRunning = true;
       }
       if (data.pct >= 100) {
         localStorage.setItem('installedOnce','1');
@@ -149,7 +153,8 @@
       try { navigator.sendBeacon('http://localhost:6060/installer_shutdown'); } catch(_) {
         try { fetch('http://localhost:6060/installer_shutdown', { method:'POST', mode:'no-cors', keepalive:true }); } catch(_){}
       }
-      location.replace('http://localhost:8000/');
+      const target = mainAlreadyRunning ? 'http://localhost:8000/?reopen=1' : 'http://localhost:8000/';
+      location.replace(target);
     }
     startPinging();
     poll();

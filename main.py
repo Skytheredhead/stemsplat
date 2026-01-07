@@ -78,6 +78,10 @@ class AppError(Exception):
         return HTTPException(status_code=status, detail={"code": self.code, "message": self.message})
 
 
+class TaskStopped(Exception):
+    """Signal that a task was stopped by the user."""
+
+
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
@@ -851,6 +855,21 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
     pause_evt = controls.setdefault(task_id, {}).setdefault("pause", threading.Event())
     stop_evt = controls.setdefault(task_id, {}).setdefault("stop", threading.Event())
 
+    def _mark_stopped() -> None:
+        progress[task_id] = {
+            "stage": "stopped",
+            "pct": 0,
+            "stems": tasks.get(task_id, {}).get("stems"),
+            "out_dir": tasks.get(task_id, {}).get("dir"),
+            "zip": tasks.get(task_id, {}).get("zip"),
+        }
+        tasks[task_id]["status"] = "stopped"
+
+    def _raise_if_stopped() -> None:
+        if stop_evt.is_set():
+            _mark_stopped()
+            raise TaskStopped()
+
     def cb(stage: str, pct: int):
         while pause_evt.is_set():
             progress[task_id] = {
@@ -861,15 +880,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
                 "zip": tasks.get(task_id, {}).get("zip"),
             }
             time.sleep(0.5)
-        if stop_evt.is_set():
-            progress[task_id] = {
-                "stage": "stopped",
-                "pct": 0,
-                "stems": tasks.get(task_id, {}).get("stems"),
-                "out_dir": tasks.get(task_id, {}).get("dir"),
-                "zip": tasks.get(task_id, {}).get("zip"),
-            }
-            raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
+        _raise_if_stopped()
         logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
         progress[task_id] = {
             "stage": stage,
@@ -881,6 +892,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
 
     def run() -> None:
         try:
+            _raise_if_stopped()
             tasks[task_id]["status"] = "running"
             manager = ModelManager()
             cb("preparing", 0)
@@ -890,15 +902,17 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             staging_dir = Path(tasks.get(task_id, {}).get("staging_dir") or out_dir)
             deliver_dir = Path(tasks.get(task_id, {}).get("dir") or out_dir)
             zip_target = tasks.get(task_id, {}).get("zip_target")
-            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir)
+            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir, stop_check=_raise_if_stopped)
 
             zip_path: Path | None = None
             if plan_mode != "structured" and zip_target is not None:
+                _raise_if_stopped()
                 zip_path = ensure_unique_path(Path(zip_target) if zip_target else deliver_dir / f"{audio_path.stem}.zip")
                 cb("zip.start", 99)
                 try:
                     with zipfile.ZipFile(zip_path, "w") as zf:
                         for name in stems_out:
+                            _raise_if_stopped()
                             fp = staging_dir / name
                             if fp.exists():
                                 zf.write(fp, arcname=name)
@@ -930,6 +944,8 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             }
             tasks[task_id]["status"] = "done"
             logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
+        except TaskStopped:
+            _mark_stopped()
         except AppError as exc:
             progress[task_id] = {
                 "stage": "error",
@@ -1014,10 +1030,14 @@ def _separate_waveform(
     stem_list: list[str],
     cb: Callable[[str, int], None],
     out_dir: Path,
+    *,
+    stop_check: Optional[Callable[[], None]] = None,
 ) -> list[str]:
     logger.info("starting separation for %s with stems %s", audio_path, stem_list)
     waveform = _prepare_waveform(audio_path)
     cb("load_audio.done", 1)
+    if stop_check:
+        stop_check()
 
     stems_out: list[str] = []
     remaining_stems = [s for s in stem_list if s != "deux"]
@@ -1046,11 +1066,17 @@ def _separate_waveform(
             cb("deux", 2 + int(frac * 94))
 
         deux_wave = ensure_stereo(waveform)
+        if stop_check:
+            stop_check()
         voc_d, inst_d = manager.split_pair_with_model(deux_model, deux_wave, DEUX_SEGMENT, OVERLAP, progress_cb=_cb)
         fname_v = f"{audio_path.stem} - vocals (deux).wav"
         fname_i = f"{audio_path.stem} - instrumental (deux).wav"
+        if stop_check:
+            stop_check()
         path_v = _write_wave(out_dir, fname_v, voc_d)
         cb("write.vocals_deux", 97)
+        if stop_check:
+            stop_check()
         path_i = _write_wave(out_dir, fname_i, inst_d)
         cb("write.instrumental_deux", 98)
         stems_out.extend([path_v.name, path_i.name])
@@ -1103,6 +1129,8 @@ def _separate_waveform(
                 def _cb(frac: float) -> None:
                     ch("vocals", 5 + (frac * 70))
 
+                if stop_check:
+                    stop_check()
                 voc, inst = manager.split_vocals(ensure_stereo(chan_wave), SEGMENT, OVERLAP, progress_cb=_cb)
                 vocals_wave = voc
                 inst_wave = inst
@@ -1157,6 +1185,8 @@ def _separate_waveform(
                     # Run them in chunks to keep attention buffer sizes manageable.
                     step = max(1, SEGMENT - OVERLAP)
                     if length <= SEGMENT:
+                        if stop_check:
+                            stop_check()
                         pred_full = _call_model(prepared)
                         if progress_cb:
                             progress_cb(1.0)
@@ -1166,6 +1196,8 @@ def _separate_waveform(
                     counts = torch.zeros((1, length), device=model.device, dtype=prepared.dtype)
 
                     for start_idx in range(0, length, step):
+                        if stop_check:
+                            stop_check()
                         end_idx = min(start_idx + SEGMENT, length)
                         seg = prepared[..., start_idx:end_idx]
                         if seg.shape[-1] < SEGMENT:
@@ -1202,18 +1234,20 @@ def _separate_waveform(
                 prepared = ensure_stereo(wave).to(model.device)
                 return model(prepared)
 
-            if need_instrumental_model:
-                ch("instrumental.start", 0.0)
-                inst_model = manager.instrumental
-                use_wave = inst_wave if inst_wave is not None else chan_wave
+                if need_instrumental_model:
+                    ch("instrumental.start", 0.0)
+                    inst_model = manager.instrumental
+                    use_wave = inst_wave if inst_wave is not None else chan_wave
 
-                def _inst_progress(frac: float) -> None:
-                    # map chunk progress across the full channel span
-                    ch("instrumental.progress", frac)
+                    def _inst_progress(frac: float) -> None:
+                        # map chunk progress across the full channel span
+                        ch("instrumental.progress", frac)
 
-                inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
-                chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
-                ch("instrumental.done", 1.0)
+                    if stop_check:
+                        stop_check()
+                    inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
+                    chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
+                    ch("instrumental.done", 1.0)
 
             for stem_name in ["drums", "bass", "other", "guitar"]:
                 if stem_name not in remaining_stems:
@@ -1221,6 +1255,8 @@ def _separate_waveform(
                 ch(f"{stem_name}.start", 90)
                 inst_model = getattr(manager, stem_name)
                 use_wave = inst_wave if inst_wave is not None else chan_wave
+                if stop_check:
+                    stop_check()
                 if inst_model.expects_waveform:
                     pred = _run_stem_model(inst_model, use_wave)
                 else:
@@ -1243,6 +1279,8 @@ def _separate_waveform(
                 continue
             combined = torch.cat(tensors, dim=0)
             fname = f"{audio_path.stem} - {stem_name}.wav"
+            if stop_check:
+                stop_check()
             written = _write_wave(out_dir, fname, combined)
             stems_out.append(written.name)
             cb(f"write.{stem_name}", 98)

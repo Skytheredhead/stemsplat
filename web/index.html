@@ -867,7 +867,7 @@
           if(stopPad.dataset.busy === '1') return;
           stopPad.dataset.busy = '1';
           e.preventDefault();
-          try{ await fetch('/stop/'+task.id,{method:'POST'}); }catch(_){ }
+          await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
           setTimeout(() => { stopPad.dataset.busy = ''; }, 250);
         });
         setStopVisibility(stopPad, 'preparing');
@@ -942,6 +942,19 @@
         st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
         smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
+        if(stopPad && task.id && isProcessing(task)){
+          setStopSquareIcon(stopPad);
+          stopPad.style.pointerEvents = '';
+          stopPad.style.opacity = '';
+          stopPad.title = 'stop';
+          guardClick(stopPad, async (e) => {
+            if(stopPad.dataset.busy === '1') return;
+            stopPad.dataset.busy = '1';
+            e.preventDefault();
+            await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
+            stopPad.dataset.busy = '';
+          });
+        }
       }
       if(task.stage !== 'done' && dl && !isProcessing(task)){
         dl.classList.add('show');
@@ -1142,6 +1155,11 @@
       document.body.appendChild(card);
       setTimeout(() => card.remove(), 3000);
     }
+    const reopenParam = new URLSearchParams(window.location.search).get('reopen');
+    if(reopenParam === '1'){
+      showPopup("sorry, it appears stemsplat wasn't shut down. please restart the app.");
+      window.history.replaceState({}, '', window.location.pathname);
+    }
 
     function showConfirm(msg){
       return new Promise((resolve) => {
@@ -1200,6 +1218,42 @@
     const pendingItems = [];
     const activeStreams = new Map();
     let isClearing = false;
+    function closeTaskStream(taskId){
+      if(!taskId) return;
+      const stream = activeStreams.get(taskId);
+      if(stream){
+        try{ stream.close(); }catch(_){ }
+        activeStreams.delete(taskId);
+      }
+    }
+
+    function markTaskStopped(taskRef, ui){
+      if(!taskRef || !ui) return;
+      const {st, dl, stopPad, smooth, bar} = ui;
+      taskRef.stage = 'stopped';
+      taskRef.pct = 0;
+      saveTasks();
+      if(smooth){ smooth.setImmediate(0); }
+      if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
+      const parent = st && st.closest ? st.closest('.card') : null;
+      if(parent){ parent.classList.add('done'); }
+      if(dl){ dl.classList.remove('show'); }
+      if(stopPad){
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        stopPad.title = 'rerun';
+        setRetryIcon(stopPad);
+        guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
+      }
+      updateUI();
+    }
+
+    async function requestStop(taskId, taskRef, ui){
+      if(!taskId || !taskRef || !ui) return;
+      closeTaskStream(taskId);
+      markTaskStopped(taskRef, ui);
+      try{ await fetch('/stop/' + taskId, { method:'POST' }); }catch(_){ }
+    }
     function dropPendingById(id){
       if(!id) return;
       const idx = pendingItems.findIndex(p => p && p.id === id);
@@ -1399,23 +1453,7 @@
               if(stopPad.dataset.busy === '1') return;
               stopPad.dataset.busy = '1';
               e.preventDefault();
-              try{ await fetch('/stop/'+parsed.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
-              // mark as stopped locally so UI updates right away
-              t.stage = 'stopped';
-              t.pct = 0;
-              saveTasks();
-              // update visuals
-              if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
-              const parent = st && st.closest('.card');
-              if(parent){ parent.classList.add('done'); }
-              // swap to rerun icon+handler
-              if(stopPad){
-                stopPad.style.pointerEvents = '';
-                stopPad.style.opacity = '';
-                stopPad.title = 'rerun';
-                setRetryIcon(stopPad);
-                guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); });
-              }
+              await requestStop(parsed.task_id, t, { bar, st, dl, stopPad, smooth });
               stopPad.dataset.busy = '';
               updateUI();
             });
