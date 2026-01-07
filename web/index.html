@@ -950,13 +950,13 @@
       }
       setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
+      inserted.classList.add('enter-pre');
       // Attach task id for later filtering
       inserted.__taskId = task.id;
       queue.insertBefore(inserted, queue.firstChild);
       // apply enter transition to the inserted card
       requestAnimationFrame(() => {
-        inserted.classList.add('enter-pre');
-        requestAnimationFrame(() => inserted.classList.add('enter-active'));
+        inserted.classList.add('enter-active');
       });
       // Apply any stem labels if present
       applyLabels(inserted.querySelector('.labels'), task.stems);
@@ -1036,8 +1036,7 @@
         const last = queue.lastElementChild;
         if(last){
           requestAnimationFrame(() => {
-            last.classList.add('enter-pre');
-            requestAnimationFrame(() => last.classList.add('enter-active'));
+            last.classList.add('enter-active');
           });
         }
         if(t.id && t.pct < 100 && t.pct >= 0){
@@ -1279,10 +1278,10 @@
         if(startPressed){ st.classList.remove('hidden'); }
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
+        item.classList.add('enter-pre');
         queue.insertBefore(item, queue.firstChild);
         requestAnimationFrame(() => {
-          item.classList.add('enter-pre');
-          requestAnimationFrame(() => item.classList.add('enter-active'));
+          item.classList.add('enter-active');
         });
         updateVigs();
         const smooth = makeProgressSmoother(bar);
