@@ -141,7 +141,7 @@ def run_server():
     try:
         with socketserver.TCPServer(("localhost", PORT), handler) as httpd:
             logger.info("installer ui listening on http://localhost:%s", PORT)
-            webbrowser.open(f"http://localhost:{PORT}/")
+            webbrowser.open(f"http://localhost:{PORT}/", new=0)
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
             logger.debug("waiting for installer routine to finish before shutting ui")
@@ -152,6 +152,7 @@ def run_server():
                 httpd.shutdown()
                 httpd.server_close()
                 server_thread.join(timeout=2)
+                logger.debug("installer ui closed; main app launch handled by installer page")
             except KeyboardInterrupt:
                 logger.info("installer interrupted; shutting down")
                 httpd.shutdown()
@@ -213,14 +214,14 @@ def _models_missing():
 def _start_server():
     logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
     if not _port_available(MAIN_PORT):
-        msg = f"Port {MAIN_PORT} is already in use. Please close the other process or change MAIN_PORT."
-        logger.error(msg)
-        print(msg)
+        logger.info("main server already running on port %s; opening browser", MAIN_PORT)
+        logger.debug("main server already running; installer page will navigate")
         shutdown_event.set()
         return
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
+    logger.debug("main server started; installer page will navigate")
 
 
 def _download_models(selection: Optional[list[str]] = None):

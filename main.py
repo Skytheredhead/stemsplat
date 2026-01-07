@@ -219,10 +219,9 @@ _ensure_dir(settings.output_root)
 def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> dict[str, Path | str | None]:
     base_name = Path(info.get("orig_name") or info.get("conv_src", "stems")).stem
     root = DEFAULT_OUTPUT_ROOT
-    _ensure_dir(root)
     flat_root = root.parent if root.name == "stemsplat" else root
-    staging_dir = ensure_unique_dir(flat_root / f"{base_name}—stems")
-    staging_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_dir(flat_root)
+    staging_dir = Path(tempfile.mkdtemp(prefix="stemsplat_stage_", dir=str(CONVERTED_DIR)))
     deliver_dir = flat_root
     zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
     return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": "flat"}
@@ -1601,6 +1600,29 @@ async def download(task_id: str):
 
 @app.post("/clear_all_uploads")
 async def clear_all_uploads():
+    # stop any running tasks
+    for ctrl in controls.values():
+        try:
+            ctrl.get("pause", threading.Event()).set()
+            ctrl.get("stop", threading.Event()).set()
+        except Exception:
+            logger.debug("failed to signal stop for control %s", ctrl, exc_info=True)
+
+    # drain any queued items so they don't start after clearing
+    try:
+        while True:
+            fn = process_queue.get_nowait()
+            process_queue.task_done()
+            logger.debug("discarded queued task %s during clear_all_uploads", fn)
+    except queue.Empty:
+        pass
+
+    # reset in-memory state
+    progress.clear()
+    tasks.clear()
+    errors.clear()
+    controls.clear()
+
     dirs = [UPLOAD_DIR, CONVERTED_DIR]
     for dir_path in dirs:
         if dir_path.exists():
@@ -1609,7 +1631,7 @@ async def clear_all_uploads():
                     shutil.rmtree(entry)
                 else:
                     entry.unlink()
-    logger.info("cleared upload directories")
+    logger.info("cleared upload directories and reset task state")
     return {"status": "cleared"}
 
 

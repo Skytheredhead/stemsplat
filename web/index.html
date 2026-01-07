@@ -283,13 +283,21 @@
         await Promise.allSettled(tasks);
       };
       const closeWindow = () => {
-        try { window.open('','_self'); window.close(); } catch(_) {}
+        try { window.close(); } catch(_) {}
         window.location.replace('about:blank');
       };
       closeBtn.addEventListener('click', async () => {
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
+          if(Array.isArray(tasks)){
+            for(const t of tasks){
+              if(t && t.id){
+                try { fetch('/stop/' + t.id, { method:'POST', keepalive:true }); } catch(_){}
+              }
+            }
+          }
+          try { fetch('/clear_all_uploads', { method:'POST', keepalive:true }); } catch(_){}
           await sendShutdown();
         } catch (err) {
           console.error('shutdown failed', err);
@@ -629,8 +637,8 @@
     }
 
     function enforceCapacity(){
-      const total = tasks.filter(Boolean).length;
-      const full = total >= MAX_TASKS;
+      const activeCount = tasks.filter(t => t && !isFinished(t)).length;
+      const full = activeCount >= MAX_TASKS;
       dropzone.classList.toggle('pointer-events-none', full);
       dropzone.classList.toggle('opacity-60', full);
       if(fileInput) fileInput.disabled = full;
@@ -762,6 +770,53 @@
       sq.appendChild(rect);
       stopPad.appendChild(sq);
     }
+
+    function setDownloadIcon(btn){
+      if(!btn) return;
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS,'svg');
+      svg.setAttribute('viewBox','0 0 24 24');
+      svg.classList.add('w-7','h-7');
+      svg.setAttribute('fill','none');
+      svg.setAttribute('stroke','#0F2027');
+      svg.setAttribute('stroke-width','2.2');
+      svg.setAttribute('stroke-linecap','round');
+      svg.setAttribute('stroke-linejoin','round');
+      const arr = document.createElementNS(NS,'path');
+      arr.setAttribute('d','M12 5v10m0 0l-4-4m4 4l4-4');
+      const base = document.createElementNS(NS,'path');
+      base.setAttribute('d','M5 19h14');
+      svg.append(arr, base);
+      btn.appendChild(svg);
+    }
+
+    function setFolderIcon(btn){
+      if(!btn) return;
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      btn.insertAdjacentHTML('afterbegin', '<svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 3h11v9H3z"/><path d="M3 7v12"/></svg>');
+    }
+
+    function bindDownloadButton(btn, taskRef){
+      if(!btn || !taskRef || !taskRef.id) return;
+      btn.classList.add('show');
+      setDownloadIcon(btn);
+      btn.title = 'download';
+      guardClick(btn, (e) => {
+        e.preventDefault();
+        const a = document.createElement('a');
+        a.href = '/download/' + taskRef.id;
+        a.rel = 'noopener';
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { try{ a.remove(); }catch(_){}} , 250);
+        taskRef.downloaded = true;
+        saveTasks();
+        setFolderIcon(btn);
+        bindFolderButton(btn, taskRef);
+      });
+    }
 // --- Helper to rerun a task server-side ---
     async function rerunTask(task, ui){
       const {bar, st, dl, stopPad, smooth} = ui;
@@ -817,6 +872,7 @@
       }
       task.stage = 'preparing';
       task.pct = 0;
+      task.downloaded = false;
       saveTasks();
       updateUI();
       // resume tracking
@@ -931,41 +987,22 @@
         const ok = await showConfirm('A process is still running. Clear all anyway?');
         if(!ok) return;
       }
-      if (!startPressed) {
-        return withPageFade(() => {
-          for (const el of Array.from(queue.children)) { el.remove(); }
-          tasks = [];
-          pendingItems.length = 0;
-          saveTasks();
-          try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
-          updateUI();
-        });
-      }
-
       withPageFade(() => {
-        const children = Array.from(queue.children);
-        const clearable = new Set(tasks.filter(t => isFinished(t)).map(t => t.id));
-        if(clearable.size === 0){ updateUI(); return; }
-        // fade out only clearable ones
-        children.forEach(el => {
-          const id = el.__taskId || null;
-          if(id && clearable.has(id)){
-            el.classList.add('fade');
-            el.style.opacity = '0';
-          }
-        });
-        setTimeout(() => {
-          // remove DOM + prune tasks
-          for(const el of Array.from(queue.children)){
-            const id = el.__taskId || null;
-            if(id && clearable.has(id)) el.remove();
-          }
-          tasks = tasks.filter(t => !clearable.has(t.id));
-          pendingItems.length = 0;
-          saveTasks();
-          fetch('/clear_all_uploads', {method:'POST'});
-          updateUI();
-        }, 240);
+        if(Array.isArray(tasks)){
+          tasks.forEach(t => {
+            if(t && t.id){
+              try { fetch('/stop/' + t.id, {method:'POST'}); } catch(_){}
+            }
+          });
+        }
+        for (const el of Array.from(queue.children)) { el.remove(); }
+        tasks = [];
+        pendingItems.length = 0;
+        startLock = false;
+        startPressed = false;
+        saveTasks();
+        try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
+        updateUI();
       });
     });
 
@@ -1242,7 +1279,7 @@
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null });
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false });
         saveTasks();
         updateUI();
       }
@@ -1313,7 +1350,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null };
+          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
@@ -1381,11 +1418,56 @@
       }
       startLock = true;
       updateStartButton();
+      let markedStarted = false;
+      const markReadyQueuedUI = () => {
+        const rows = Array.from(queue.children);
+        let changed = false;
+        rows.forEach(row => {
+          const id = row.__taskId;
+          const task = id ? getTaskById(id) : null;
+          if(task && (!task.stage || task.stage === 'ready' || task.stage === 'queued')){
+            if(task.stage !== 'queued' || task.pct !== 0){
+              task.stage = 'queued';
+              task.pct = 0;
+              changed = true;
+            }
+            const chip = row.querySelector('.chip');
+            if(chip){
+              showStatus(chip);
+              chip.textContent = 'queued';
+              chip.classList.remove('hidden');
+            }
+          }
+        });
+        if(changed){
+          saveTasks();
+        }
+      };
+      const startReadyTasks = async () => {
+        const ready = Array.isArray(tasks)
+          ? tasks.filter(t => t && t.id && (!t.stage || t.stage === 'ready' || t.stage === 'queued'))
+          : [];
+        for(const t of ready){
+          try{
+            await fetch('/start/' + t.id, { method:'POST' });
+            t.stage = 'queued';
+            t.pct = 0;
+            if(typeof t.downloaded === 'undefined'){ t.downloaded = false; }
+          }catch(_){}
+        }
+        saveTasks();
+        markReadyQueuedUI();
+      };
       try{
         const stems = selectedStems();
-        if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+        if(stems.length === 0){
+          showPopup('please select at least one stem');
+          return;
+        }
         startGeneration += 1;
         startPressed = true;
+        markedStarted = true;
+        markReadyQueuedUI();
         const batch = pendingItems.slice();
         batch.forEach(p => { p.autoStart = true; });
         revealStatusesAfterStart();
@@ -1398,10 +1480,15 @@
           }
           startTaskWhenReady(p);
         }
+        await startReadyTasks();
         startPressed = false;
+        markedStarted = false;
         batch.forEach(p => { p.autoStart = false; });
         updateUI();
       } finally {
+        if(markedStarted){
+          startPressed = false;
+        }
         startLock = false;
         updateStartButton();
       }
@@ -1443,6 +1530,7 @@
             if(data.stems) taskRef.stems = data.stems;
             if(data.out_dir) taskRef.out_dir = data.out_dir;
             if(data.zip) taskRef.zip = data.zip;
+            if(typeof taskRef.downloaded === 'undefined'){ taskRef.downloaded = false; }
             saveTasks();
           }
           if(data.stems && st){
@@ -1454,9 +1542,15 @@
             smooth.setTarget(100);
             hideStatus(st);
             if(dl){
-              dl.classList.add('show');
-              dl.title = 'open folder';
-              bindFolderButton(dl, taskRef || { id: taskId, out_dir: data.out_dir });
+              const ref = taskRef || { id: taskId, out_dir: data.out_dir, zip: data.zip, downloaded:false };
+              if(ref.downloaded){
+                setFolderIcon(dl);
+                dl.classList.add('show');
+                dl.title = 'open folder';
+                bindFolderButton(dl, ref);
+              }else{
+                bindDownloadButton(dl, ref);
+              }
             }
             if(stopPad) stopPad.remove();
             const parent = st.closest('.card'); if(parent) parent.classList.add('done');
@@ -1483,10 +1577,11 @@
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
             const friendlyStage = displayStage(stage);
-            st.textContent = friendlyStage ? `${friendlyStage} (${sp}%)` : 'queued';
             if (stage === 'queued' || stage === 'ready') {
+              st.textContent = friendlyStage || 'queued';
               smooth.setImmediate(0);
             } else {
+              st.textContent = friendlyStage ? `${friendlyStage} (${sp}%)` : `${sp}%`;
               smooth.setTarget(sp);
             }
             if(stage !== 'done' && dl){

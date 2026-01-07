@@ -9,6 +9,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root{ --bg-1:#0F2027; --bg-2:#2C5364; --txt:#E7ECEF; --accent:#8ED8FF; --card:rgba(23,35,41,.55); --border:rgba(255,255,255,.06); }
+    html, body { background-color: #0B1A1F; }
     body{ background: linear-gradient(135deg,#0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); color:var(--txt); font-family:'Nunito Sans',system-ui,sans-serif; }
     @view-transition { navigation: auto; }
     .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
@@ -139,7 +140,6 @@
       const loading = document.getElementById('loading');
       // start a quick fade-out and cue the intro for the app page
       const shell = document.getElementById('installer-shell');
-      document.body.classList.add('fade-out');
       if(shell){ shell.classList.add('fade-out'); }
       card.style.animation = 'fade .4s ease reverse both';
       loading.classList.remove('hidden');
