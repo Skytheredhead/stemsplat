@@ -290,14 +290,16 @@
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
-          if(Array.isArray(tasks)){
-            for(const t of tasks){
-              if(t && t.id){
-                try { fetch('/stop/' + t.id, { method:'POST', keepalive:true }); } catch(_){}
-              }
+          const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
+          if(hasRunning){
+            const ok = await showConfirm('A process is still running. Close anyway?');
+            if(!ok){
+              closeBtn.disabled = false;
+              closeBtn.style.opacity = '';
+              return;
             }
           }
-          try { fetch('/clear_all_uploads', { method:'POST', keepalive:true }); } catch(_){}
+          await clearAllTasks();
           await sendShutdown();
         } catch (err) {
           console.error('shutdown failed', err);
@@ -1207,12 +1209,18 @@
       return tasks.find(t => t && t.id === id);
     }
 
+    function getTaskByTempKey(tempKey){
+      if(!tempKey) return null;
+      return tasks.find(t => t && t.tempKey === tempKey);
+    }
+
     function revealStatusesAfterStart(){
       document.querySelectorAll('#queue .chip').forEach(chip => chip.classList.remove('hidden'));
       document.querySelectorAll('#queue .stop-pad').forEach(pad => {
         const row = pad.closest('.item-row');
         const id = row ? row.__taskId : null;
-        const task = id ? getTaskById(id) : null;
+        const tempKey = row ? row.__tempKey : null;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
         const stage = task ? task.stage : null;
         setStopVisibility(pad, stage);
       });
@@ -1234,15 +1242,24 @@
         return;
       }
       const existingCount = tasks.filter(Boolean).length;
-      let availableSlots = Math.max(0, MAX_TASKS - existingCount);
-      if(availableSlots <= 0){
-        showPopup('maximum number of songs reached! Please clear all to upload more songs');
+      if(existingCount >= MAX_TASKS){
+        showPopup('you already have 50 songs queued; clear some to upload more');
         return;
       }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
       const stems = selectedStems();
       const newPending = [];
       const files = [...fileList];
+      const audioFiles = files.filter((file) => {
+        return (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
+      });
+      if(existingCount + audioFiles.length > MAX_TASKS){
+        const slots = Math.max(0, MAX_TASKS - existingCount);
+        const slotLabel = slots === 1 ? 'song' : 'songs';
+        showPopup(`you can only add ${slots} more ${slotLabel} (max 50 total)`);
+        return;
+      }
+      let availableSlots = Math.max(0, MAX_TASKS - existingCount);
       for(const file of files){
         if(availableSlots <= 0) break;
         // accept common audio even when type is empty
@@ -1279,6 +1296,7 @@
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
         item.classList.add('enter-pre');
+        item.__tempKey = tempKey;
         queue.insertBefore(item, queue.firstChild);
         requestAnimationFrame(() => {
           item.classList.add('enter-active');
@@ -1287,7 +1305,7 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:false, startedProcessing:false };
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false };
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
@@ -1296,10 +1314,6 @@
         updateUI();
       }
       if (fileInput) fileInput.value = '';
-
-      if (files.length > newPending.length) {
-        showPopup('maximum number of songs reached! Please clear all to upload more songs');
-      }
 
       if(newPending.length && stems.length === 0){
         showPopup('please select at least one stem before uploading');
@@ -1365,6 +1379,15 @@
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
           const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
+          if(startPressed || pending.autoStart){
+            t.stage = 'queued';
+            t.pct = 0;
+            if(st){
+              showStatus(st);
+              st.textContent = 'queued';
+              st.classList.remove('hidden');
+            }
+          }
           saveTasks(); updateUI();
           // enable stop now that we have an id
           if (stopPad){
@@ -1437,19 +1460,26 @@
         let changed = false;
         rows.forEach(row => {
           const id = row.__taskId;
-          const task = id ? getTaskById(id) : null;
+          const tempKey = row.__tempKey;
+          const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+          const chip = row.querySelector('.chip');
           if(task && (!task.stage || task.stage === 'ready' || task.stage === 'queued')){
             if(task.stage !== 'queued' || task.pct !== 0){
               task.stage = 'queued';
               task.pct = 0;
               changed = true;
             }
-            const chip = row.querySelector('.chip');
             if(chip){
               showStatus(chip);
               chip.textContent = 'queued';
               chip.classList.remove('hidden');
             }
+            return;
+          }
+          if(chip && (chip.textContent || '').toLowerCase() === 'ready'){
+            showStatus(chip);
+            chip.textContent = 'queued';
+            chip.classList.remove('hidden');
           }
         });
         if(changed){
@@ -1481,10 +1511,12 @@
         startPressed = true;
         markedStarted = true;
         markReadyQueuedUI();
-        const batch = pendingItems.slice();
-        batch.forEach(p => { p.autoStart = true; });
+        let startIndex = 0;
         revealStatusesAfterStart();
-        for(const p of batch){
+        while(startIndex < pendingItems.length){
+          const p = pendingItems[startIndex];
+          startIndex += 1;
+          if(p){ p.autoStart = true; }
           if(!p.uploadPromise){
             await uploadWithStems(p, stems);
           }
@@ -1496,7 +1528,7 @@
         await startReadyTasks();
         startPressed = false;
         markedStarted = false;
-        batch.forEach(p => { p.autoStart = false; });
+        pendingItems.forEach(p => { if(p){ p.autoStart = false; } });
         updateUI();
       } finally {
         if(markedStarted){
