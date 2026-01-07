@@ -1026,7 +1026,7 @@
         const ok = await showConfirm('A process is still running. Clear all anyway?');
         if(!ok) return;
       }
-      withPageFade(() => { clearAllTasks(); });
+      clearAllTasks();
     });
 
     rehydrateTasks().finally(() => {
