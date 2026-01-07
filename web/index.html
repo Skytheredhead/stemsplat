@@ -1234,8 +1234,7 @@
         return;
       }
       const existingCount = tasks.filter(Boolean).length;
-      let availableSlots = Math.max(0, MAX_TASKS - existingCount);
-      if(availableSlots <= 0){
+      if(existingCount >= MAX_TASKS){
         showPopup('maximum number of songs reached! Please clear all to upload more songs');
         return;
       }
@@ -1243,6 +1242,14 @@
       const stems = selectedStems();
       const newPending = [];
       const files = [...fileList];
+      const audioFiles = files.filter((file) => {
+        return (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
+      });
+      if(existingCount + audioFiles.length > MAX_TASKS){
+        showPopup('maximum number of songs reached! Please clear all to upload more songs');
+        return;
+      }
+      let availableSlots = Math.max(0, MAX_TASKS - existingCount);
       for(const file of files){
         if(availableSlots <= 0) break;
         // accept common audio even when type is empty
@@ -1296,10 +1303,6 @@
         updateUI();
       }
       if (fileInput) fileInput.value = '';
-
-      if (files.length > newPending.length) {
-        showPopup('maximum number of songs reached! Please clear all to upload more songs');
-      }
 
       if(newPending.length && stems.length === 0){
         showPopup('please select at least one stem before uploading');
