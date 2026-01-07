@@ -1235,7 +1235,7 @@
       }
       const existingCount = tasks.filter(Boolean).length;
       if(existingCount >= MAX_TASKS){
-        showPopup('maximum number of songs reached! Please clear all to upload more songs');
+        showPopup('you already have 50 songs queued; clear some to upload more');
         return;
       }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
@@ -1246,7 +1246,9 @@
         return (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
       });
       if(existingCount + audioFiles.length > MAX_TASKS){
-        showPopup('maximum number of songs reached! Please clear all to upload more songs');
+        const slots = Math.max(0, MAX_TASKS - existingCount);
+        const slotLabel = slots === 1 ? 'song' : 'songs';
+        showPopup(`you can only add ${slots} more ${slotLabel} (max 50 total)`);
         return;
       }
       let availableSlots = Math.max(0, MAX_TASKS - existingCount);
@@ -1368,6 +1370,15 @@
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
           const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
+          if(startPressed || pending.autoStart){
+            t.stage = 'queued';
+            t.pct = 0;
+            if(st){
+              showStatus(st);
+              st.textContent = 'queued';
+              st.classList.remove('hidden');
+            }
+          }
           saveTasks(); updateUI();
           // enable stop now that we have an id
           if (stopPad){
