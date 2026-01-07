@@ -107,16 +107,16 @@
 
     @keyframes breathe { 0%{transform:translateY(0)} 50%{transform:translateY(-2px)} 100%{transform:translateY(0)} }
     .micro { animation: breathe 3s ease-in-out infinite; }
-    .slide-out { opacity: 0; transform: translateY(-10px); transition: transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s ease; }
+    .slide-out { opacity: 0; transform: translateY(-10px); transition: transform .35s ease-in-out, opacity .35s ease-in-out; }
     .enter-pre { opacity: 0; transform: translateY(8px); }
-    .enter-active { opacity: 1; transform: translateY(0); transition: transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s ease; }
+    .enter-active { opacity: 1; transform: translateY(0); transition: transform .35s ease-in-out, opacity .35s ease-in-out; }
     /* leave/fade/slide transition for queue items */
     .leave { opacity: 1; transform: translateY(0); }
-    .leave-active { transition: transform .16s ease-out, opacity .16s ease-out; }
+    .leave-active { transition: transform .16s ease-in-out, opacity .16s ease-in-out; }
     .leave-to { opacity: 0; transform: translateY(-2px); }
     #clear-btn { opacity: 0; transition: opacity .25s ease; }
     #clear-btn.show { opacity: 1; }
-    #queue-spacer { height: 0; transition: height .18s ease-out; will-change: height; }
+    #queue-spacer { height: 0; transition: height .18s ease-in-out; will-change: height; }
     .fade { transition: opacity .20s ease; }
 
     
