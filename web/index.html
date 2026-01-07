@@ -290,14 +290,16 @@
         closeBtn.disabled = true;
         closeBtn.style.opacity = '0.7';
         try {
-          if(Array.isArray(tasks)){
-            for(const t of tasks){
-              if(t && t.id){
-                try { fetch('/stop/' + t.id, { method:'POST', keepalive:true }); } catch(_){}
-              }
+          const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
+          if(hasRunning){
+            const ok = await showConfirm('A process is still running. Close anyway?');
+            if(!ok){
+              closeBtn.disabled = false;
+              closeBtn.style.opacity = '';
+              return;
             }
           }
-          try { fetch('/clear_all_uploads', { method:'POST', keepalive:true }); } catch(_){}
+          await clearAllTasks();
           await sendShutdown();
         } catch (err) {
           console.error('shutdown failed', err);
@@ -1207,12 +1209,18 @@
       return tasks.find(t => t && t.id === id);
     }
 
+    function getTaskByTempKey(tempKey){
+      if(!tempKey) return null;
+      return tasks.find(t => t && t.tempKey === tempKey);
+    }
+
     function revealStatusesAfterStart(){
       document.querySelectorAll('#queue .chip').forEach(chip => chip.classList.remove('hidden'));
       document.querySelectorAll('#queue .stop-pad').forEach(pad => {
         const row = pad.closest('.item-row');
         const id = row ? row.__taskId : null;
-        const task = id ? getTaskById(id) : null;
+        const tempKey = row ? row.__tempKey : null;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
         const stage = task ? task.stage : null;
         setStopVisibility(pad, stage);
       });
@@ -1288,6 +1296,7 @@
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
         item.classList.add('enter-pre');
+        item.__tempKey = tempKey;
         queue.insertBefore(item, queue.firstChild);
         requestAnimationFrame(() => {
           item.classList.add('enter-active');
@@ -1451,19 +1460,26 @@
         let changed = false;
         rows.forEach(row => {
           const id = row.__taskId;
-          const task = id ? getTaskById(id) : null;
+          const tempKey = row.__tempKey;
+          const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+          const chip = row.querySelector('.chip');
           if(task && (!task.stage || task.stage === 'ready' || task.stage === 'queued')){
             if(task.stage !== 'queued' || task.pct !== 0){
               task.stage = 'queued';
               task.pct = 0;
               changed = true;
             }
-            const chip = row.querySelector('.chip');
             if(chip){
               showStatus(chip);
               chip.textContent = 'queued';
               chip.classList.remove('hidden');
             }
+            return;
+          }
+          if(chip && (chip.textContent || '').toLowerCase() === 'ready'){
+            showStatus(chip);
+            chip.textContent = 'queued';
+            chip.classList.remove('hidden');
           }
         });
         if(changed){
