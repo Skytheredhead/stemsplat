@@ -1287,7 +1287,7 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:false, startedProcessing:false };
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false };
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
@@ -1481,10 +1481,12 @@
         startPressed = true;
         markedStarted = true;
         markReadyQueuedUI();
-        const batch = pendingItems.slice();
-        batch.forEach(p => { p.autoStart = true; });
+        let startIndex = 0;
         revealStatusesAfterStart();
-        for(const p of batch){
+        while(startIndex < pendingItems.length){
+          const p = pendingItems[startIndex];
+          startIndex += 1;
+          if(p){ p.autoStart = true; }
           if(!p.uploadPromise){
             await uploadWithStems(p, stems);
           }
@@ -1496,7 +1498,7 @@
         await startReadyTasks();
         startPressed = false;
         markedStarted = false;
-        batch.forEach(p => { p.autoStart = false; });
+        pendingItems.forEach(p => { if(p){ p.autoStart = false; } });
         updateUI();
       } finally {
         if(markedStarted){
