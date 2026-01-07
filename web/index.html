@@ -107,16 +107,16 @@
 
     @keyframes breathe { 0%{transform:translateY(0)} 50%{transform:translateY(-2px)} 100%{transform:translateY(0)} }
     .micro { animation: breathe 3s ease-in-out infinite; }
-    .slide-out { opacity: 0; transform: translateY(-10px); transition: transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s ease; }
+    .slide-out { opacity: 0; transform: translateY(-10px); transition: transform .35s ease-in-out, opacity .35s ease-in-out; }
     .enter-pre { opacity: 0; transform: translateY(8px); }
-    .enter-active { opacity: 1; transform: translateY(0); transition: transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s ease; }
+    .enter-active { opacity: 1; transform: translateY(0); transition: transform .35s ease-in-out, opacity .35s ease-in-out; }
     /* leave/fade/slide transition for queue items */
     .leave { opacity: 1; transform: translateY(0); }
-    .leave-active { transition: transform .16s ease-out, opacity .16s ease-out; }
+    .leave-active { transition: transform .16s ease-in-out, opacity .16s ease-in-out; }
     .leave-to { opacity: 0; transform: translateY(-2px); }
     #clear-btn { opacity: 0; transition: opacity .25s ease; }
     #clear-btn.show { opacity: 1; }
-    #queue-spacer { height: 0; transition: height .18s ease-out; will-change: height; }
+    #queue-spacer { height: 0; transition: height .18s ease-in-out; will-change: height; }
     .fade { transition: opacity .20s ease; }
 
     
@@ -950,13 +950,13 @@
       }
       setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
+      inserted.classList.add('enter-pre');
       // Attach task id for later filtering
       inserted.__taskId = task.id;
       queue.insertBefore(inserted, queue.firstChild);
       // apply enter transition to the inserted card
       requestAnimationFrame(() => {
-        inserted.classList.add('enter-pre');
-        requestAnimationFrame(() => inserted.classList.add('enter-active'));
+        inserted.classList.add('enter-active');
       });
       // Apply any stem labels if present
       applyLabels(inserted.querySelector('.labels'), task.stems);
@@ -981,29 +981,52 @@
       });
     }
 
+    function closeActiveStreams(){
+      activeStreams.forEach((stream) => {
+        try{ stream.close(); } catch(_){}
+      });
+      activeStreams.clear();
+    }
+
+    function abortPendingUploads(){
+      pendingItems.forEach((pending) => {
+        if(pending && pending.xhr){
+          try{ pending.xhr.abort(); } catch(_){}
+        }
+      });
+    }
+
+    async function clearAllTasks({ showToast = false } = {}){
+      if(isClearing) return;
+      isClearing = true;
+      closeActiveStreams();
+      abortPendingUploads();
+      if(Array.isArray(tasks)){
+        tasks.forEach(t => {
+          if(t && t.id){
+            try { fetch('/stop/' + t.id, {method:'POST'}); } catch(_){}
+          }
+        });
+      }
+      for (const el of Array.from(queue.children)) { el.remove(); }
+      tasks = [];
+      pendingItems.length = 0;
+      startLock = false;
+      startPressed = false;
+      saveTasks();
+      updateUI();
+      try { await fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
+      isClearing = false;
+      if(showToast) showPopup('all tasks cleared');
+    }
+
     guardClick(clearBtn, async () => {
       const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
       if(hasRunning){
         const ok = await showConfirm('A process is still running. Clear all anyway?');
         if(!ok) return;
       }
-      withPageFade(() => {
-        if(Array.isArray(tasks)){
-          tasks.forEach(t => {
-            if(t && t.id){
-              try { fetch('/stop/' + t.id, {method:'POST'}); } catch(_){}
-            }
-          });
-        }
-        for (const el of Array.from(queue.children)) { el.remove(); }
-        tasks = [];
-        pendingItems.length = 0;
-        startLock = false;
-        startPressed = false;
-        saveTasks();
-        try { fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
-        updateUI();
-      });
+      clearAllTasks();
     });
 
     rehydrateTasks().finally(() => {
@@ -1013,8 +1036,7 @@
         const last = queue.lastElementChild;
         if(last){
           requestAnimationFrame(() => {
-            last.classList.add('enter-pre');
-            requestAnimationFrame(() => last.classList.add('enter-active'));
+            last.classList.add('enter-active');
           });
         }
         if(t.id && t.pct < 100 && t.pct >= 0){
@@ -1037,20 +1059,8 @@
       if(settingsOverlay) settingsOverlay.addEventListener('click', (e)=>{ if(e.target === settingsOverlay) closeSettings(); });
       if(forceBtn) forceBtn.addEventListener('click', async ()=>{
         try{
-          // stop all running/queued tasks on the server
-          if(Array.isArray(tasks)){
-            for(const t of tasks){ if(t && t.id){ try{ await fetch('/stop/' + t.id, {method:'POST'}); } catch(_){} } }
-          }
-          // clear uploads on disk
-          try{ await fetch('/clear_all_uploads', {method:'POST'}); } catch(_){}
-          // remove all UI items and reset local state
-          for(const el of Array.from(queue.children)){ el.remove(); }
-          tasks = [];
-          pendingItems.length = 0;
-          saveTasks();
-          updateUI();
+          await clearAllTasks({ showToast: true });
           closeSettings();
-          showPopup('all tasks cleared');
         }catch(err){ showError('force clear failed'); }
       });
       checkStorage();
@@ -1186,6 +1196,8 @@
     /* === upload & progress logic === */
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
+    const activeStreams = new Map();
+    let isClearing = false;
     function dropPendingById(id){
       if(!id) return;
       const idx = pendingItems.findIndex(p => p && p.id === id);
@@ -1266,10 +1278,10 @@
         if(startPressed){ st.classList.remove('hidden'); }
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
+        item.classList.add('enter-pre');
         queue.insertBefore(item, queue.firstChild);
         requestAnimationFrame(() => {
-          item.classList.add('enter-pre');
-          requestAnimationFrame(() => item.classList.add('enter-active'));
+          item.classList.add('enter-active');
         });
         updateVigs();
         const smooth = makeProgressSmoother(bar);
@@ -1311,6 +1323,7 @@
         data.append('file', file);
         data.append('stems', stems.join(','));
         const xhr = new XMLHttpRequest();
+        pending.xhr = xhr;
         xhr.open('POST', '/upload');
         xhr.upload.onprogress = (evt) => {
           if(evt.lengthComputable){
@@ -1517,7 +1530,9 @@
     function trackProgress(taskId, bar, st, dl, _a, _b, taskRef, _c, smooth, stopPad){
       try{
         const es = new EventSource('/progress/' + taskId);
+        activeStreams.set(taskId, es);
         es.addEventListener('message', (ev) => {
+          if(isClearing) return;
           let data = null;
           try { data = JSON.parse(ev.data); } catch(_) {}
           if(!data) return;
@@ -1555,7 +1570,9 @@
             if(stopPad) stopPad.remove();
             const parent = st.closest('.card'); if(parent) parent.classList.add('done');
             dropPendingById(taskId);
-            es.close(); updateUI(); return;
+            es.close();
+            activeStreams.delete(taskId);
+            updateUI(); return;
           }
           if (stage === 'stopped') {
             if (taskRef) { taskRef.stage = 'stopped'; taskRef.pct = 0; saveTasks(); }
@@ -1572,7 +1589,9 @@
               guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
             }
             dropPendingById(taskId);
-            es.close(); updateUI(); return;
+            es.close();
+            activeStreams.delete(taskId);
+            updateUI(); return;
           }
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
@@ -1596,6 +1615,7 @@
         es.addEventListener('error', (ev) => {
           if (taskRef && taskRef.stage === 'stopped') {
             es.close();
+            activeStreams.delete(taskId);
             updateUI();
             return;
           }
@@ -1636,6 +1656,7 @@
           }
           dropPendingById(taskId);
           es.close();
+          activeStreams.delete(taskId);
           if(errCode === 'E004'){
             showModelsPopup();
           }else if(errMsg){
