@@ -276,20 +276,11 @@ def install():
                 return
 
         if _models_missing():
-            logger.info("models missing; waiting for user choice")
-            progress['step'] = 'waiting for model choice'
-            progress['pct'] = 99
-            choice_event.wait()
-            choice_event.clear()
-            if progress.get('choice') == 'download':
-                _download_models(progress.get("selection"))
-                return
-            else:
-                logger.info("user skipped downloads")
-                progress['pct'] = 100
-                progress['step'] = 'done'
-                _start_server()
-                return
+            logger.info("models missing; skipping downloads per v0.1 flow")
+            progress['step'] = 'models missing; skipping downloads'
+            progress['pct'] = 100
+            _start_server()
+            return
 
         progress['pct'] = 100
         progress['step'] = 'done'

@@ -50,7 +50,6 @@
   <div id="loading" class="hidden">starting server…</div>
 
   <script>
-    let prompted = false;
     let launched = false;
     let pingTimer = null;
     let mainAlreadyRunning = false;
@@ -76,7 +75,6 @@
         status.textContent = data.step;
       }
       if(spinner){ spinner.classList.toggle('hidden', data.pct >= 100 || data.pct === -1); }
-      if(data.step === 'waiting for model choice' && !prompted){ showPrompt(); prompted = true; }
       if(data.pct === -1){
         err.textContent = data.error || 'installation failed';
         err.classList.remove('hidden');
@@ -92,35 +90,6 @@
       startPinging();
       if(data.pct >= 100){ waitForServer(); return; }
       setTimeout(poll, 1000);
-    }
-
-    function showPrompt(){
-      const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-full">
-        <p class="text-lg">models not found! download the required set?</p>
-        <ul class="list-disc list-inside text-sm opacity-80">
-          <li>becruily_deux.ckpt</li>
-          <li>Mel Band Roformer Instrumental.ckpt</li>
-          <li>Mel Band Roformer Vocals.ckpt</li>
-        </ul>
-        <div id="dl-error" class="hidden text-red-300 text-sm"></div>
-        <div class="flex justify-end gap-2">
-          <button id="skip" class="px-3 py-1 rounded-lg glass">nah i got it</button>
-          <button id="dl" class="px-3 py-1 rounded-lg bg-white/90 text-gray-900">download</button>
-        </div>
-      </div>`;
-      document.body.appendChild(overlay);
-      const errorBox = overlay.querySelector('#dl-error');
-      overlay.querySelector('#dl').onclick = async () => {
-        try{
-          await fetch('/download_models', {method:'POST'});
-          overlay.remove();
-        }catch(err){
-          if(errorBox){ errorBox.textContent = 'download request failed. ensure certifi is installed.'; errorBox.classList.remove('hidden'); }
-        }
-      };
-      overlay.querySelector('#skip').onclick = async () => { await fetch('/skip_models', {method:'POST'}); overlay.remove(); };
     }
 
     async function pingMainServer(){
