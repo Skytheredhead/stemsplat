@@ -1234,20 +1234,20 @@ def _separate_waveform(
                 prepared = ensure_stereo(wave).to(model.device)
                 return model(prepared)
 
-                if need_instrumental_model:
-                    ch("instrumental.start", 0.0)
-                    inst_model = manager.instrumental
-                    use_wave = inst_wave if inst_wave is not None else chan_wave
+            if need_instrumental_model:
+                ch("instrumental.start", 0.0)
+                inst_model = manager.instrumental
+                use_wave = inst_wave if inst_wave is not None else chan_wave
 
-                    def _inst_progress(frac: float) -> None:
-                        # map chunk progress across the full channel span
-                        ch("instrumental.progress", frac)
+                def _inst_progress(frac: float) -> None:
+                    # map chunk progress across the full channel span
+                    ch("instrumental.progress", frac)
 
-                    if stop_check:
-                        stop_check()
-                    inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
-                    chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
-                    ch("instrumental.done", 1.0)
+                if stop_check:
+                    stop_check()
+                inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
+                chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
+                ch("instrumental.done", 1.0)
 
             for stem_name in ["drums", "bass", "other", "guitar"]:
                 if stem_name not in remaining_stems:
