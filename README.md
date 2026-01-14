@@ -14,6 +14,7 @@ them for this project.
 
 ## Quickstart
 
+0. Make sure you have python downloaded (https://www.python.org/downloads/macos/)
 1. Download the zip of the project from the v0.1.0 release on the right side of the page.
 2. Unzip the folder.
 3. Download these 3 models (~2.5G alltogether) [Vocals](https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true) [Instrumental](https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true) [Deux](https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true)
