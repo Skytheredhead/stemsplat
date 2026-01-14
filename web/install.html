@@ -73,9 +73,9 @@
       const err = document.getElementById('error');
 
       if (status) {
-        status.textContent = hasInstalledBefore
-          ? 'checking…'
-          : 'installing prerequisites. This may take a minute or two.';
+        status.textContent = data.pct < 100 && data.pct !== -1
+          ? 'installing prerequisites. This may take a minute or two.'
+          : 'checking…';
       }
       if(spinner){ spinner.classList.toggle('hidden', data.pct >= 100 || data.pct === -1); }
       if(data.pct === -1){
@@ -89,6 +89,10 @@
       if (data.pct >= 100) {
         localStorage.setItem('installedOnce','1');
         if(note){ note.classList.add('hidden'); }
+      }
+      const missingModels = Array.isArray(data.models_missing) ? data.models_missing : [];
+      if (missingModels.length > 0) {
+        showDownloadPopup();
       }
       startPinging();
       if(data.pct >= 100){
@@ -104,13 +108,12 @@
 
     function showDownloadPopup(){
       if(downloadPopupOpen || downloadPopupClosed) return;
-      if(hasInstalledBefore) return;
       downloadPopupOpen = true;
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
       overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-full">
         <h2 class="text-2xl font-light">Download Models</h2>
-        <p class="text-sm opacity-80">Download these models and place them in the Stemsplat/Models folder. The download links are also avaliable in the <a class="underline" href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer">Github</a>.</p>
+        <p class="text-sm opacity-80">Download these models and place them in the Stemsplat/Models folder. The download links are also available in the <a class="underline" href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer">Github</a>.</p>
         <ul class="list-disc list-inside text-sm opacity-90">
           <li><a class="underline" href="https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true" target="_blank" rel="noopener noreferrer">Mel Band Roformer Vocals</a></li>
           <li><a class="underline" href="https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true" target="_blank" rel="noopener noreferrer">Mel Band Roformer Instrumental</a></li>
@@ -169,7 +172,6 @@
       location.replace(target);
     }
     startPinging();
-    showDownloadPopup();
     poll();
   </script>
 </body>
