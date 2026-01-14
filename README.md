@@ -1,5 +1,5 @@
-Status: 1/5/26 9:30p PST
-- working. Adding finishing touches before first compile.
+Status: 1/14/26 11:40a PST
+- working. Adding finishing touches before v0.1 release.
 
 # stemsplat - DEVELOPER PREVIEW
 
@@ -13,13 +13,13 @@ them for this project.
 ## Prerequisites
 
 - Python (I'm using 3.13.5, not sure about other versions)
-- Decently powerful machine (I'm using an M4 Max)
+- APPLE SILICON Mac (M-series)
 
 ## Dev Quickstart
 
-1. Download the zip of the project (green code button at the top right ish -> download zip) or use git. 
-3. Open the app using Python. I'm using 3.13.5.
-6. You'll then be prompted to download the models (uh don't click download, the button won't click, working on that)
+1. Download the zip of the project from the v0.1 release.
+3. Open the app "Stemsplat" which will open a terminal and a page in your web browser.
+6. You'll then be prompted to download the models, downlad them and put them in the Models folder.
 
 ## Current Models (Thank you Becruily)
 
