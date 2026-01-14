@@ -1,8 +1,6 @@
-# stemsplat - DEVELOPER PREVIEW
+# stemsplat - V0.1.0
 
-**MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers in UVR you need to ask ChatGPT what they mean. Back when I used UVR, there were too many settings
-and the default models provided super mediocre results. I've found [Becruily's models on Huggingface](https://huggingface.co/becruily) to be consistently good, so I'm using
-them for this project.
+**MAC ONLY!** This is a free, high quality, no bs stem splitter. This app will provide better results than the free online stem splitters, and this runs locally on your computer! Also, there's no weird numbers in UVR you need to ask ChatGPT what they mean, it's all pre-decided for super high quality. I've found [Becruily's models on Huggingface](https://huggingface.co/becruily) to be consistently good, so I'm currently using them for this project.
 
 **This is currently in ALPHA!!**
 *BUGS/SUGGESTIONS: https://forms.gle/wSpe2nyFgcmuxSr28*
@@ -30,12 +28,13 @@ them for this project.
 - Deux - https://huggingface.co/becruily/mel-band-roformer-deux/tree/main
 
 ## Future Plans
-- Add a “estimated time remaining” to the processing of the stack of songs based on song length and how long it’s taken to process the previous length of the song.
+- Add a “estimated time remaining”
 - adding single instrument splits
 - Add different models to optimize for speed, like a low/med/high quality toggle that will use different models.
 - Video support?
-- Cloud Compute
+- Cloud Compute (maybe)
+- Higher quality splits
 
 ## Way further down the line:
-- Model Training (maybe as diff app)
+- Model Training (maybe as different app)
 - Running your own models
