@@ -5,10 +5,13 @@ import ssl
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-import certifi
+try:  # noqa: SIM105 - allow offline environments
+    import certifi
+except Exception:  # pragma: no cover - optional dependency
+    certifi = None
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
-SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where()) if certifi else ssl.create_default_context()
 
 FILES = [
     # Vocals
