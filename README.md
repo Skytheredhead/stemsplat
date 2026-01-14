@@ -1,6 +1,3 @@
-Status: 1/14/26 11:40a PST
-- working. Adding finishing touches before v0.1 release.
-
 # stemsplat - DEVELOPER PREVIEW
 
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers in UVR you need to ask ChatGPT what they mean. Back when I used UVR, there were too many settings
