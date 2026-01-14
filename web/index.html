@@ -163,9 +163,9 @@
           </svg>
         </button>
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="checkbox" class="pretty" checked>vocals (fastest)</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="checkbox" class="pretty">instrumental (fastest)</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="checkbox" class="pretty">both (highest quality)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="radio" name="stems" class="pretty" checked>vocals (fastest)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="radio" name="stems" class="pretty">instrumental (fastest)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="radio" name="stems" class="pretty">both (highest quality)</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -867,7 +867,7 @@
           if(stopPad.dataset.busy === '1') return;
           stopPad.dataset.busy = '1';
           e.preventDefault();
-          try{ await fetch('/stop/'+task.id,{method:'POST'}); }catch(_){ }
+          await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
           setTimeout(() => { stopPad.dataset.busy = ''; }, 250);
         });
         setStopVisibility(stopPad, 'preparing');
@@ -942,6 +942,19 @@
         st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
         smooth.setImmediate(sp);
         setStopVisibility(stopPad, task.stage);
+        if(stopPad && task.id && isProcessing(task)){
+          setStopSquareIcon(stopPad);
+          stopPad.style.pointerEvents = '';
+          stopPad.style.opacity = '';
+          stopPad.title = 'stop';
+          guardClick(stopPad, async (e) => {
+            if(stopPad.dataset.busy === '1') return;
+            stopPad.dataset.busy = '1';
+            e.preventDefault();
+            await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
+            stopPad.dataset.busy = '';
+          });
+        }
       }
       if(task.stage !== 'done' && dl && !isProcessing(task)){
         dl.classList.add('show');
@@ -1142,6 +1155,11 @@
       document.body.appendChild(card);
       setTimeout(() => card.remove(), 3000);
     }
+    const reopenParam = new URLSearchParams(window.location.search).get('reopen');
+    if(reopenParam === '1'){
+      showPopup("sorry, it appears stemsplat wasn't shut down. please restart the app.");
+      window.history.replaceState({}, '', window.location.pathname);
+    }
 
     function showConfirm(msg){
       return new Promise((resolve) => {
@@ -1170,36 +1188,47 @@
       });
     }
 
-    async function showModelsPopup(onCancel){
-      try{
-        const res = await fetch('/models_status');
-        if(res.ok){
-          const data = await res.json();
-          if(Array.isArray(data.missing) && data.missing.length === 0){
-            return;
-          }
-        }
-      }catch(_){}
-      const declined = localStorage.getItem('declinedModels');
-      const msg = declined ? "you didn't put the models in :(" : 'models not found! would you like me to download them?';
-      const yes = declined ? 'download' : 'yes please';
-      const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-2 text-[var(--txt-main)]"><p>${msg}</p><div class="flex justify-end gap-2"><button id="no-btn" class="px-3 py-1 bg-gray-500 rounded">nah i still got it</button><button id="yes-btn" class="px-3 py-1 bg-[var(--accent)] rounded text-black">${yes}</button></div></div>`;
-      document.body.appendChild(overlay);
-      const noBtn = overlay.querySelector('#no-btn');
-      const yesBtn = overlay.querySelector('#yes-btn');
-      noBtn.onclick = () => { localStorage.setItem('declinedModels','1'); overlay.remove(); if(onCancel) onCancel(); updateUI(); };
-      yesBtn.onclick = () => { localStorage.removeItem('declinedModels'); fetch('/download_models', {method:'POST'}); overlay.remove(); };
-      overlay.tabIndex = 0; overlay.focus();
-      overlay.addEventListener('keydown', e => { if(e.key === 'Enter') yesBtn.click(); });
-    }
-
     /* === upload & progress logic === */
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
     const activeStreams = new Map();
     let isClearing = false;
+    function closeTaskStream(taskId){
+      if(!taskId) return;
+      const stream = activeStreams.get(taskId);
+      if(stream){
+        try{ stream.close(); }catch(_){ }
+        activeStreams.delete(taskId);
+      }
+    }
+
+    function markTaskStopped(taskRef, ui){
+      if(!taskRef || !ui) return;
+      const {st, dl, stopPad, smooth, bar} = ui;
+      taskRef.stage = 'stopped';
+      taskRef.pct = 0;
+      saveTasks();
+      if(smooth){ smooth.setImmediate(0); }
+      if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
+      const parent = st && st.closest ? st.closest('.card') : null;
+      if(parent){ parent.classList.add('done'); }
+      if(dl){ dl.classList.remove('show'); }
+      if(stopPad){
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        stopPad.title = 'rerun';
+        setRetryIcon(stopPad);
+        guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
+      }
+      updateUI();
+    }
+
+    async function requestStop(taskId, taskRef, ui){
+      if(!taskId || !taskRef || !ui) return;
+      closeTaskStream(taskId);
+      markTaskStopped(taskRef, ui);
+      try{ await fetch('/stop/' + taskId, { method:'POST' }); }catch(_){ }
+    }
     function dropPendingById(id){
       if(!id) return;
       const idx = pendingItems.findIndex(p => p && p.id === id);
@@ -1227,11 +1256,10 @@
     }
 
     function selectedStems(){
-      const stems = [];
-      if(vocalsBox.checked) stems.push('vocals');
-      if(instBox.checked)   stems.push('instrumental');
-      if(deuxBox && deuxBox.checked) stems.push('deux');
-      return stems;
+      if(vocalsBox.checked) return ['vocals'];
+      if(instBox.checked) return ['instrumental'];
+      if(deuxBox && deuxBox.checked) return ['deux'];
+      return [];
     }
 
     async function handleFiles(fileList){
@@ -1399,23 +1427,7 @@
               if(stopPad.dataset.busy === '1') return;
               stopPad.dataset.busy = '1';
               e.preventDefault();
-              try{ await fetch('/stop/'+parsed.task_id,{method:'POST'}); }catch(_){ /* ignore */ }
-              // mark as stopped locally so UI updates right away
-              t.stage = 'stopped';
-              t.pct = 0;
-              saveTasks();
-              // update visuals
-              if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
-              const parent = st && st.closest('.card');
-              if(parent){ parent.classList.add('done'); }
-              // swap to rerun icon+handler
-              if(stopPad){
-                stopPad.style.pointerEvents = '';
-                stopPad.style.opacity = '';
-                stopPad.title = 'rerun';
-                setRetryIcon(stopPad);
-                guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(t, { bar, st, dl, stopPad, smooth }); });
-              }
+              await requestStop(parsed.task_id, t, { bar, st, dl, stopPad, smooth });
               stopPad.dataset.busy = '';
               updateUI();
             });
@@ -1689,9 +1701,7 @@
           dropPendingById(taskId);
           es.close();
           activeStreams.delete(taskId);
-          if(errCode === 'E004'){
-            showModelsPopup();
-          }else if(errMsg){
+          if(errMsg){
             showPopup(errMsg);
           }
           updateUI();
