@@ -1,9 +1,7 @@
 # stemsplat - V0.1.0
 
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. This app will provide better results than the free online stem splitters, and this runs locally on your computer! Also, there's no weird numbers in UVR you need to ask ChatGPT what they mean, it's all pre-decided for super high quality. I've found [Becruily's models on Huggingface](https://huggingface.co/becruily) to be consistently good, so I'm currently using them for this project.
-
-**This is currently in ALPHA!!**
-*BUGS/SUGGESTIONS: https://forms.gle/wSpe2nyFgcmuxSr28*
+*BUGS/SUGGESTIONS not listed below: https://forms.gle/wSpe2nyFgcmuxSr28*
 
 ## Prerequisites
 
