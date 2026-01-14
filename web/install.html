@@ -90,7 +90,8 @@
         localStorage.setItem('installedOnce','1');
         if(note){ note.classList.add('hidden'); }
       }
-      if (data.pct < 100 && data.pct !== -1) {
+      const missingModels = Array.isArray(data.models_missing) ? data.models_missing : [];
+      if (missingModels.length > 0) {
         showDownloadPopup();
       }
       startPinging();

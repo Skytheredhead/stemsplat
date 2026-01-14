@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("stemsplat.install")
 
-progress = {"pct": 0, "step": "starting"}
+progress = {"pct": 0, "step": "starting", "models_missing": []}
 choice_event = threading.Event()
 shutdown_event = threading.Event()
 PORT = 6060
@@ -185,30 +185,26 @@ def _port_available(port: int) -> bool:
             return False
 
 
-def _models_missing():
-    base_candidates = {Path("."), BASE_DIR}
-    for item in DL_FILES:
-        name = item["filename"]
-        aliases = ALIAS_MAP.get(item["subdir"], {}).get(name, [])
-        candidates = [name] + aliases
-        dirs = [
-            *(b / item["subdir"] for b in base_candidates),
-            *base_candidates,
-            *(b / "models" for b in base_candidates),
-            Path.home() / "Library/Application Support/stems",
-        ]
-        found = False
-        for fname in candidates:
-            for d in dirs:
-                if (d / fname).exists():
-                    found = True
-                    break
-            if found:
-                break
-        if found:
-            continue
-        return True
-    return False
+def _missing_required_models() -> list[str]:
+    models_dir_candidates = [BASE_DIR / "Models", Path("Models")]
+    models_dir = next((d for d in models_dir_candidates if d.exists()), models_dir_candidates[0])
+    required_terms = ["instrumental", "vocals", "deux"]
+    found = {term: False for term in required_terms}
+    if models_dir.exists():
+        for path in models_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            name = path.name.lower()
+            if not name.endswith(".cpkt"):
+                continue
+            for term in required_terms:
+                if term in name:
+                    found[term] = True
+    return [term for term, present in found.items() if not present]
+
+
+def _models_missing() -> bool:
+    return len(_missing_required_models()) > 0
 
 
 def _start_server():
@@ -245,6 +241,7 @@ def install():
     try:
         progress['step'] = 'installing prerequisites'
         progress['pct'] = 1
+        progress["models_missing"] = _missing_required_models()
         if _installed():
             logger.info("virtual environment already present")
         steps = []
