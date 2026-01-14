@@ -243,7 +243,7 @@ def _download_models(selection: Optional[list[str]] = None):
 def install():
     logger.info("install routine starting")
     try:
-        progress['step'] = 'checking installation'
+        progress['step'] = 'installing prerequisites'
         progress['pct'] = 1
         if _installed():
             logger.info("virtual environment already present")
