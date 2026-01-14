@@ -72,10 +72,10 @@
       const note = document.getElementById('note');
       const err = document.getElementById('error');
 
-      if (hasInstalledBefore && status) {
-        status.textContent = 'checking…';
-      } else if (status) {
-        status.textContent = data.step;
+      if (status) {
+        status.textContent = hasInstalledBefore
+          ? 'checking…'
+          : 'installing prerequisites. This may take a minute or two.';
       }
       if(spinner){ spinner.classList.toggle('hidden', data.pct >= 100 || data.pct === -1); }
       if(data.pct === -1){
@@ -104,7 +104,7 @@
 
     function showDownloadPopup(){
       if(downloadPopupOpen || downloadPopupClosed) return;
-      if(localStorage.getItem('modelsPopupSeen') === '1') return;
+      if(hasInstalledBefore) return;
       downloadPopupOpen = true;
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
@@ -125,7 +125,6 @@
       closeBtn.onclick = () => {
         downloadPopupOpen = false;
         downloadPopupClosed = true;
-        localStorage.setItem('modelsPopupSeen', '1');
         overlay.remove();
         if(pendingLaunch){
           pendingLaunch = false;
