@@ -44,7 +44,6 @@ import torchaudio
 import yaml
 from beartype import beartype
 from beartype.typing import Callable as BeartypeCallable
-from beartype.typing import List as BeartypeList
 from beartype.typing import Optional as BeartypeOptional
 from beartype.typing import Tuple as BeartypeTuple
 from einops import pack, rearrange, reduce, repeat, unpack
@@ -55,7 +54,7 @@ from packaging import version
 from rotary_embedding_torch import RotaryEmbedding
 from sse_starlette.sse import EventSourceResponse
 from tqdm import tqdm
-from torch import Tensor, einsum, nn
+from torch import einsum, nn
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 
@@ -1224,38 +1223,6 @@ def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> 
     deliver_dir = flat_root
     zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
     return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": "flat"}
-
-MODEL_URLS = [
-    (
-        "Mel Band Roformer Vocals.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
-    ),
-    (
-        "Mel Band Roformer Instrumental.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-    ),
-    (
-        "mel_band_roformer_karaoke_becruily.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-    ),
-    (
-        "becruily_guitar.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-    ),
-    (
-        "kuielab_a_bass.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
-    ),
-    (
-        "kuielab_a_drums.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
-    ),
-    (
-        "kuielab_a_other.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
-    ),
-]
-
 
 # ── Device handling ─────────────────────────────────────────────────────────
 
