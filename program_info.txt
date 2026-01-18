@@ -16,7 +16,7 @@ Audio processing pipeline
 
 Key backend behaviors
 ---------------------
-- ffmpeg is required for conversion. The server first looks for a system binary and otherwise falls back to the `imageio-ffmpeg` bundled executable. Install dependencies from `requirements.txt` to ensure the fallback is available.
+- ffmpeg is required for conversion. The server first looks for a system binary and otherwise falls back to the `imageio-ffmpeg` bundled executable. Run the installer to ensure the fallback is available.
 - `/upload` only converts and stages files; `/start/{task_id}` queues the heavy processing. Reruns reuse the converted WAV via `/rerun/{task_id}`.
 
 Front-end flow

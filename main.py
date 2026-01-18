@@ -37,6 +37,57 @@ import uuid
 import webbrowser
 import zipfile
 
+INSTALL_DEPS = [
+    "torch",
+    "torchaudio",
+    "fastapi",
+    "uvicorn[standard]",
+    "click",
+    "sse-starlette",
+    "python-multipart",
+    "numpy",
+    "pyyaml",
+    "soundfile",
+    "tqdm",
+    "einops",
+    "rotary_embedding_torch",
+    "packaging",
+    "beartype>=0.17",
+    "librosa",
+    "imageio-ffmpeg",
+    "certifi",
+]
+
+
+def _in_venv() -> bool:
+    return sys.prefix != sys.base_prefix
+
+
+def pip_path() -> Path:
+    if os.name == "nt":
+        return Path("venv") / "Scripts" / "pip"
+    return Path("venv") / "bin" / "pip"
+
+
+def python_path() -> Path:
+    if os.name == "nt":
+        return Path("venv") / "Scripts" / "python"
+    return Path("venv") / "bin" / "python"
+
+
+def _bootstrap_install() -> None:
+    if not Path("venv").exists():
+        subprocess.check_call([sys.executable, "-m", "venv", "venv"])
+    subprocess.check_call([str(pip_path()), "install", "--upgrade", "pip"])
+    for dep in INSTALL_DEPS:
+        subprocess.check_call([str(pip_path()), "install", dep])
+    subprocess.check_call([str(python_path()), str(Path(__file__).resolve()), "--install"])
+    raise SystemExit(0)
+
+
+if "--install" in sys.argv and not _in_venv():
+    _bootstrap_install()
+
 import numpy as np
 import soundfile as sf
 import torch
@@ -918,18 +969,6 @@ def run_installer_ui():
         raise SystemExit(1)
 
 
-def pip_path():
-    if os.name == "nt":
-        return Path("venv") / "Scripts" / "pip"
-    return Path("venv") / "bin" / "pip"
-
-
-def python_path():
-    if os.name == "nt":
-        return Path("venv") / "Scripts" / "python"
-    return Path("venv") / "bin" / "python"
-
-
 def _missing_required_models() -> list[str]:
     models_dir_candidates = [BASE_DIR / "Models", Path("Models")]
     models_dir = next((d for d in models_dir_candidates if d.exists()), models_dir_candidates[0])
@@ -993,14 +1032,7 @@ def install():
         if not _installed():
             steps.append(("creating virtual environment", [sys.executable, "-m", "venv", "venv"]))
         steps.append(("upgrading pip", [str(pip_path()), "install", "--upgrade", "pip"]))
-        reqs = []
-        req_file = Path("requirements.txt")
-        if req_file.exists():
-            for line in req_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    reqs.append(line)
-        steps.extend([(f"installing {pkg}", [str(pip_path()), "install", pkg]) for pkg in reqs])
+        steps.extend([(f"installing {pkg}", [str(pip_path()), "install", pkg]) for pkg in INSTALL_DEPS])
 
         total = max(1, len(steps))
         for i, (msg, cmd) in enumerate(steps, start=1):

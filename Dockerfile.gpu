@@ -7,9 +7,26 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# install dependencies from requirements.txt
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# install dependencies
+RUN pip3 install --no-cache-dir \
+    torch \
+    torchaudio \
+    fastapi \
+    "uvicorn[standard]" \
+    click \
+    sse-starlette \
+    python-multipart \
+    numpy \
+    pyyaml \
+    soundfile \
+    tqdm \
+    einops \
+    rotary_embedding_torch \
+    packaging \
+    "beartype>=0.17" \
+    librosa \
+    imageio-ffmpeg \
+    certifi
 
 # copy your app and launch
 COPY . .
