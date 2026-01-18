@@ -88,6 +88,57 @@ def _bootstrap_install() -> None:
 if "--install" in sys.argv and not _in_venv():
     _bootstrap_install()
 
+FILES = [
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_vocals_becruily.ckpt",
+        "tag": "vocals",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_instrumental_becruily.ckpt",
+        "tag": "instrumental",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
+        "subdir": "models",
+        "filename": "becruily_deux.ckpt",
+        "tag": "deux",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_karaoke_becruily.ckpt",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
+        "subdir": "models",
+        "filename": "becruily_guitar.ckpt",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
+        "subdir": "models",
+        "filename": "kuielab_a_bass.onnx",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
+        "subdir": "models",
+        "filename": "kuielab_a_drums.onnx",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
+        "subdir": "models",
+        "filename": "kuielab_a_other.onnx",
+        "tag": None,
+    },
+]
+
 import numpy as np
 import soundfile as sf
 import torch
@@ -1071,58 +1122,6 @@ SSL_CONTEXT = (
     if certifi is not None
     else ssl.create_default_context()
 )
-
-FILES = [
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_vocals_becruily.ckpt",
-        "tag": "vocals",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_instrumental_becruily.ckpt",
-        "tag": "instrumental",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
-        "subdir": "models",
-        "filename": "becruily_deux.ckpt",
-        "tag": "deux",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_karaoke_becruily.ckpt",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-        "subdir": "models",
-        "filename": "becruily_guitar.ckpt",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
-        "subdir": "models",
-        "filename": "kuielab_a_bass.onnx",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
-        "subdir": "models",
-        "filename": "kuielab_a_drums.onnx",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
-        "subdir": "models",
-        "filename": "kuielab_a_other.onnx",
-        "tag": None,
-    },
-]
-
 
 def try_head_content_length(url: str) -> int | None:
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "app-downloader"})
