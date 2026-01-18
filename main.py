@@ -1257,8 +1257,8 @@ def _port_available(port: int) -> bool:
         try:
             sock.bind(("localhost", port))
             return True
-    except OSError:
-        return False
+        except OSError:
+            return False
 
 
 # ── Model management ────────────────────────────────────────────────────────
