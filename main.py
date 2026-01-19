@@ -6,50 +6,810 @@ error codes are emitted for every failure so issues can be diagnosed quickly.
 """
 from __future__ import annotations
 
+from collections import namedtuple
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any, Callable, Optional
-import urllib.request
 import argparse
 import asyncio
+import http.server
+import importlib
+import importlib.util
 import json
 import logging
+import math
 import os
 import queue
 import shutil
 import socket
+import socketserver
+import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
+import webbrowser
 import zipfile
-import sys
-from datetime import datetime
-import math
 
-import torch
+INSTALL_DEPS = [
+    "torch",
+    "torchaudio",
+    "fastapi",
+    "uvicorn[standard]",
+    "click",
+    "sse-starlette",
+    "python-multipart",
+    "numpy",
+    "pyyaml",
+    "soundfile",
+    "tqdm",
+    "einops",
+    "rotary_embedding_torch",
+    "packaging",
+    "beartype>=0.17",
+    "librosa",
+    "imageio-ffmpeg",
+    "certifi",
+]
+
+
+def _in_venv() -> bool:
+    return sys.prefix != sys.base_prefix
+
+
+def pip_path() -> Path:
+    if os.name == "nt":
+        return Path("venv") / "Scripts" / "pip"
+    return Path("venv") / "bin" / "pip"
+
+
+def python_path() -> Path:
+    if os.name == "nt":
+        return Path("venv") / "Scripts" / "python"
+    return Path("venv") / "bin" / "python"
+
+
+def _bootstrap_install() -> None:
+    if not Path("venv").exists():
+        subprocess.check_call([sys.executable, "-m", "venv", "venv"])
+    subprocess.check_call([str(pip_path()), "install", "--upgrade", "pip"])
+    for dep in INSTALL_DEPS:
+        subprocess.check_call([str(pip_path()), "install", dep])
+    subprocess.check_call([str(python_path()), str(Path(__file__).resolve()), "--install"])
+    raise SystemExit(0)
+
+
+if "--install" in sys.argv and not _in_venv():
+    _bootstrap_install()
+
+FILES = [
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_vocals_becruily.ckpt",
+        "tag": "vocals",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_instrumental_becruily.ckpt",
+        "tag": "instrumental",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
+        "subdir": "models",
+        "filename": "becruily_deux.ckpt",
+        "tag": "deux",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_karaoke_becruily.ckpt",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
+        "subdir": "models",
+        "filename": "becruily_guitar.ckpt",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
+        "subdir": "models",
+        "filename": "kuielab_a_bass.onnx",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
+        "subdir": "models",
+        "filename": "kuielab_a_drums.onnx",
+        "tag": None,
+    },
+    {
+        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
+        "subdir": "models",
+        "filename": "kuielab_a_other.onnx",
+        "tag": None,
+    },
+]
+
+import numpy as np
 import soundfile as sf
+import torch
 import torchaudio
+import yaml
+from beartype import beartype
+from beartype.typing import Callable as BeartypeCallable
+from beartype.typing import Optional as BeartypeOptional
+from beartype.typing import Tuple as BeartypeTuple
+from einops import pack, rearrange, reduce, repeat, unpack
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from librosa import filters
+from packaging import version
+from rotary_embedding_torch import RotaryEmbedding
 from sse_starlette.sse import EventSourceResponse
+from tqdm import tqdm
+from torch import einsum, nn
+from torch.nn import Module, ModuleList
+import torch.nn.functional as F
 
-# Optional heavy imports guarded for clarity
-try:  # noqa: SIM105 - deliberate broad guard with explicit error codes
-    import onnxruntime as ort  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    ort = None
+def _optional_import(module_name: str):
+    spec = importlib.util.find_spec(module_name)
+    if spec is None:
+        return None
+    return importlib.import_module(module_name)
 
-# “split” is a package; main() lives in split/split.py
-try:  # noqa: SIM105 - deliberate broad guard with explicit error codes
-    from split.split import load_model as _load_roformer
-    from split.split import main as split_main
-except Exception as _exc:  # pragma: no cover - capture import issues for error reporting
-    _load_roformer = None  # type: ignore
-    split_main = None  # type: ignore
-    _import_error = _exc
+
+certifi = _optional_import("certifi")
+ort = _optional_import("onnxruntime")
+
+
+if importlib.util.find_spec("torch.nn.attention"):
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    def _sdpa_ctx(config):
+        """Map old style flags to new SDPBackend list."""
+        backends = []
+        if config.enable_flash:
+            backends.append(SDPBackend.FLASH_ATTENTION)
+        if config.enable_math:
+            backends.append(SDPBackend.MATH)
+        if config.enable_mem_efficient:
+            backends.append(SDPBackend.EFFICIENT_ATTENTION)
+        try:
+            return sdpa_kernel(backends, set_priority_order=True)
+        except TypeError:
+            return sdpa_kernel(backends)
+
+else:  # pragma: no cover - fallback for older torch
+    from torch.backends.cuda import sdp_kernel as sdpa_kernel  # type: ignore
+
+    def _sdpa_ctx(config):
+        return sdpa_kernel(**config._asdict())
+
+
+FlashAttentionConfig = namedtuple(
+    "FlashAttentionConfig", ["enable_flash", "enable_math", "enable_mem_efficient"]
+)
+
+
+def exists(val):
+    return val is not None
+
+
+def once(fn):
+    called = False
+
+    @wraps(fn)
+    def inner(x):
+        nonlocal called
+        if called:
+            return
+        called = True
+        return fn(x)
+
+    return inner
+
+
+print_once = once(print)
+
+
+class Attend(nn.Module):
+    def __init__(
+        self,
+        dropout=0.0,
+        flash=False,
+    ):
+        super().__init__()
+        self.dropout = dropout
+        self.attn_dropout = nn.Dropout(dropout)
+
+        self.flash = flash
+        assert not (
+            flash and version.parse(torch.__version__) < version.parse("2.0.0")
+        ), "in order to use flash attention, you must be using pytorch 2.0 or above"
+
+        self.cpu_config = FlashAttentionConfig(False, True, False)
+        self.cuda_config = None
+
+        if not torch.cuda.is_available() or not flash:
+            return
+
+        device_properties = torch.cuda.get_device_properties(torch.device("cuda"))
+
+        if device_properties.major == 8 and device_properties.minor == 0:
+            self.cuda_config = FlashAttentionConfig(True, False, False)
+        else:
+            self.cuda_config = FlashAttentionConfig(False, True, True)
+
+    def flash_attn(self, q, k, v):
+        _, heads, q_len, _, k_len, is_cuda, device = (
+            *q.shape,
+            k.shape[-2],
+            q.is_cuda,
+            q.device,
+        )
+        config = self.cuda_config if is_cuda else self.cpu_config
+        with _sdpa_ctx(config):
+            out = F.scaled_dot_product_attention(
+                q, k, v, dropout_p=self.dropout if self.training else 0.0
+            )
+        return out
+
+    def forward(self, q, k, v):
+        q_len, k_len, device = q.shape[-2], k.shape[-2], q.device
+        scale = q.shape[-1] ** -0.5
+
+        if self.flash:
+            return self.flash_attn(q, k, v)
+
+        sim = einsum("b h i d, b h j d -> b h i j", q, k) * scale
+        attn = sim.softmax(dim=-1)
+        attn = self.attn_dropout(attn)
+        out = einsum("b h i j, b h j d -> b h i d", attn, v)
+        return out
+
+
+def default(v, d):
+    return v if exists(v) else d
+
+
+def pack_one(t, pattern):
+    return pack([t], pattern)
+
+
+def unpack_one(t, ps, pattern):
+    return unpack(t, ps, pattern)[0]
+
+
+def pad_at_dim(t, pad, dim=-1, value=0.0):
+    dims_from_right = (-dim - 1) if dim < 0 else (t.ndim - dim - 1)
+    zeros = (0, 0) * dims_from_right
+    return F.pad(t, (*zeros, *pad), value=value)
+
+
+class RMSNorm(Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.scale = dim**0.5
+        self.gamma = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        return F.normalize(x, dim=-1) * self.scale * self.gamma
+
+
+class FeedForward(Module):
+    def __init__(
+        self,
+        dim,
+        mult=4,
+        dropout=0.0,
+    ):
+        super().__init__()
+        dim_inner = int(dim * mult)
+        self.net = nn.Sequential(
+            RMSNorm(dim),
+            nn.Linear(dim, dim_inner),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim_inner, dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class Attention(Module):
+    def __init__(
+        self,
+        dim,
+        heads=8,
+        dim_head=64,
+        dropout=0.0,
+        rotary_embed=None,
+        flash=True,
+    ):
+        super().__init__()
+        self.heads = heads
+        self.scale = dim_head**-0.5
+        dim_inner = heads * dim_head
+
+        self.rotary_embed = rotary_embed
+        self.attend = Attend(flash=flash, dropout=dropout)
+
+        self.norm = RMSNorm(dim)
+        self.to_qkv = nn.Linear(dim, dim_inner * 3, bias=False)
+
+        self.to_gates = nn.Linear(dim, heads)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(dim_inner, dim, bias=False),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        x = self.norm(x)
+
+        q, k, v = rearrange(
+            self.to_qkv(x), "b n (qkv h d) -> qkv b h n d", qkv=3, h=self.heads
+        )
+
+        if exists(self.rotary_embed):
+            q = self.rotary_embed.rotate_queries_or_keys(q)
+            k = self.rotary_embed.rotate_queries_or_keys(k)
+
+        out = self.attend(q, k, v)
+
+        gates = self.to_gates(x)
+        out = out * rearrange(gates, "b n h -> b h n 1").sigmoid()
+
+        out = rearrange(out, "b h n d -> b n (h d)")
+        return self.to_out(out)
+
+
+class Transformer(Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        depth,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        ff_mult=4,
+        norm_output=True,
+        rotary_embed=None,
+        flash_attn=True,
+    ):
+        super().__init__()
+        self.layers = ModuleList([])
+
+        for _ in range(depth):
+            self.layers.append(
+                ModuleList(
+                    [
+                        Attention(
+                            dim=dim,
+                            dim_head=dim_head,
+                            heads=heads,
+                            dropout=attn_dropout,
+                            rotary_embed=rotary_embed,
+                            flash=flash_attn,
+                        ),
+                        FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout),
+                    ]
+                )
+            )
+
+        self.norm = RMSNorm(dim) if norm_output else nn.Identity()
+
+    def forward(self, x):
+        for attn, ff in self.layers:
+            x = attn(x) + x
+            x = ff(x) + x
+
+        return self.norm(x)
+
+
+class BandSplit(Module):
+    @beartype
+    def __init__(
+        self,
+        dim,
+        dim_inputs: BeartypeTuple[int, ...],
+    ):
+        super().__init__()
+        self.dim_inputs = dim_inputs
+        self.to_features = ModuleList([])
+
+        for dim_in in dim_inputs:
+            net = nn.Sequential(RMSNorm(dim_in), nn.Linear(dim_in, dim))
+            self.to_features.append(net)
+
+    def forward(self, x):
+        x = x.split(self.dim_inputs, dim=-1)
+
+        outs = []
+        for split_input, to_feature in zip(x, self.to_features):
+            split_output = to_feature(split_input)
+            outs.append(split_output)
+
+        return torch.stack(outs, dim=-2)
+
+
+def MLP(
+    dim_in,
+    dim_out,
+    dim_hidden=None,
+    depth=1,
+    activation=nn.Tanh,
+):
+    dim_hidden = default(dim_hidden, dim_in)
+
+    net = []
+    dims = (dim_in, *((dim_hidden,) * depth), dim_out)
+
+    for ind, (layer_dim_in, layer_dim_out) in enumerate(zip(dims[:-1], dims[1:])):
+        is_last = ind == (len(dims) - 2)
+
+        net.append(nn.Linear(layer_dim_in, layer_dim_out))
+
+        if is_last:
+            continue
+
+        net.append(activation())
+
+    return nn.Sequential(*net)
+
+
+class MaskEstimator(Module):
+    @beartype
+    def __init__(
+        self,
+        dim,
+        dim_inputs: BeartypeTuple[int, ...],
+        depth,
+        mlp_expansion_factor=4,
+    ):
+        super().__init__()
+        self.dim_inputs = dim_inputs
+        self.to_freqs = ModuleList([])
+        dim_hidden = dim * mlp_expansion_factor
+
+        for dim_in in dim_inputs:
+            mlp = nn.Sequential(
+                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=depth),
+                nn.GLU(dim=-1),
+            )
+
+            self.to_freqs.append(mlp)
+
+    def forward(self, x):
+        x = x.unbind(dim=-2)
+
+        outs = []
+
+        for band_features, mlp in zip(x, self.to_freqs):
+            freq_out = mlp(band_features)
+            outs.append(freq_out)
+
+        return torch.cat(outs, dim=-1)
+
+
+class MelBandRoformer(Module):
+    @beartype
+    def __init__(
+        self,
+        dim,
+        *,
+        depth,
+        stereo=False,
+        num_stems=1,
+        time_transformer_depth=2,
+        freq_transformer_depth=2,
+        num_bands=60,
+        dim_head=64,
+        heads=8,
+        attn_dropout=0.1,
+        ff_dropout=0.1,
+        flash_attn=True,
+        dim_freqs_in=1025,
+        sample_rate=44100,
+        stft_n_fft=2048,
+        stft_hop_length=512,
+        stft_win_length=2048,
+        stft_normalized=False,
+        stft_window_fn: BeartypeOptional[BeartypeCallable] = None,
+        mask_estimator_depth=1,
+        multi_stft_resolution_loss_weight=1.0,
+        multi_stft_resolutions_window_sizes: BeartypeTuple[int, ...] = (
+            4096,
+            2048,
+            1024,
+            512,
+            256,
+        ),
+        multi_stft_hop_size=147,
+        multi_stft_normalized=False,
+        multi_stft_window_fn: BeartypeCallable = torch.hann_window,
+        match_input_audio_length=False,
+    ):
+        super().__init__()
+
+        self.stereo = stereo
+        self.audio_channels = 2 if stereo else 1
+        self.num_stems = num_stems
+
+        self.layers = ModuleList([])
+
+        transformer_kwargs = dict(
+            dim=dim,
+            heads=heads,
+            dim_head=dim_head,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+            flash_attn=flash_attn,
+        )
+
+        time_rotary_embed = RotaryEmbedding(dim=dim_head)
+        freq_rotary_embed = RotaryEmbedding(dim=dim_head)
+
+        for _ in range(depth):
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        Transformer(
+                            depth=time_transformer_depth,
+                            rotary_embed=time_rotary_embed,
+                            **transformer_kwargs,
+                        ),
+                        Transformer(
+                            depth=freq_transformer_depth,
+                            rotary_embed=freq_rotary_embed,
+                            **transformer_kwargs,
+                        ),
+                    ]
+                )
+            )
+
+        self.stft_window_fn = partial(default(stft_window_fn, torch.hann_window), stft_win_length)
+
+        self.stft_kwargs = dict(
+            n_fft=stft_n_fft,
+            hop_length=stft_hop_length,
+            win_length=stft_win_length,
+            normalized=stft_normalized,
+        )
+
+        _init_window = self.stft_window_fn(device="cpu")
+        freqs = torch.stft(
+            torch.randn(1, 4096),
+            **self.stft_kwargs,
+            window=_init_window,
+            return_complex=True,
+        ).shape[1]
+
+        mel_filter_bank_numpy = filters.mel(
+            sr=sample_rate, n_fft=stft_n_fft, n_mels=num_bands
+        )
+
+        mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
+
+        mel_filter_bank[0][0] = 1.0
+        mel_filter_bank[-1, -1] = 1.0
+
+        freqs_per_band = mel_filter_bank > 0
+        assert freqs_per_band.any(dim=0).all(), (
+            "all frequencies need to be covered by all bands for now"
+        )
+
+        repeated_freq_indices = repeat(torch.arange(freqs), "f -> b f", b=num_bands)
+        freq_indices = repeated_freq_indices[freqs_per_band]
+
+        if stereo:
+            freq_indices = repeat(freq_indices, "f -> f s", s=2)
+            freq_indices = freq_indices * 2 + torch.arange(2)
+            freq_indices = rearrange(freq_indices, "f s -> (f s)")
+
+        self.register_buffer("freq_indices", freq_indices, persistent=False)
+        self.register_buffer("freqs_per_band", freqs_per_band, persistent=False)
+
+        num_freqs_per_band = reduce(freqs_per_band, "b f -> b", "sum")
+        num_bands_per_freq = reduce(freqs_per_band, "b f -> f", "sum")
+
+        self.register_buffer("num_freqs_per_band", num_freqs_per_band, persistent=False)
+        self.register_buffer("num_bands_per_freq", num_bands_per_freq, persistent=False)
+
+        freqs_per_bands_with_complex = tuple(
+            2 * f * self.audio_channels for f in num_freqs_per_band.tolist()
+        )
+
+        self.band_split = BandSplit(dim=dim, dim_inputs=freqs_per_bands_with_complex)
+
+        self.mask_estimators = nn.ModuleList([])
+
+        for _ in range(num_stems):
+            mask_estimator = MaskEstimator(
+                dim=dim, dim_inputs=freqs_per_bands_with_complex, depth=mask_estimator_depth
+            )
+
+            self.mask_estimators.append(mask_estimator)
+
+        self.multi_stft_resolution_loss_weight = multi_stft_resolution_loss_weight
+        self.multi_stft_resolutions_window_sizes = multi_stft_resolutions_window_sizes
+        self.multi_stft_n_fft = stft_n_fft
+        self.multi_stft_window_fn = multi_stft_window_fn
+
+        self.multi_stft_kwargs = dict(
+            hop_length=multi_stft_hop_size,
+            normalized=multi_stft_normalized,
+        )
+
+        self.match_input_audio_length = match_input_audio_length
+
+    def forward(
+        self,
+        raw_audio,
+        target=None,
+        return_loss_breakdown=False,
+    ):
+        device = raw_audio.device
+
+        if raw_audio.ndim == 2:
+            raw_audio = rearrange(raw_audio, "b t -> b 1 t")
+
+        batch, channels, raw_audio_length = raw_audio.shape
+
+        istft_length = raw_audio_length if self.match_input_audio_length else None
+
+        assert (not self.stereo and channels == 1) or (
+            self.stereo and channels == 2
+        ), (
+            "stereo needs to be set to True if passing in audio signal that is stereo "
+            "(channel dimension of 2). also need to be False if mono (channel dimension of 1)"
+        )
+
+        raw_audio, batch_audio_channel_packed_shape = pack_one(raw_audio, "* t")
+
+        stft_window = self.stft_window_fn(device=device)
+
+        stft_repr = torch.stft(
+            raw_audio, **self.stft_kwargs, window=stft_window, return_complex=True
+        )
+        stft_repr = torch.view_as_real(stft_repr)
+
+        stft_repr = unpack_one(stft_repr, batch_audio_channel_packed_shape, "* f t c")
+        stft_repr = rearrange(
+            stft_repr, "b s f t c -> b (f s) t c"
+        )
+
+        batch_arange = torch.arange(batch, device=device)[..., None]
+
+        x = stft_repr[batch_arange, self.freq_indices]
+
+        x = rearrange(x, "b f t c -> b t (f c)")
+
+        x = self.band_split(x)
+
+        for time_transformer, freq_transformer in self.layers:
+            x = rearrange(x, "b t f d -> b f t d")
+            x, ps = pack([x], "* t d")
+
+            x = time_transformer(x)
+
+            x, = unpack(x, ps, "* t d")
+            x = rearrange(x, "b f t d -> b t f d")
+            x, ps = pack([x], "* f d")
+
+            x = freq_transformer(x)
+
+            x, = unpack(x, ps, "* f d")
+
+        num_stems = len(self.mask_estimators)
+
+        masks = torch.stack([fn(x) for fn in self.mask_estimators], dim=1)
+        masks = rearrange(masks, "b n t (f c) -> b n f t c", c=2)
+
+        stft_repr = rearrange(stft_repr, "b f t c -> b 1 f t c")
+
+        stft_repr = torch.view_as_complex(stft_repr)
+        masks = torch.view_as_complex(masks)
+
+        masks = masks.type(stft_repr.dtype)
+
+        scatter_indices = repeat(
+            self.freq_indices, "f -> b n f t", b=batch, n=num_stems, t=stft_repr.shape[-1]
+        )
+
+        stft_repr_expanded_stems = repeat(stft_repr, "b 1 ... -> b n ...", n=num_stems)
+        if stft_repr_expanded_stems.is_complex():
+            real = torch.zeros_like(stft_repr_expanded_stems.real).scatter_add_(
+                2, scatter_indices, masks.real
+            )
+            imag = torch.zeros_like(stft_repr_expanded_stems.imag).scatter_add_(
+                2, scatter_indices, masks.imag
+            )
+            masks_summed = torch.complex(real, imag)
+        else:
+            masks_summed = torch.zeros_like(stft_repr_expanded_stems).scatter_add_(
+                2, scatter_indices, masks
+            )
+
+        denom = repeat(self.num_bands_per_freq, "f -> (f r) 1", r=channels)
+
+        masks_averaged = masks_summed / denom.clamp(min=1e-8)
+
+        stft_repr = stft_repr * masks_averaged
+
+        stft_repr = rearrange(
+            stft_repr, "b n (f s) t -> (b n s) f t", s=self.audio_channels
+        )
+
+        recon_audio = torch.istft(
+            stft_repr,
+            **self.stft_kwargs,
+            window=stft_window,
+            return_complex=False,
+            length=istft_length,
+        )
+
+        recon_audio = rearrange(
+            recon_audio, "(b n s) t -> b n s t", b=batch, s=self.audio_channels, n=num_stems
+        )
+
+        if num_stems == 1:
+            recon_audio = rearrange(recon_audio, "b 1 s t -> b s t")
+
+        if not exists(target):
+            return recon_audio
+
+        if self.num_stems > 1:
+            assert target.ndim == 4 and target.shape[1] == self.num_stems
+
+        if target.ndim == 2:
+            target = rearrange(target, "... t -> ... 1 t")
+
+        target = target[..., : recon_audio.shape[-1]]
+
+        loss = F.l1_loss(recon_audio, target)
+
+        multi_stft_resolution_loss = 0.0
+
+        for window_size in self.multi_stft_resolutions_window_sizes:
+            res_stft_kwargs = dict(
+                n_fft=max(window_size, self.multi_stft_n_fft),
+                win_length=window_size,
+                return_complex=True,
+                window=self.multi_stft_window_fn(window_size, device=device),
+                **self.multi_stft_kwargs,
+            )
+
+            recon_audio_stft = torch.stft(recon_audio, **res_stft_kwargs)
+            target_stft = torch.stft(target, **res_stft_kwargs)
+
+            multi_stft_resolution_loss = multi_stft_resolution_loss + F.l1_loss(
+                recon_audio_stft, target_stft
+            )
+
+        multi_stft_resolution_loss = (
+            multi_stft_resolution_loss / len(self.multi_stft_resolutions_window_sizes)
+        )
+
+        total_loss = loss + multi_stft_resolution_loss * self.multi_stft_resolution_loss_weight
+
+        if not return_loss_breakdown:
+            return total_loss
+
+        return total_loss, loss, multi_stft_resolution_loss
 
 class ErrorCode(str, Enum):
     TORCH_MISSING = "E001"
@@ -124,6 +884,11 @@ for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 # Silence extremely noisy multipart debug logs
 logging.getLogger("python_multipart").setLevel(logging.INFO)
 
+INSTALL_LOG_PATH = BASE_DIR / "install_stemsplat.log"
+install_logger = logging.getLogger("stemsplat.install")
+install_logger.setLevel(logging.DEBUG)
+install_logger.addHandler(logging.FileHandler(INSTALL_LOG_PATH, encoding="utf-8"))
+
 DEFAULT_OUTPUT_ROOT = (Path.home() / "Downloads" / "stemsplat").expanduser()
 MODEL_FILE_MAP = {
     "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "Mel Band Roformer Vocals Config.yaml"),
@@ -135,6 +900,269 @@ MODEL_FILE_MAP = {
     "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
     "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
 }
+
+install_progress = {"pct": 0, "step": "starting", "models_missing": []}
+choice_event = threading.Event()
+shutdown_event = threading.Event()
+INSTALL_PORT = 6060
+MAIN_PORT = 8000
+MODEL_URLS = [(item["filename"], item["url"]) for item in FILES]
+TOTAL_BYTES = int(3.68 * 1024**3)
+
+
+class InstallerHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        self.web_dir = BASE_DIR / "web"
+        super().__init__(*args, directory=str(self.web_dir), **kwargs)
+
+    def log_message(self, format, *args):  # noqa: A003 - match base signature
+        install_logger.info("HTTP %s", format % args)
+
+    def do_GET(self):
+        if self.path == "/progress":
+            install_logger.debug("progress requested: %s", install_progress)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(install_progress).encode())
+            return
+
+        if self.path in {"/", "/index.html", "/install.html"}:
+            install_logger.debug("serving installer ui %s", self.path)
+            self.path = "/install.html"
+            return super().do_GET()
+
+        if self.path == "/installer_shutdown":
+            install_logger.info("installer shutdown requested via http")
+            shutdown_event.set()
+            self.send_response(200)
+            self.end_headers()
+            return
+
+        return super().do_GET()
+
+    def do_POST(self):
+        if self.path == "/download_models":
+            install_logger.info("user requested model download")
+            length = int(self.headers.get("Content-Length", 0))
+            selection = None
+            if length:
+                try:
+                    body = self.rfile.read(length)
+                    parsed = json.loads(body.decode("utf-8"))
+                    if isinstance(parsed, dict) and isinstance(parsed.get("models"), list):
+                        selection = [str(x) for x in parsed["models"]]
+                except Exception:
+                    install_logger.debug("failed to parse selection body", exc_info=True)
+            install_progress["choice"] = "download"
+            install_progress["selection"] = selection
+            choice_event.set()
+            self.send_response(200)
+            self.end_headers()
+            return
+        if self.path == "/skip_models":
+            install_logger.info("user skipped model download")
+            install_progress["choice"] = "skip"
+            choice_event.set()
+            self.send_response(200)
+            self.end_headers()
+            return
+        if self.path == "/installer_shutdown":
+            install_logger.info("installer shutdown requested via post")
+            shutdown_event.set()
+            self.send_response(200)
+            self.end_headers()
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+
+def _installed():
+    return Path("venv").exists()
+
+
+def run_installer_ui():
+    handler = InstallerHandler
+    worker = threading.Thread(target=install, daemon=True)
+    worker.start()
+    socketserver.TCPServer.allow_reuse_address = True
+
+    if not _port_available(INSTALL_PORT):
+        msg = f"Port {INSTALL_PORT} is already in use. Please close the other process or change INSTALL_PORT."
+        install_logger.error(msg)
+        print(msg)
+        raise SystemExit(1)
+
+    try:
+        with socketserver.TCPServer(("localhost", INSTALL_PORT), handler) as httpd:
+            install_logger.info("installer ui listening on http://localhost:%s", INSTALL_PORT)
+            webbrowser.open(f"http://localhost:{INSTALL_PORT}/", new=0)
+            server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            server_thread.start()
+            install_logger.debug("waiting for installer routine to finish before shutting ui")
+            try:
+                while not shutdown_event.wait(0.5):
+                    continue
+                install_logger.info("installer routine finished; shutting down installer ui")
+                httpd.shutdown()
+                httpd.server_close()
+                server_thread.join(timeout=2)
+                install_logger.debug(
+                    "installer ui closed; main app launch handled by installer page"
+                )
+            except KeyboardInterrupt:
+                install_logger.info("installer interrupted; shutting down")
+                httpd.shutdown()
+                httpd.server_close()
+    except OSError as exc:
+        install_logger.error("failed to bind install server on port %s: %s", INSTALL_PORT, exc)
+        print(
+            f"Port {INSTALL_PORT} is already in use. Please close the other process or change INSTALL_PORT."
+        )
+        raise SystemExit(1)
+
+
+def _missing_required_models() -> list[str]:
+    models_dir_candidates = [BASE_DIR / "Models", Path("Models")]
+    models_dir = next((d for d in models_dir_candidates if d.exists()), models_dir_candidates[0])
+    required_terms = ["instrumental", "vocals", "deux"]
+    found = {term: False for term in required_terms}
+    if models_dir.exists():
+        for path in models_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            name = path.name.lower()
+            if not name.endswith(".cpkt"):
+                continue
+            for term in required_terms:
+                if term in name:
+                    found[term] = True
+    return [term for term, present in found.items() if not present]
+
+
+def _models_missing() -> bool:
+    return len(_missing_required_models()) > 0
+
+
+def _start_server():
+    install_logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
+    if not _port_available(MAIN_PORT):
+        install_logger.info("main server already running on port %s; opening browser", MAIN_PORT)
+        install_progress["main_running"] = True
+        install_logger.debug("main server already running; installer page will navigate")
+        shutdown_event.set()
+        return
+    subprocess.Popen(
+        [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
+    )
+    install_logger.debug("main server started; installer page will navigate")
+
+
+def _download_models(selection: Optional[list[str]] = None):
+    try:
+        install_progress["step"] = "downloading models"
+        install_progress["pct"] = 5
+        download_to(BASE_DIR, selection or [])
+        install_progress["pct"] = 100
+        install_progress["step"] = "done"
+        _start_server()
+    except Exception as exc:
+        install_logger.exception("model download failed")
+        install_progress["step"] = f"download failed: {exc}"
+        install_progress["error"] = str(exc)
+        install_progress["pct"] = -1
+
+
+def install():
+    install_logger.info("install routine starting")
+    try:
+        install_progress["step"] = "installing prerequisites"
+        install_progress["pct"] = 1
+        install_progress["models_missing"] = _missing_required_models()
+        if _installed():
+            install_logger.info("virtual environment already present")
+        steps = []
+        if not _installed():
+            steps.append(("creating virtual environment", [sys.executable, "-m", "venv", "venv"]))
+        steps.append(("upgrading pip", [str(pip_path()), "install", "--upgrade", "pip"]))
+        steps.extend([(f"installing {pkg}", [str(pip_path()), "install", pkg]) for pkg in INSTALL_DEPS])
+
+        total = max(1, len(steps))
+        for i, (msg, cmd) in enumerate(steps, start=1):
+            install_progress["step"] = msg
+            install_progress["pct"] = int((i - 1) / total * 100)
+            install_logger.info("running step %s/%s: %s", i, total, msg)
+            try:
+                subprocess.check_call(cmd)
+            except subprocess.CalledProcessError as exc:
+                install_logger.exception("error during %s", msg)
+                install_progress["step"] = f"error during {msg}: {exc}"
+                install_progress["pct"] = -1
+                return
+
+        if _models_missing():
+            install_logger.info("models missing; skipping downloads per v0.1 flow")
+            install_progress["step"] = "models missing; skipping downloads"
+            install_progress["pct"] = 100
+            _start_server()
+            return
+
+        install_progress["pct"] = 100
+        install_progress["step"] = "done"
+        install_logger.info("prerequisites satisfied; launching server")
+        _start_server()
+    except Exception:
+        install_logger.exception("installer crashed")
+        install_progress["step"] = "installation failed"
+        install_progress["pct"] = -1
+    finally:
+        shutdown_event.set()
+
+CHUNK_SIZE = 8 * 1024 * 1024
+SSL_CONTEXT = (
+    ssl.create_default_context(cafile=certifi.where())
+    if certifi is not None
+    else ssl.create_default_context()
+)
+
+def try_head_content_length(url: str) -> int | None:
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "app-downloader"})
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=SSL_CONTEXT) as resp:
+            cl = resp.headers.get("Content-Length")
+    except Exception:
+        return None
+    return int(cl) if cl and cl.isdigit() else None
+
+
+def download_to(base_dir: Path, selected: list[str] | None = None) -> None:
+    base_dir = base_dir.resolve()
+    wanted = set(selected or [])
+    for item in FILES:
+        tag = item.get("tag")
+        if wanted and tag and tag not in wanted:
+            continue
+        dest = base_dir / item["subdir"] / item["filename"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".part")
+
+        remote_len = try_head_content_length(item["url"])
+        if dest.exists() and remote_len is not None and dest.stat().st_size == remote_len:
+            continue
+
+        req = urllib.request.Request(item["url"], headers={"User-Agent": "app-downloader"})
+        with urllib.request.urlopen(req, timeout=60, context=SSL_CONTEXT) as resp:
+            if tmp.exists():
+                tmp.unlink()
+            with open(tmp, "wb") as handle:
+                while True:
+                    chunk = resp.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+
+        os.replace(tmp, dest)
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -230,38 +1258,6 @@ def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> 
     zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
     return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": "flat"}
 
-MODEL_URLS = [
-    (
-        "Mel Band Roformer Vocals.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
-    ),
-    (
-        "Mel Band Roformer Instrumental.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-    ),
-    (
-        "mel_band_roformer_karaoke_becruily.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-    ),
-    (
-        "becruily_guitar.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-    ),
-    (
-        "kuielab_a_bass.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
-    ),
-    (
-        "kuielab_a_drums.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
-    ),
-    (
-        "kuielab_a_other.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
-    ),
-]
-
-
 # ── Device handling ─────────────────────────────────────────────────────────
 
 def _ensure_torch() -> None:
@@ -301,11 +1297,157 @@ def _port_available(port: int) -> bool:
 
 # ── Model management ────────────────────────────────────────────────────────
 
+DEFAULT_CKPT = BASE_DIR / "models" / "Mel Band Roformer Vocals.ckpt"
+DEFAULT_YAML = BASE_DIR / "configs" / "Mel Band Roformer Vocals Config.yaml"
+
+
+def load_model(ckpt_path: str, yaml_path: str, device: torch.device):
+    with open(yaml_path, "r") as handle:
+        cfg_root = yaml.unsafe_load(handle)
+
+    default_target = "mel_band_roformer.MelBandRoformer"
+
+    def find_target(cfg):
+        if "target" in cfg:
+            target = cfg.pop("target")
+            return target, cfg
+        raise ValueError("No 'target' in YAML")
+
+    try:
+        target_path, kwargs = find_target(cfg_root)
+    except ValueError:
+        target_path, kwargs = default_target, {"model": cfg_root.get("model", {})}
+
+    module_name, class_name = target_path.rsplit(".", 1)
+    if module_name == "mel_band_roformer":
+        ModelClass = MelBandRoformer
+    else:
+        ModelClass = getattr(importlib.import_module(module_name), class_name)
+
+    model = ModelClass(**kwargs.get("model", {}))
+    state = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(state.get("state_dict", state), strict=False)
+    return model.to(device).eval()
+
+
+def overlap_add(dst: np.ndarray, seg: np.ndarray, start: int, fade: int):
+    end = start + seg.shape[-1]
+    fade = min(fade, seg.shape[-1] // 2)
+    if fade > 0:
+        win = np.ones(seg.shape[-1], dtype=np.float32)
+        ramp = np.linspace(0, 1, fade, dtype=np.float32)
+        win[:fade] = ramp
+        win[-fade:] = ramp[::-1]
+        dst[..., start:end] += seg * win
+    else:
+        dst[..., start:end] += seg
+
+
+def split_main(argv=None, progress_cb=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ckpt", default=str(DEFAULT_CKPT), help=".ckpt weights")
+    parser.add_argument("--config", default=str(DEFAULT_YAML), help=".yaml model def")
+    parser.add_argument("--wav", required=True, help="input WAV")
+    parser.add_argument("--out", default="stems_out", help="output dir")
+    parser.add_argument("--segment", type=int, default=352_800, help="segment size")
+    parser.add_argument("--overlap", type=int, default=18, help="overlap percent")
+    parser.add_argument("--vocals-only", action="store_true", help="only save vocals")
+    parser.add_argument(
+        "--device",
+        default=(
+            "mps"
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
+            else "cpu"
+        ),
+        help="compute device: 'mps' (Apple Metal) or 'cpu' (fallback)",
+    )
+    args = parser.parse_args(argv)
+
+    wav, sr = torchaudio.load(args.wav)
+    if sr != 44_100:
+        wav = torchaudio.functional.resample(wav, sr, 44_100)
+        sr = 44_100
+    is_tensor = getattr(torch, "is_tensor", lambda _: False)
+    if is_tensor(wav):
+        if hasattr(wav, "detach"):
+            wav = wav.detach().cpu().numpy()
+        else:
+            wav = wav.cpu().numpy() if hasattr(wav, "cpu") else wav.numpy()
+
+    n_channels = wav.shape[0]
+    n_samples = wav.shape[1]
+
+    stems = np.zeros((2, n_channels, n_samples), dtype=np.float32)
+
+    seg_size = args.segment
+    fade_len = int(seg_size * (args.overlap / 100))
+    hop_size = seg_size - fade_len
+
+    device = torch.device(args.device)
+    model = load_model(args.ckpt, args.config, device)
+
+    if progress_cb:
+        progress_cb(0.0)
+    with torch.no_grad(), tqdm(total=n_samples, unit="sample") as bar:
+        for start in range(0, n_samples, hop_size):
+            end = min(start + seg_size, n_samples)
+            seg = wav[:, start:end]
+            if seg.shape[1] < seg_size:
+                seg = np.pad(seg, ((0, 0), (0, seg_size - seg.shape[1])))
+
+            pred = model(torch.from_numpy(seg).unsqueeze(0).to(device))
+            if isinstance(pred, dict) and "sources" in pred:
+                pred = pred["sources"]
+            pred = pred.squeeze(0).cpu().numpy()
+
+            if pred.ndim == 2:
+                if pred.shape[0] == 2:
+                    pred = pred[:, np.newaxis, :]
+                else:
+                    pred = pred[np.newaxis, :, :]
+            elif pred.ndim == 3 and pred.shape[1] not in (1, n_channels):
+                pred = pred.transpose(1, 0, 2)
+
+            if pred.shape[1] == 1 and n_channels == 2:
+                pred = np.repeat(pred, 2, axis=1)
+
+            chunk_len = end - start
+            if pred.shape[2] > chunk_len:
+                pred = pred[:, :, :chunk_len]
+            if pred.shape[0] == 1:
+                vocals_seg = pred[0]
+                mix_seg = seg[:, :chunk_len]
+                inst_seg = mix_seg - vocals_seg
+                pred = np.stack([vocals_seg, inst_seg], axis=0)
+
+            overlap_add(stems, pred, start, fade_len)
+            bar.update(min(hop_size, n_samples - start))
+            if progress_cb:
+                progress_cb(bar.n / bar.total)
+
+    window_sum = np.ones(n_samples, dtype=np.float32)
+    if fade_len:
+        win = np.ones(seg_size, dtype=np.float32)
+        ramp = np.linspace(0, 1, fade_len, dtype=np.float32)
+        win[:fade_len] = ramp
+        win[-fade_len:] = ramp[::-1]
+        for start in range(0, n_samples, hop_size):
+            end = min(start + seg_size, n_samples)
+            window_sum[start:end] += win[: end - start]
+    stems /= window_sum[None, None, :]
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sf.write(out_dir / "vocals.wav", stems[0].T, sr)
+    if not args.vocals_only:
+        sf.write(out_dir / "instrumental.wav", stems[1].T, sr)
+    if progress_cb:
+        progress_cb(1.0)
+    print(f"✓ Done – stems saved to “{out_dir}”")
+
 
 def _load_optional_roformer(path: Path, config_path: Optional[Path], device: torch.device):
-    if _load_roformer is None:
-        raise AppError(ErrorCode.SPLIT_IMPORT_FAILED, f"split package unavailable: {_import_error}")
-    return _load_roformer(str(path), str(config_path or ""), device)
+    return load_model(str(path), str(config_path or ""), device)
 
 
 class StemModel:
@@ -1749,11 +2891,22 @@ def _process_local_file(path: Path, stem_list: list[str]) -> list[str]:
     return [str(out_dir / stem) for stem in stems_out]
 
 def cli_main(argv: Optional[list[str]] = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+    if "--split" in argv:
+        split_args = [arg for arg in argv if arg != "--split"]
+        split_main(split_args)
+        return
     parser = argparse.ArgumentParser(description="Run stemsplat server or process a file")
     parser.add_argument("--serve", action="store_true", help="Start the FastAPI server with uvicorn")
+    parser.add_argument("--install", action="store_true", help="Run the installer UI")
     parser.add_argument("files", nargs="*", help="Optional list of audio files to process locally")
     parser.add_argument("--stems", default="vocals", help="Comma-separated stems when processing locally")
     args = parser.parse_args(argv)
+
+    if args.install:
+        run_installer_ui()
+        return
 
     if args.serve:
         import uvicorn
