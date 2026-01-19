@@ -986,6 +986,7 @@ def run_installer_ui():
     handler = InstallerHandler
     worker = threading.Thread(target=install, daemon=True)
     worker.start()
+    threading.Thread(target=_launch_main_page, daemon=True).start()
     socketserver.TCPServer.allow_reuse_address = True
 
     if not _port_available(INSTALL_PORT):
@@ -997,7 +998,6 @@ def run_installer_ui():
     try:
         with socketserver.TCPServer(("localhost", INSTALL_PORT), handler) as httpd:
             install_logger.info("installer ui listening on http://localhost:%s", INSTALL_PORT)
-            webbrowser.open(f"http://localhost:{INSTALL_PORT}/", new=0)
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
             install_logger.debug("waiting for installer routine to finish before shutting ui")
@@ -1057,6 +1057,18 @@ def _start_server():
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
     install_logger.debug("main server started; installer page will navigate")
+
+
+def _launch_main_page() -> None:
+    main_url = f"http://localhost:{MAIN_PORT}/"
+    for _ in range(40):
+        try:
+            with urllib.request.urlopen(main_url, timeout=1):
+                webbrowser.open(main_url, new=0)
+                return
+        except Exception:
+            time.sleep(0.5)
+    webbrowser.open(main_url, new=0)
 
 
 def _download_models(selection: Optional[list[str]] = None):
