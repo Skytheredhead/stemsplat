@@ -1081,6 +1081,8 @@ def install():
         install_progress["pct"] = 1
         install_progress["models_missing"] = _missing_required_models()
         if _installed():
+            _start_server()
+        if _installed():
             install_logger.info("virtual environment already present")
         steps = []
         if not _installed():
@@ -1751,6 +1753,8 @@ errors: dict[str, str] = {}
 tasks: dict[str, dict] = {}
 controls: dict[str, dict[str, threading.Event]] = {}
 process_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+app_ready_event = threading.Event()
+app_ready_state = {"ready": False, "checking": True, "models_missing": []}
 
 def _worker() -> None:
     while True:
@@ -1766,9 +1770,20 @@ download_lock = threading.Lock()
 downloading = False
 
 
+def _run_startup_checks() -> None:
+    try:
+        app_ready_state["checking"] = True
+        app_ready_state["models_missing"] = _missing_required_models()
+    finally:
+        app_ready_state["checking"] = False
+        app_ready_state["ready"] = True
+        app_ready_event.set()
+
+
 @app.on_event("startup")
 async def _startup_cleanup() -> None:
     _close_installer_ui()
+    threading.Thread(target=_run_startup_checks, daemon=True).start()
 
 
 @app.exception_handler(AppError)
@@ -1993,7 +2008,7 @@ def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool =
     return wav_path
 
 
-def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: list[str]) -> None:
+def _queue_processing(task_id: str, out_dir: Path, stem_list: list[str]) -> None:
     pause_evt = controls.setdefault(task_id, {}).setdefault("pause", threading.Event())
     stop_evt = controls.setdefault(task_id, {}).setdefault("stop", threading.Event())
 
@@ -2035,11 +2050,32 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
     def run() -> None:
         try:
             _raise_if_stopped()
+            while not app_ready_event.is_set():
+                _raise_if_stopped()
+                tasks[task_id]["status"] = "preparing"
+                progress[task_id] = {
+                    "stage": "preparing",
+                    "pct": 0,
+                    "stems": tasks.get(task_id, {}).get("stems"),
+                    "out_dir": tasks.get(task_id, {}).get("dir"),
+                    "zip": tasks.get(task_id, {}).get("zip"),
+                }
+                time.sleep(0.5)
             tasks[task_id]["status"] = "running"
             manager = ModelManager()
             cb("preparing", 0)
             cb("prepare.complete", 1)
-            audio_path = conv_path
+            conv_src = tasks.get(task_id, {}).get("conv_src")
+            if conv_src:
+                audio_path = Path(conv_src)
+                if not audio_path.exists():
+                    raise AppError(ErrorCode.UPLOAD_FAILED, "Converted source missing; please re-upload.")
+            else:
+                orig_src = tasks.get(task_id, {}).get("orig_src")
+                if not orig_src:
+                    raise AppError(ErrorCode.UPLOAD_FAILED, "Missing source file for conversion")
+                audio_path = _stage_audio_copy(Path(orig_src), CONVERTED_DIR)
+                tasks[task_id]["conv_src"] = str(audio_path)
             plan_mode = tasks.get(task_id, {}).get("structure_mode", settings.structure_mode)
             staging_dir = Path(tasks.get(task_id, {}).get("staging_dir") or out_dir)
             deliver_dir = Path(tasks.get(task_id, {}).get("dir") or out_dir)
@@ -2047,7 +2083,7 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir, stop_check=_raise_if_stopped)
 
             zip_path: Path | None = None
-            if plan_mode != "structured" and zip_target is not None:
+            if plan_mode != "structured" and zip_target is not None and len(stems_out) > 1:
                 _raise_if_stopped()
                 zip_path = ensure_unique_path(Path(zip_target) if zip_target else deliver_dir / f"{audio_path.stem}.zip")
                 cb("zip.start", 99)
@@ -2099,7 +2135,13 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
             errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
             tasks[task_id]["status"] = "error"
             logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
-            logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
+            logger.debug(
+                "task %s context dir=%s conv_src=%s stems=%s",
+                task_id,
+                out_dir,
+                tasks.get(task_id, {}).get("conv_src"),
+                stem_list,
+            )
         except Exception as exc:  # pragma: no cover - safety net
             logging.exception("processing failed")
             progress[task_id] = {
@@ -2453,19 +2495,6 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         logger.exception("failed to persist upload %s", file.filename)
         raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
 
-    conv_dir = CONVERTED_DIR
-    conv_dir.mkdir(exist_ok=True)
-    try:
-        conv_path = _stage_audio_copy(path, conv_dir)
-    except AppError as exc:
-        logger.error("conversion staging failed for %s: %s %s", file.filename, exc.code, exc.message)
-        raise exc.to_http() if hasattr(exc, "to_http") else exc
-    try:
-        conv_size = conv_path.stat().st_size
-    except Exception:
-        conv_size = "unknown"
-    logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
-
     expected: list[str] = []
     for s in stem_list:
         if s == "deux":
@@ -2479,7 +2508,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         "dir": None,
         "stems": expected,
         "controls": controls[task_id],
-        "conv_src": str(conv_path),
+        "conv_src": None,
         "orig_src": str(path),
         "orig_name": file.filename,
         "stem_list": stem_list,
@@ -2496,20 +2525,21 @@ async def start_task(task_id: str):
     info = tasks.get(task_id)
     if not info:
         raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    if info.get("status") in {"queued", "running"}:
+    if info.get("status") in {"queued", "running", "preparing"}:
         return {"task_id": task_id, "status": info.get("status")}
-    conv_src = Path(info.get("conv_src", ""))
-    if not conv_src.exists():
-        raise AppError(ErrorCode.UPLOAD_FAILED, "Converted source missing; please re-upload.").to_http()
+    orig_src = Path(info.get("orig_src", ""))
+    if not orig_src.exists():
+        raise AppError(ErrorCode.UPLOAD_FAILED, "Source missing; please re-upload.").to_http()
     plan = resolve_output_plan(info, structure_mode=settings.structure_mode)
     out_dir = plan["staging_dir"] or plan["deliver_dir"]
     tasks[task_id]["dir"] = str(plan["deliver_dir"])
     tasks[task_id]["structure_mode"] = plan["structure_mode"]
     tasks[task_id]["staging_dir"] = str(plan["staging_dir"])
     tasks[task_id]["zip_target"] = str(plan["zip_target"]) if plan.get("zip_target") else None
+    tasks[task_id]["status"] = "queued"
     stem_list = info.get("stem_list") or []
     logger.info("starting task %s on demand", task_id)
-    _queue_processing(task_id, conv_src, Path(out_dir), stem_list)
+    _queue_processing(task_id, Path(out_dir), stem_list)
     return {"task_id": task_id, "status": "queued"}
 
 
@@ -2550,6 +2580,15 @@ async def progress_stream(task_id: str):
             await asyncio.sleep(0.5)
 
     return EventSourceResponse(event_generator())
+
+
+@app.get("/ready")
+async def ready_status():
+    return {
+        "ready": app_ready_event.is_set(),
+        "checking": app_ready_state.get("checking", False),
+        "models_missing": app_ready_state.get("models_missing", []),
+    }
 
 
 def _detect_output(out_dir: Path, stems: list[str], zip_hint: str | None = None) -> tuple[bool, str | None]:
@@ -2667,7 +2706,7 @@ async def rerun(task_id: str):
         "staging_dir": str(plan["staging_dir"]),
         "zip_target": str(plan["zip_target"]) if plan.get("zip_target") else None,
     }
-    _queue_processing(new_id, conv_src, Path(out_dir), stem_list)
+    _queue_processing(new_id, Path(out_dir), stem_list)
     return {"task_id": new_id, "stems": expected}
 
 
@@ -2775,6 +2814,18 @@ async def download(task_id: str):
     if zip_path and Path(zip_path).exists():
         logger.info("serving download for task %s at %s", task_id, zip_path)
         return FileResponse(path=zip_path, media_type="application/zip", filename=Path(zip_path).name)
+    out_dir = info.get("dir")
+    stems = info.get("stems") or []
+    if out_dir:
+        out_path = Path(out_dir)
+        if out_path.exists() and out_path.is_file():
+            logger.info("serving single-file download for task %s at %s", task_id, out_path)
+            return FileResponse(path=out_path, filename=out_path.name)
+        if len(stems) == 1:
+            candidate = out_path / stems[0]
+            if candidate.exists():
+                logger.info("serving single-stem download for task %s at %s", task_id, candidate)
+                return FileResponse(path=candidate, filename=candidate.name)
     raise AppError(ErrorCode.INVALID_REQUEST, "Files not ready").to_http(409)
 
 

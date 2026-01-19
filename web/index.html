@@ -251,6 +251,8 @@
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
+    let appReady = false;
+    let appReadyChecking = true;
     let settingsState = { output_root: '', structure_mode: 'flat' };
     let defaultOutputPath = '';
     let dirPickerInput = null;
@@ -268,6 +270,60 @@
         if(icon){ icon.style.animation = ''; }
       }
     }
+
+    function stageForDisplay(stage){
+      if(!appReady && (!stage || stage === 'ready' || stage === 'queued')) return 'preparing';
+      return stage;
+    }
+
+    function formatStageLabel(stage, pct){
+      const effectiveStage = stageForDisplay(stage);
+      if(effectiveStage === 'preparing') return 'preparing';
+      const friendlyStage = displayStage(effectiveStage);
+      if(effectiveStage === 'ready' || effectiveStage === 'queued'){
+        return friendlyStage || 'queued';
+      }
+      if(typeof pct === 'number' && pct >= 0){
+        const sp = Math.round(Math.max(0, Math.min(100, pct)));
+        return friendlyStage ? `${friendlyStage} (${sp}%)` : `${sp}%`;
+      }
+      return friendlyStage || 'queued';
+    }
+
+    function refreshReadyUI(){
+      document.querySelectorAll('#queue .item-row').forEach((row) => {
+        const chip = row.querySelector('.chip');
+        if(!chip) return;
+        const id = row.__taskId;
+        const tempKey = row.__tempKey;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        const stage = task ? task.stage : null;
+        const pct = task ? task.pct : 0;
+        const effectiveStage = stageForDisplay(stage);
+        chip.textContent = formatStageLabel(stage, pct);
+        setStatusVisibility(chip, effectiveStage);
+      });
+      updateUI();
+    }
+
+    function pollAppReady(){
+      fetch('/ready')
+        .then(res => res.json())
+        .then((data) => {
+          appReadyChecking = !!data.checking;
+          appReady = !!data.ready;
+          refreshReadyUI();
+          if(!appReady){
+            setTimeout(pollAppReady, 1000);
+          }
+        })
+        .catch(() => {
+          if(!appReady){
+            setTimeout(pollAppReady, 1000);
+          }
+        });
+    }
+    pollAppReady();
 
     if (closeBtn) {
       const shutdownEndpoints = [
@@ -309,7 +365,7 @@
     }
 
     function applySettingsUI(){
-      // settings UI disabled; outputs always go to default zip
+      // settings UI disabled; outputs go to default folder (zip only when multiple stems).
     }
 
     function guardClick(el, handler, cooldown = 600){
@@ -679,6 +735,7 @@
 
     function shouldShowStatus(stage){
       const active = stage && stage !== 'ready' && stage !== 'queued';
+      if(!appReady && (!stage || stage === 'ready' || stage === 'queued')) return true;
       return startPressed || active;
     }
 
@@ -851,7 +908,7 @@
         return;
       }
       // reset visual state
-      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
+      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = formatStageLabel('preparing', 0); setStatusVisibility(st, 'preparing'); }
       if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
       const card = stopPad && stopPad.closest('.card');
       if(card){ card.classList.remove('done'); }
@@ -939,9 +996,14 @@
       else {
         const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
         showStatus(st);
-        st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
-        smooth.setImmediate(sp);
-        setStopVisibility(stopPad, task.stage);
+        st.textContent = formatStageLabel(task.stage || 'queued', sp);
+        const effectiveStage = stageForDisplay(task.stage);
+        if(effectiveStage === 'ready' || effectiveStage === 'queued' || effectiveStage === 'preparing'){
+          smooth.setImmediate(0);
+        } else {
+          smooth.setImmediate(sp);
+        }
+        setStopVisibility(stopPad, effectiveStage);
         if(stopPad && task.id && isProcessing(task)){
           setStopSquareIcon(stopPad);
           stopPad.style.pointerEvents = '';
@@ -963,7 +1025,7 @@
         setRetryIcon(dl);
         guardClick(dl, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
       }
-      setStatusVisibility(st, task.stage);
+      setStatusVisibility(st, stageForDisplay(task.stage));
       const inserted = node.children[0];
       inserted.classList.add('enter-pre');
       // Attach task id for later filtering
@@ -1317,10 +1379,10 @@
         const card = item.querySelector('.card');
         const stopPad = item.querySelector('.stop-pad');
         li.textContent = file.name;
-        st.textContent = 'ready';
+        st.textContent = formatStageLabel('ready', 0);
         st.classList.add('chip-dim');
         st.classList.add('hidden');
-        if(startPressed){ st.classList.remove('hidden'); }
+        if(startPressed || !appReady){ st.classList.remove('hidden'); }
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
         item.classList.add('enter-pre');
@@ -1377,7 +1439,11 @@
         xhr.onload = () => {
           if(xhr.status >= 400){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'error'; return resolve(); }
           st.classList.remove('chip-dim');
-          st.textContent = 'ready';
+          st.textContent = formatStageLabel('ready', 0);
+          if(!appReady && st){
+            showStatus(st);
+            st.classList.remove('hidden');
+          }
           smooth.setImmediate(0);
           let res = {};
           try {
@@ -1412,7 +1478,7 @@
             t.pct = 0;
             if(st){
               showStatus(st);
-              st.textContent = 'queued';
+              st.textContent = formatStageLabel('queued', 0);
               st.classList.remove('hidden');
             }
           }
@@ -1483,14 +1549,14 @@
             }
             if(chip){
               showStatus(chip);
-              chip.textContent = 'queued';
+              chip.textContent = formatStageLabel('queued', 0);
               chip.classList.remove('hidden');
             }
             return;
           }
           if(chip && (chip.textContent || '').toLowerCase() === 'ready'){
             showStatus(chip);
-            chip.textContent = 'queued';
+            chip.textContent = formatStageLabel('queued', 0);
             chip.classList.remove('hidden');
           }
         });
@@ -1556,6 +1622,7 @@
     function displayStage(stage){
       if(!stage) return 'queued';
       const lower = stage.toLowerCase();
+      if(lower.startsWith('preparing')) return 'preparing';
       if(lower.includes('deux')) return 'voc/inst';
       if(lower.includes('vocals')) return 'vocals';
       if(lower.includes('instrumental')) return 'instrumental';
@@ -1582,6 +1649,7 @@
           if(!data) return;
           const rawStage = data.stage;
           const stage = rawStage === 'errored' ? 'error' : rawStage;
+          const effectiveStage = stageForDisplay(stage);
           const pct = data.pct;
           if(taskRef){
             taskRef.stage = stage;
@@ -1639,8 +1707,8 @@
           }
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
-            const friendlyStage = displayStage(stage);
-            if (stage === 'queued' || stage === 'ready') {
+            const friendlyStage = displayStage(effectiveStage);
+            if (effectiveStage === 'queued' || effectiveStage === 'ready' || effectiveStage === 'preparing') {
               st.textContent = friendlyStage || 'queued';
               smooth.setImmediate(0);
             } else {
@@ -1651,10 +1719,10 @@
               dl.classList.remove('show');
             }
           } else {
-            st.textContent = 'queued';
+            st.textContent = formatStageLabel(effectiveStage, 0);
           }
-          setStatusVisibility(st, stage);
-          setStopVisibility(stopPad, stage);
+          setStatusVisibility(st, effectiveStage);
+          setStopVisibility(stopPad, effectiveStage);
         });
         es.addEventListener('error', (ev) => {
           if (taskRef && taskRef.stage === 'stopped') {
@@ -1728,7 +1796,7 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
-          <div class="text-sm opacity-80">outputs will be saved as a zip to your Downloads folder</div>
+          <div class="text-sm opacity-80">outputs will be saved as a zip when more than one stem is generated</div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>
