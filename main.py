@@ -183,7 +183,10 @@ if importlib.util.find_spec("torch.nn.attention"):
             backends.append(SDPBackend.MATH)
         if config.enable_mem_efficient:
             backends.append(SDPBackend.EFFICIENT_ATTENTION)
-        return sdpa_kernel(backends, set_priority_order=True)
+        try:
+            return sdpa_kernel(backends, set_priority_order=True)
+        except TypeError:
+            return sdpa_kernel(backends)
 
 else:  # pragma: no cover - fallback for older torch
     from torch.backends.cuda import sdp_kernel as sdpa_kernel  # type: ignore
