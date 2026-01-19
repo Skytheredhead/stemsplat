@@ -3,13 +3,7 @@
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. This app will provide better results than the free online stem splitters, and this happens to run locally on your computer! Also, there's no weird numbers that you need to mess around wth, it's all pre-decided for super high quality. I've found [Becruily's models on Huggingface](https://huggingface.co/becruily) to be consistently good, so I'm currently using them for this project.
 *BUGS/SUGGESTIONS (that aren't listed below): https://forms.gle/wSpe2nyFgcmuxSr28*
 
-## Prerequisites
-
-- Python (I'm using 3.13.5, not sure about other versions)
-- APPLE SILICON Mac (M-series)
-
 ## Quickstart
-
 0. Make sure you have python installed (https://www.python.org/downloads/macos/)
 1. Download the zip of the project from the v0.1.0 release on the right side of the page.
 2. Unzip the folder.
@@ -19,20 +13,23 @@
 
 
 ## Current Models (Thank you Becruily)
-
-**Becruily's Huggingface:**
 - Vocals - https://huggingface.co/becruily/mel-band-roformer-vocals/tree/main
 - Instrumental - https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main
 - Deux - https://huggingface.co/becruily/mel-band-roformer-deux/tree/main
 
+## v0.2 plans:
+- Python file consolidation into one main.py file
+- Progress bar updates for smoothness
+- Est time remaining
+- UI changes
+
 ## Future Plans
-- Add a “estimated time remaining”
 - adding single instrument splits
 - Add different models to optimize for speed, like a low/med/high quality toggle that will use different models.
 - Video support?
 - Cloud Compute (maybe)
 - Higher quality splits
 
-## Way further down the line:
+## In a galaxy far far away:
 - Model Training (maybe as different app)
 - Running your own models
