@@ -17,7 +17,7 @@
 - Instrumental - https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main
 - Deux - https://huggingface.co/becruily/mel-band-roformer-deux/tree/main
 
-## v0.2 plans:
+## v0.1.1 plans:
 - Python file consolidation into one main.py file
 - Progress bar updates for smoothness
 - Est time remaining
