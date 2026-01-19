@@ -992,10 +992,10 @@ def run_installer_ui():
     socketserver.TCPServer.allow_reuse_address = True
 
     if not _port_available(INSTALL_PORT):
-        msg = f"Port {INSTALL_PORT} is already in use. Please close the other process or change INSTALL_PORT."
-        install_logger.error(msg)
+        msg = f"Port {INSTALL_PORT} is already in use. Skipping installer UI."
+        install_logger.warning(msg)
         print(msg)
-        raise SystemExit(1)
+        return
 
     try:
         with socketserver.TCPServer(("localhost", INSTALL_PORT), handler) as httpd:
