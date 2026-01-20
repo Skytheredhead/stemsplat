@@ -995,6 +995,8 @@ def run_installer_ui():
         msg = f"Port {INSTALL_PORT} is already in use. Skipping installer UI."
         install_logger.warning(msg)
         print(msg)
+        while not shutdown_event.wait(0.5):
+            continue
         return
 
     try:
@@ -1020,6 +1022,8 @@ def run_installer_ui():
     except OSError as exc:
         install_logger.warning("failed to bind install server on port %s: %s", INSTALL_PORT, exc)
         print(f"Port {INSTALL_PORT} is already in use. Skipping installer UI.")
+        while not shutdown_event.wait(0.5):
+            continue
         return
 
 
