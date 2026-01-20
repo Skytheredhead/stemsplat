@@ -331,8 +331,8 @@
         .map((item) => `<li><a class="underline" href="${item.href}" target="_blank" rel="noopener noreferrer">${item.label}</a></li>`)
         .join('');
       const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-md bg-black/40';
-      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-11/12 text-[var(--txt-main)] backdrop-blur-2xl shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
+      overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-xl bg-black/50';
+      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-11/12 text-[var(--txt-main)] backdrop-blur-3xl shadow-[0_22px_70px_rgba(0,0,0,0.55)] ring-1 ring-white/10">
         <h2 class="text-2xl font-light">Download Models</h2>
         <p class="text-sm opacity-80">Download these models and place them in the Stemsplat/Models folder. The download links are also available in the <a class="underline" href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer">Github</a>.</p>
         <ul class="list-disc list-inside text-sm opacity-90">${items}</ul>
@@ -1444,11 +1444,11 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false };
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false, stemsSelection: stems.slice() };
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false });
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false, stemsSelection: stems.slice() });
         saveTasks();
         updateUI();
       }
@@ -1472,9 +1472,12 @@
       pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
+        const stemsSelection = Array.isArray(pending.stemsSelection) && pending.stemsSelection.length
+          ? pending.stemsSelection
+          : stems;
         const data = new FormData();
         data.append('file', file);
-        data.append('stems', stems.join(','));
+        data.append('stems', stemsSelection.join(','));
         const xhr = new XMLHttpRequest();
         pending.xhr = xhr;
         xhr.open('POST', '/upload');
@@ -1520,7 +1523,17 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
+          const t = {
+            id:parsed.task_id,
+            name:file.name,
+            pct:0,
+            stage:'ready',
+            stems:parsed.stems,
+            tempKey: pending.tempKey,
+            out_dir: null,
+            downloaded:false,
+            stemsSelection: stemsSelection.slice(),
+          };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           if(startPressed || pending.autoStart){
             t.stage = 'queued';
@@ -1630,7 +1643,8 @@
       };
       try{
         const stems = selectedStems();
-        if(stems.length === 0){
+        const missingSelections = pendingItems.some(p => p && !p.started && (!Array.isArray(p.stemsSelection) || p.stemsSelection.length === 0));
+        if(stems.length === 0 && missingSelections){
           showPopup('please select at least one stem');
           return;
         }
@@ -1645,7 +1659,14 @@
           startIndex += 1;
           if(p){ p.autoStart = true; }
           if(!p.uploadPromise){
-            await uploadWithStems(p, stems);
+            const stemsForPending = (p && Array.isArray(p.stemsSelection) && p.stemsSelection.length)
+              ? p.stemsSelection
+              : stems;
+            if(!stemsForPending.length){
+              showPopup('please select at least one stem');
+              continue;
+            }
+            await uploadWithStems(p, stemsForPending);
           }
           if(p.uploadPromise){
             await p.uploadPromise;

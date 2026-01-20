@@ -1018,11 +1018,9 @@ def run_installer_ui():
                 httpd.shutdown()
                 httpd.server_close()
     except OSError as exc:
-        install_logger.error("failed to bind install server on port %s: %s", INSTALL_PORT, exc)
-        print(
-            f"Port {INSTALL_PORT} is already in use. Please close the other process or change INSTALL_PORT."
-        )
-        raise SystemExit(1)
+        install_logger.warning("failed to bind install server on port %s: %s", INSTALL_PORT, exc)
+        print(f"Port {INSTALL_PORT} is already in use. Skipping installer UI.")
+        return
 
 
 def _missing_required_models() -> list[str]:
@@ -2980,6 +2978,7 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
         if not _port_available(8000):
             logger.error("Port 8000 is already in use; aborting startup")
             raise SystemExit("Port 8000 is already in use. Please free the port and try again.")
+        threading.Thread(target=_launch_main_page, daemon=True).start()
         uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
         return
 
