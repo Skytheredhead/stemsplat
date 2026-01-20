@@ -251,6 +251,10 @@
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
+    let appReady = false;
+    let appReadyChecking = true;
+    let modelsPopupShown = false;
+    let modelsPopupDismissed = localStorage.getItem('modelsPopupDismissed') === '1';
     let settingsState = { output_root: '', structure_mode: 'flat' };
     let defaultOutputPath = '';
     let dirPickerInput = null;
@@ -268,6 +272,107 @@
         if(icon){ icon.style.animation = ''; }
       }
     }
+
+    function stageForDisplay(stage){
+      if(!appReady && (!stage || stage === 'ready' || stage === 'queued')) return 'preparing';
+      return stage;
+    }
+
+    function formatStageLabel(stage, pct){
+      const effectiveStage = stageForDisplay(stage);
+      if(effectiveStage === 'preparing') return 'preparing';
+      const friendlyStage = displayStage(effectiveStage);
+      if(effectiveStage === 'ready' || effectiveStage === 'queued'){
+        return friendlyStage || 'queued';
+      }
+      if(typeof pct === 'number' && pct >= 0){
+        const sp = Math.round(Math.max(0, Math.min(100, pct)));
+        return friendlyStage ? `${friendlyStage} (${sp}%)` : `${sp}%`;
+      }
+      return friendlyStage || 'queued';
+    }
+
+    function refreshReadyUI(){
+      document.querySelectorAll('#queue .item-row').forEach((row) => {
+        const chip = row.querySelector('.chip');
+        if(!chip) return;
+        const id = row.__taskId;
+        const tempKey = row.__tempKey;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        const stage = task ? task.stage : null;
+        const pct = task ? task.pct : 0;
+        const effectiveStage = stageForDisplay(stage);
+        chip.textContent = formatStageLabel(stage, pct);
+        setStatusVisibility(chip, effectiveStage);
+      });
+      updateUI();
+    }
+
+    function showModelsMissingPopup(missing){
+      if(modelsPopupShown || modelsPopupDismissed) return;
+      modelsPopupShown = true;
+      const modelLinks = {
+        vocals: {
+          label: 'Mel Band Roformer Vocals',
+          href: 'https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true',
+        },
+        instrumental: {
+          label: 'Mel Band Roformer Instrumental',
+          href: 'https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true',
+        },
+        deux: {
+          label: 'Becruily Deux',
+          href: 'https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true',
+        },
+      };
+      const resolved = missing.map(key => modelLinks[key]).filter(Boolean);
+      const useItems = resolved.length ? resolved : Object.values(modelLinks);
+      const items = useItems
+        .map((item) => `<li><a class="underline" href="${item.href}" target="_blank" rel="noopener noreferrer">${item.label}</a></li>`)
+        .join('');
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-xl bg-black/50';
+      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-11/12 text-[var(--txt-main)] backdrop-blur-3xl shadow-[0_22px_70px_rgba(0,0,0,0.55)] ring-1 ring-white/10">
+        <h2 class="text-2xl font-light">Download Models</h2>
+        <p class="text-sm opacity-80">Download these models and place them in the Stemsplat/Models folder. The download links are also available in the <a class="underline" href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer">Github</a>.</p>
+        <ul class="list-disc list-inside text-sm opacity-90">${items}</ul>
+        <div class="flex justify-end">
+          <button id="close-models" class="px-4 py-1 rounded-lg bg-white/90 text-gray-900">close</button>
+        </div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const closeBtn = overlay.querySelector('#close-models');
+      closeBtn.onclick = () => {
+        modelsPopupDismissed = true;
+        localStorage.setItem('modelsPopupDismissed', '1');
+        overlay.remove();
+      };
+      overlay.tabIndex = 0;
+      overlay.focus();
+    }
+
+    function pollAppReady(){
+      fetch('/ready')
+        .then(res => res.json())
+        .then((data) => {
+          appReadyChecking = !!data.checking;
+          appReady = !!data.ready;
+          const missingModels = Array.isArray(data.models_missing) ? data.models_missing : [];
+          if(missingModels.length && !modelsPopupShown && !modelsPopupDismissed){
+            showModelsMissingPopup(missingModels);
+          }
+          refreshReadyUI();
+          if(!appReady){
+            setTimeout(pollAppReady, 1000);
+          }
+        })
+        .catch(() => {
+          if(!appReady){
+            setTimeout(pollAppReady, 1000);
+          }
+        });
+    }
+    pollAppReady();
 
     if (closeBtn) {
       const shutdownEndpoints = [
@@ -309,7 +414,7 @@
     }
 
     function applySettingsUI(){
-      // settings UI disabled; outputs always go to default zip
+      // settings UI disabled; outputs go to default folder (zip only when multiple stems).
     }
 
     function guardClick(el, handler, cooldown = 600){
@@ -679,6 +784,7 @@
 
     function shouldShowStatus(stage){
       const active = stage && stage !== 'ready' && stage !== 'queued';
+      if(!appReady && (!stage || stage === 'ready' || stage === 'queued')) return true;
       return startPressed || active;
     }
 
@@ -851,7 +957,7 @@
         return;
       }
       // reset visual state
-      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
+      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = formatStageLabel('preparing', 0); setStatusVisibility(st, 'preparing'); }
       if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
       const card = stopPad && stopPad.closest('.card');
       if(card){ card.classList.remove('done'); }
@@ -939,9 +1045,14 @@
       else {
         const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
         showStatus(st);
-        st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
-        smooth.setImmediate(sp);
-        setStopVisibility(stopPad, task.stage);
+        st.textContent = formatStageLabel(task.stage || 'queued', sp);
+        const effectiveStage = stageForDisplay(task.stage);
+        if(effectiveStage === 'ready' || effectiveStage === 'queued' || effectiveStage === 'preparing'){
+          smooth.setImmediate(0);
+        } else {
+          smooth.setImmediate(sp);
+        }
+        setStopVisibility(stopPad, effectiveStage);
         if(stopPad && task.id && isProcessing(task)){
           setStopSquareIcon(stopPad);
           stopPad.style.pointerEvents = '';
@@ -963,7 +1074,7 @@
         setRetryIcon(dl);
         guardClick(dl, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
       }
-      setStatusVisibility(st, task.stage);
+      setStatusVisibility(st, stageForDisplay(task.stage));
       const inserted = node.children[0];
       inserted.classList.add('enter-pre');
       // Attach task id for later filtering
@@ -1317,10 +1428,10 @@
         const card = item.querySelector('.card');
         const stopPad = item.querySelector('.stop-pad');
         li.textContent = file.name;
-        st.textContent = 'ready';
+        st.textContent = formatStageLabel('ready', 0);
         st.classList.add('chip-dim');
         st.classList.add('hidden');
-        if(startPressed){ st.classList.remove('hidden'); }
+        if(startPressed || !appReady){ st.classList.remove('hidden'); }
         dl.classList.remove('show');
         if (stopPad) stopPad.style.display = 'none';
         item.classList.add('enter-pre');
@@ -1333,11 +1444,11 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false };
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false, stemsSelection: stems.slice() };
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false });
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false, stemsSelection: stems.slice() });
         saveTasks();
         updateUI();
       }
@@ -1361,9 +1472,12 @@
       pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
         const {st, dl, card, stopPad, bar, smooth} = ui;
+        const stemsSelection = Array.isArray(pending.stemsSelection) && pending.stemsSelection.length
+          ? pending.stemsSelection
+          : stems;
         const data = new FormData();
         data.append('file', file);
-        data.append('stems', stems.join(','));
+        data.append('stems', stemsSelection.join(','));
         const xhr = new XMLHttpRequest();
         pending.xhr = xhr;
         xhr.open('POST', '/upload');
@@ -1377,7 +1491,11 @@
         xhr.onload = () => {
           if(xhr.status >= 400){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'error'; return resolve(); }
           st.classList.remove('chip-dim');
-          st.textContent = 'ready';
+          st.textContent = formatStageLabel('ready', 0);
+          if(!appReady && st){
+            showStatus(st);
+            st.classList.remove('hidden');
+          }
           smooth.setImmediate(0);
           let res = {};
           try {
@@ -1405,14 +1523,24 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
+          const t = {
+            id:parsed.task_id,
+            name:file.name,
+            pct:0,
+            stage:'ready',
+            stems:parsed.stems,
+            tempKey: pending.tempKey,
+            out_dir: null,
+            downloaded:false,
+            stemsSelection: stemsSelection.slice(),
+          };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           if(startPressed || pending.autoStart){
             t.stage = 'queued';
             t.pct = 0;
             if(st){
               showStatus(st);
-              st.textContent = 'queued';
+              st.textContent = formatStageLabel('queued', 0);
               st.classList.remove('hidden');
             }
           }
@@ -1483,14 +1611,14 @@
             }
             if(chip){
               showStatus(chip);
-              chip.textContent = 'queued';
+              chip.textContent = formatStageLabel('queued', 0);
               chip.classList.remove('hidden');
             }
             return;
           }
           if(chip && (chip.textContent || '').toLowerCase() === 'ready'){
             showStatus(chip);
-            chip.textContent = 'queued';
+            chip.textContent = formatStageLabel('queued', 0);
             chip.classList.remove('hidden');
           }
         });
@@ -1515,7 +1643,8 @@
       };
       try{
         const stems = selectedStems();
-        if(stems.length === 0){
+        const missingSelections = pendingItems.some(p => p && !p.started && (!Array.isArray(p.stemsSelection) || p.stemsSelection.length === 0));
+        if(stems.length === 0 && missingSelections){
           showPopup('please select at least one stem');
           return;
         }
@@ -1530,7 +1659,14 @@
           startIndex += 1;
           if(p){ p.autoStart = true; }
           if(!p.uploadPromise){
-            await uploadWithStems(p, stems);
+            const stemsForPending = (p && Array.isArray(p.stemsSelection) && p.stemsSelection.length)
+              ? p.stemsSelection
+              : stems;
+            if(!stemsForPending.length){
+              showPopup('please select at least one stem');
+              continue;
+            }
+            await uploadWithStems(p, stemsForPending);
           }
           if(p.uploadPromise){
             await p.uploadPromise;
@@ -1556,6 +1692,7 @@
     function displayStage(stage){
       if(!stage) return 'queued';
       const lower = stage.toLowerCase();
+      if(lower.startsWith('preparing')) return 'preparing';
       if(lower.includes('deux')) return 'voc/inst';
       if(lower.includes('vocals')) return 'vocals';
       if(lower.includes('instrumental')) return 'instrumental';
@@ -1582,6 +1719,7 @@
           if(!data) return;
           const rawStage = data.stage;
           const stage = rawStage === 'errored' ? 'error' : rawStage;
+          const effectiveStage = stageForDisplay(stage);
           const pct = data.pct;
           if(taskRef){
             taskRef.stage = stage;
@@ -1639,8 +1777,8 @@
           }
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
-            const friendlyStage = displayStage(stage);
-            if (stage === 'queued' || stage === 'ready') {
+            const friendlyStage = displayStage(effectiveStage);
+            if (effectiveStage === 'queued' || effectiveStage === 'ready' || effectiveStage === 'preparing') {
               st.textContent = friendlyStage || 'queued';
               smooth.setImmediate(0);
             } else {
@@ -1651,10 +1789,10 @@
               dl.classList.remove('show');
             }
           } else {
-            st.textContent = 'queued';
+            st.textContent = formatStageLabel(effectiveStage, 0);
           }
-          setStatusVisibility(st, stage);
-          setStopVisibility(stopPad, stage);
+          setStatusVisibility(st, effectiveStage);
+          setStopVisibility(stopPad, effectiveStage);
         });
         es.addEventListener('error', (ev) => {
           if (taskRef && taskRef.stage === 'stopped') {
@@ -1728,7 +1866,7 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
-          <div class="text-sm opacity-80">outputs will be saved as a zip to your Downloads folder</div>
+          <div class="text-sm opacity-80">outputs will be saved as a zip when more than one stem is generated</div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>
