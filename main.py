@@ -2121,6 +2121,22 @@ def _queue_processing(task_id: str, out_dir: Path, stem_list: list[str]) -> None
                 deliver_dir = zip_path.parent
             else:
                 tasks[task_id]["zip"] = None
+                if staging_dir != deliver_dir and stems_out:
+                    deliver_dir.mkdir(parents=True, exist_ok=True)
+                    for name in stems_out:
+                        src = staging_dir / name
+                        dest = deliver_dir / name
+                        try:
+                            if src.exists():
+                                shutil.move(str(src), str(dest))
+                                logger.debug("moved %s to %s", src, dest)
+                        except Exception:
+                            logger.debug("failed to move %s to %s", src, dest, exc_info=True)
+                    try:
+                        if staging_dir.exists():
+                            shutil.rmtree(staging_dir)
+                    except Exception:
+                        logger.debug("failed to clean staging dir %s", staging_dir, exc_info=True)
 
             tasks[task_id]["stems"] = stems_out
             tasks[task_id]["dir"] = str(deliver_dir)
