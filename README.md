@@ -3,6 +3,9 @@
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. This app will provide better results than the free online stem splitters, and this happens to run locally on your computer! Also, there's no weird numbers that you need to mess around wth, it's all pre-decided for super high quality. I've found [Becruily's models on Huggingface](https://huggingface.co/becruily) to be consistently good, so I'm currently using them for this project.
 *BUGS/SUGGESTIONS (that aren't listed below): https://forms.gle/wSpe2nyFgcmuxSr28*
 
+**System Requirements**
+A non-air apple silicon mac.
+
 ## Quickstart
 0. Make sure you have python installed (https://www.python.org/downloads/macos/)
 1. Download the zip of the project from the v0.1.0 release on the right side of the page.
