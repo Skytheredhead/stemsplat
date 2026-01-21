@@ -1247,12 +1247,16 @@ def _start_server():
         install_logger.warning("port %s is already in use; main server not started", MAIN_PORT)
         install_progress["main_running"] = True
         install_logger.debug("main server already running or port busy; installer page will navigate")
+        if not main_page_opened_event.is_set():
+            threading.Thread(target=_launch_main_page, daemon=True).start()
         shutdown_event.set()
         return
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
     install_logger.debug("main server started; installer page will navigate")
+    if not main_page_opened_event.is_set():
+        threading.Thread(target=_launch_main_page, daemon=True).start()
 
 
 def _launch_main_page() -> None:
@@ -1294,6 +1298,9 @@ def install():
             _start_server()
         if _installed():
             install_logger.info("virtual environment already present")
+            install_progress["pct"] = 100
+            install_progress["step"] = "done"
+            return
         steps = []
         if not _installed():
             steps.append(("creating virtual environment", [sys.executable, "-m", "venv", "venv"]))
