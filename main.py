@@ -24,6 +24,7 @@ import math
 import os
 import queue
 import shutil
+import signal
 import socket
 import socketserver
 import ssl
@@ -847,6 +848,7 @@ MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
 UPLOAD_DIR = BASE_DIR / "uploads"
 CONVERTED_DIR = BASE_DIR / "uploads_converted"
+STATE_PATH = BASE_DIR / "stemsplat_state.json"
 SEGMENT = 352_800
 DEUX_SEGMENT = 573_300
 OVERLAP = 12
@@ -904,10 +906,200 @@ MODEL_FILE_MAP = {
 install_progress = {"pct": 0, "step": "starting", "models_missing": []}
 choice_event = threading.Event()
 shutdown_event = threading.Event()
+main_page_opened_event = threading.Event()
 INSTALL_PORT = 6060
 MAIN_PORT = 8000
 MODEL_URLS = [(item["filename"], item["url"]) for item in FILES]
 TOTAL_BYTES = int(3.68 * 1024**3)
+
+state_lock = threading.Lock()
+
+
+def _default_state() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "used_before": False,
+        "total_launches": 0,
+        "launch_history": [],
+        "total_splits": 0,
+        "splits_by_type": {},
+        "file_history": [],
+        "port_cleanup_history": [],
+    }
+
+
+def _load_state() -> dict[str, Any]:
+    if not STATE_PATH.exists():
+        return _default_state()
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _default_state()
+    base = _default_state()
+    for key, value in base.items():
+        data.setdefault(key, value)
+    return data
+
+
+def _save_state(state: dict[str, Any]) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = STATE_PATH.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(STATE_PATH)
+
+
+def _update_state(mutator: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    with state_lock:
+        state = _load_state()
+        mutator(state)
+        _save_state(state)
+        return state
+
+
+def _record_launch(mode: str | None = None) -> bool:
+    now = datetime.utcnow().isoformat() + "Z"
+    is_first_launch = False
+
+    def _mutate(state: dict[str, Any]) -> None:
+        nonlocal is_first_launch
+        total = int(state.get("total_launches", 0)) + 1
+        is_first_launch = total == 1
+        state["total_launches"] = total
+        state["used_before"] = total > 1
+        history = list(state.get("launch_history", []))
+        history.append({"timestamp": now, "mode": mode})
+        state["launch_history"] = history[-3:]
+
+    _update_state(_mutate)
+    return is_first_launch
+
+
+def _record_file_activity(filename: str, stem_list: list[str]) -> None:
+    now = datetime.utcnow().isoformat() + "Z"
+    models = []
+    for stem in stem_list:
+        model_info = MODEL_FILE_MAP.get(stem)
+        if model_info:
+            models.append({"stem": stem, "model": model_info[0], "config": model_info[1]})
+        else:
+            models.append({"stem": stem, "model": None, "config": None})
+
+    def _mutate(state: dict[str, Any]) -> None:
+        history = list(state.get("file_history", []))
+        history.append(
+            {"timestamp": now, "filename": filename, "stems": stem_list, "models": models}
+        )
+        state["file_history"] = history[-10:]
+
+    _update_state(_mutate)
+
+
+def _record_split(stem_list: list[str]) -> None:
+    def _mutate(state: dict[str, Any]) -> None:
+        state["total_splits"] = int(state.get("total_splits", 0)) + 1
+        splits_by_type = dict(state.get("splits_by_type", {}))
+        for stem in stem_list:
+            splits_by_type[stem] = int(splits_by_type.get(stem, 0)) + 1
+        state["splits_by_type"] = splits_by_type
+
+    _update_state(_mutate)
+
+
+def _record_port_cleanup(port: int, pid: int, cmdline: str, result: str) -> None:
+    now = datetime.utcnow().isoformat() + "Z"
+
+    def _mutate(state: dict[str, Any]) -> None:
+        history = list(state.get("port_cleanup_history", []))
+        history.append(
+            {"timestamp": now, "port": port, "pid": pid, "cmdline": cmdline, "result": result}
+        )
+        state["port_cleanup_history"] = history[-5:]
+
+    _update_state(_mutate)
+
+
+def _find_port_listeners(port: int) -> list[dict[str, Any]]:
+    listeners: list[dict[str, Any]] = []
+    if shutil.which("lsof"):
+        try:
+            output = subprocess.check_output(
+                ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            return listeners
+        for line in output.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            listeners.append({"pid": pid, "command": parts[0]})
+        return listeners
+    if shutil.which("ss"):
+        try:
+            output = subprocess.check_output(
+                ["ss", "-ltnp", f"sport = :{port}"], stderr=subprocess.STDOUT, text=True
+            )
+        except subprocess.CalledProcessError:
+            return listeners
+        for line in output.splitlines():
+            if "pid=" not in line:
+                continue
+            for chunk in line.split():
+                if "pid=" in chunk:
+                    pid_text = chunk.split("pid=")[-1].split(",")[0]
+                    if pid_text.isdigit():
+                        listeners.append({"pid": int(pid_text), "command": "ss"})
+        return listeners
+    return listeners
+
+
+def _pid_command_line(pid: int) -> str:
+    try:
+        output = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True).strip()
+    except subprocess.CalledProcessError:
+        return ""
+    return output
+
+
+def _is_stemsplat_process(cmdline: str) -> bool:
+    lowered = cmdline.lower()
+    if "stemsplat" in lowered:
+        return True
+    base = str(BASE_DIR).lower()
+    if "main.py" in lowered and base in lowered:
+        return True
+    if "uvicorn" in lowered and "main:app" in lowered and base in lowered:
+        return True
+    return False
+
+
+def _ensure_port_available(port: int) -> bool:
+    if _port_available(port):
+        return True
+    listeners = _find_port_listeners(port)
+    for listener in listeners:
+        pid = listener.get("pid")
+        if not pid:
+            continue
+        cmdline = _pid_command_line(pid)
+        if _is_stemsplat_process(cmdline):
+            logger.warning("port %s held by stemsplat pid=%s; terminating", port, pid)
+            try:
+                os.kill(pid, signal.SIGTERM)
+                _record_port_cleanup(port, pid, cmdline, "terminated")
+            except OSError as exc:
+                logger.warning("failed to terminate pid %s on port %s: %s", pid, port, exc)
+                _record_port_cleanup(port, pid, cmdline, f"terminate_failed:{exc}")
+    for _ in range(10):
+        if _port_available(port):
+            return True
+        time.sleep(0.2)
+    return _port_available(port)
 
 
 class InstallerHandler(http.server.SimpleHTTPRequestHandler):
@@ -991,7 +1183,7 @@ def run_installer_ui():
     threading.Thread(target=_launch_main_page, daemon=True).start()
     socketserver.TCPServer.allow_reuse_address = True
 
-    if not _port_available(INSTALL_PORT):
+    if not _ensure_port_available(INSTALL_PORT):
         msg = f"Port {INSTALL_PORT} is already in use. Skipping installer UI."
         install_logger.warning(msg)
         print(msg)
@@ -1051,16 +1243,20 @@ def _models_missing() -> bool:
 
 def _start_server():
     install_logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
-    if not _port_available(MAIN_PORT):
-        install_logger.info("main server already running on port %s; opening browser", MAIN_PORT)
+    if not _ensure_port_available(MAIN_PORT):
+        install_logger.warning("port %s is already in use; main server not started", MAIN_PORT)
         install_progress["main_running"] = True
-        install_logger.debug("main server already running; installer page will navigate")
+        install_logger.debug("main server already running or port busy; installer page will navigate")
+        if not main_page_opened_event.is_set():
+            threading.Thread(target=_launch_main_page, daemon=True).start()
         shutdown_event.set()
         return
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
     install_logger.debug("main server started; installer page will navigate")
+    if not main_page_opened_event.is_set():
+        threading.Thread(target=_launch_main_page, daemon=True).start()
 
 
 def _launch_main_page() -> None:
@@ -1069,10 +1265,12 @@ def _launch_main_page() -> None:
         try:
             with urllib.request.urlopen(main_url, timeout=1):
                 webbrowser.open(main_url, new=0)
+                main_page_opened_event.set()
                 return
         except Exception:
             time.sleep(0.5)
     webbrowser.open(main_url, new=0)
+    main_page_opened_event.set()
 
 
 def _download_models(selection: Optional[list[str]] = None):
@@ -1100,6 +1298,9 @@ def install():
             _start_server()
         if _installed():
             install_logger.info("virtual environment already present")
+            install_progress["pct"] = 100
+            install_progress["step"] = "done"
+            return
         steps = []
         if not _installed():
             steps.append(("creating virtual environment", [sys.executable, "-m", "venv", "venv"]))
@@ -1461,6 +1662,10 @@ def split_main(argv=None, progress_cb=None):
         sf.write(out_dir / "instrumental.wav", stems[1].T, sr)
     if progress_cb:
         progress_cb(1.0)
+    split_types = ["vocals"]
+    if not args.vocals_only:
+        split_types.append("instrumental")
+    _record_split(split_types)
     print(f"✓ Done – stems saved to “{out_dir}”")
 
 
@@ -1786,8 +1991,10 @@ download_lock = threading.Lock()
 downloading = False
 
 
-def _run_startup_checks() -> None:
+def _run_startup_checks(wait_for_main_page: bool = False) -> None:
     try:
+        if wait_for_main_page:
+            main_page_opened_event.wait(timeout=30)
         app_ready_state["checking"] = True
         app_ready_state["models_missing"] = _missing_required_models()
     finally:
@@ -1799,7 +2006,16 @@ def _run_startup_checks() -> None:
 @app.on_event("startup")
 async def _startup_cleanup() -> None:
     _close_installer_ui()
-    threading.Thread(target=_run_startup_checks, daemon=True).start()
+    is_first_launch = _record_launch("server")
+    if is_first_launch:
+        threading.Thread(target=_run_startup_checks, daemon=True).start()
+        return
+    app_ready_state["ready"] = True
+    app_ready_state["checking"] = True
+    app_ready_event.set()
+    threading.Thread(
+        target=_run_startup_checks, kwargs={"wait_for_main_page": True}, daemon=True
+    ).start()
 
 
 @app.exception_handler(AppError)
@@ -2153,6 +2369,7 @@ def _queue_processing(task_id: str, out_dir: Path, stem_list: list[str]) -> None
                 "zip": tasks.get(task_id, {}).get("zip"),
             }
             tasks[task_id]["status"] = "done"
+            _record_split(stem_list)
             logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
         except TaskStopped:
             _mark_stopped()
@@ -2549,6 +2766,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         "staging_dir": None,
         "zip_target": None,
     }
+    _record_file_activity(file.filename, stem_list)
     return {"task_id": task_id, "stems": expected, "status": "ready"}
 
 
@@ -2995,7 +3213,7 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
         import uvicorn
 
         _close_installer_ui()
-        if not _port_available(8000):
+        if not _ensure_port_available(8000):
             logger.error("Port 8000 is already in use; aborting startup")
             raise SystemExit("Port 8000 is already in use. Please free the port and try again.")
         threading.Thread(target=_launch_main_page, daemon=True).start()
