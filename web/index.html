@@ -561,15 +561,19 @@
       }
       else if (task.stage === 'error' || task.pct < 0) {
         // Treat like stopped; keep label visible for context
-        st.textContent = 'error';
+        const taskErrCode = task.error && task.error.code ? String(task.error.code) : 'E000';
+        st.textContent = `error ${taskErrCode}`;
+        if (task.error && task.error.message) st.title = String(task.error.message);
         const parent = st.closest('.card'); if (parent) parent.classList.add('done');
-        if (stopPad){
+        if (stopPad && task.id){
           stopPad.style.display = '';
           stopPad.classList.add('show');
           stopPad.title = 'rerun';
           stopPad.innerHTML = '';
           setRerunIcon(stopPad);
           stopPad.onclick = (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); };
+        } else if (stopPad) {
+          stopPad.style.display = 'none';
         }
       }
       else {
@@ -735,7 +739,7 @@
     function showError(msg){
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
+      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
       document.body.appendChild(overlay);
       const btn = overlay.querySelector('button');
       btn.onclick = () => overlay.remove();
@@ -776,6 +780,73 @@
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
     const startBtn = document.getElementById('start-btn');
+    const CLIENT_ERROR = {
+      NO_STEMS_SELECTED: 'C001',
+      BAD_UPLOAD_RESPONSE: 'C002',
+      START_FAILED: 'C003',
+      NETWORK: 'C004',
+    };
+
+    function parseErrorPayload(payload, fallbackCode, fallbackMessage){
+      const detail = payload && typeof payload === 'object' && payload.detail && typeof payload.detail === 'object' ? payload.detail : null;
+      const code = (detail && detail.code) || (payload && payload.code) || fallbackCode;
+      const message = (detail && detail.message) || (payload && payload.message) || fallbackMessage;
+      return { code: String(code || fallbackCode), message: String(message || fallbackMessage) };
+    }
+
+    function parseErrorText(rawText, fallbackCode, fallbackMessage){
+      if(!rawText){
+        return { code: fallbackCode, message: fallbackMessage };
+      }
+      try{
+        const payload = JSON.parse(rawText);
+        return parseErrorPayload(payload, fallbackCode, fallbackMessage);
+      }catch(_){
+        return { code: fallbackCode, message: fallbackMessage };
+      }
+    }
+
+    function syncTaskError(pending, err){
+      if(!pending || !err) return;
+      const idx = tasks.findIndex(t => (pending.id && t.id === pending.id) || (pending.tempKey && t.tempKey === pending.tempKey));
+      if(idx >= 0){
+        tasks[idx].stage = 'error';
+        tasks[idx].pct = -1;
+        tasks[idx].error = { code: err.code, message: err.message };
+      }
+      saveTasks();
+      updateUI();
+    }
+
+    function clearTaskError(pending){
+      if(!pending) return;
+      const idx = tasks.findIndex(t => (pending.id && t.id === pending.id) || (pending.tempKey && t.tempKey === pending.tempKey));
+      if(idx >= 0 && tasks[idx].error){
+        delete tasks[idx].error;
+      }
+      saveTasks();
+      updateUI();
+    }
+
+    function applyPendingError(pending, err, opts = {}){
+      if(!pending || !pending.ui || !err) return;
+      const { st, stopPad } = pending.ui;
+      pending.lastError = { code: String(err.code), message: String(err.message) };
+      if(st){
+        st.textContent = `error ${pending.lastError.code}`;
+        st.classList.remove('hidden');
+        st.classList.add('chip-dim');
+        st.title = pending.lastError.message;
+      }
+      if(stopPad){
+        stopPad.style.display = 'none';
+      }
+      syncTaskError(pending, pending.lastError);
+      if(opts.showPopup){
+        showPopup(`[${pending.lastError.code}] ${pending.lastError.message}`);
+      }
+      console.error(`[${pending.lastError.code}] ${pending.lastError.message}`);
+    }
 
     function selectedStems(){
       const stems = [];
@@ -831,7 +902,7 @@
       if (fileInput) fileInput.value = '';
 
       if(newPending.length && stems.length === 0){
-        showPopup('please select at least one stem before uploading');
+        showPopup(`[${CLIENT_ERROR.NO_STEMS_SELECTED}] select at least one stem before uploading`);
         return;
       }
 
@@ -846,7 +917,16 @@
       pending.started = true;
       pending.uploadPromise = new Promise((resolve) => {
         const {file, ui} = pending;
-        const {st, dl, card, stopPad, bar, smooth} = ui;
+        const {st, stopPad, smooth} = ui;
+        if(!stems || stems.length === 0){
+          applyPendingError(
+            pending,
+            { code: CLIENT_ERROR.NO_STEMS_SELECTED, message: 'select at least one stem, then click start again' },
+            { showPopup: true },
+          );
+          return resolve(false);
+        }
+        clearTaskError(pending);
         // enable stop square (disabled until task id assigned)
         if (stopPad){
           stopPad.style.display = '';
@@ -869,37 +949,35 @@
           }
         };
         xhr.onload = () => {
-          if(xhr.status >= 400){ st.textContent = 'error'; return resolve(); }
+          let payload = null;
+          try { payload = JSON.parse(xhr.responseText || '{}'); } catch(_) {}
+          if(xhr.status >= 400){
+            const err = payload
+              ? parseErrorPayload(payload, 'E007', `upload failed (http ${xhr.status})`)
+              : parseErrorText(xhr.responseText, 'E007', `upload failed (http ${xhr.status})`);
+            applyPendingError(pending, err, { showPopup: true });
+            return resolve(false);
+          }
           st.classList.remove('chip-dim');
           st.textContent = 'ready';
-          let res = {};
-          try {
-            res = JSON.parse(xhr.responseText || '{}');
-            const msg = res.detail && res.detail.message;
-            if(msg){
-              st.textContent = 'error';
-              st.classList.add('chip-dim');
-              if (stopPad) stopPad.style.display = 'none';
-              else showError(msg);
-            }
-          }catch(_){ }
-          if(res.detail && res.detail.message){
-            try{
-              const msg = res.detail.message;
-              st.textContent = 'error'; st.classList.add('chip-dim'); if(stopPad) stopPad.style.display = 'none';
-              else showError(msg);
-            }catch(_){ }
-            return resolve();
+          const res = payload && typeof payload === 'object' ? payload : null;
+          if(!res || !res.task_id){
+            applyPendingError(
+              pending,
+              { code: CLIENT_ERROR.BAD_UPLOAD_RESPONSE, message: 'upload succeeded but no task id was returned' },
+              { showPopup: true },
+            );
+            return resolve(false);
           }
-          const res = JSON.parse(xhr.responseText);
           pending.id = res.task_id;
           pending.stems = res.stems;
           ui.item.__taskId = res.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:res.task_id, name:file.name, pct:0, stage:'ready', stems:res.stems, tempKey: pending.tempKey };
+          const t = { id:res.task_id, name:file.name, pct:0, stage:'ready', stems:res.stems, tempKey: pending.tempKey, error: null };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           saveTasks(); updateUI();
+          pending.lastError = null;
           // enable stop now that we have an id
           if (stopPad){
             stopPad.style.pointerEvents = '';
@@ -932,39 +1010,90 @@
           if(startPressed){
             startTaskWhenReady(pending);
           }
-          resolve();
+          resolve(true);
         };
-        xhr.onerror = () => { st.textContent = 'error'; resolve(); };
+        xhr.onerror = () => {
+          applyPendingError(
+            pending,
+            { code: CLIENT_ERROR.NETWORK, message: 'network error while uploading file' },
+            { showPopup: true },
+          );
+          resolve(false);
+        };
         xhr.send(data);
       });
       return pending.uploadPromise;
     }
 
-    function startTaskWhenReady(pending){
+    async function startTaskWhenReady(pending){
       if(!pending || pending.startedProcessing) return;
-      if(!pending.uploadPromise){ return; }
+      if(!pending.uploadPromise){
+        applyPendingError(
+          pending,
+          { code: CLIENT_ERROR.BAD_UPLOAD_RESPONSE, message: 'task has not been uploaded yet' },
+          { showPopup: true },
+        );
+        return;
+      }
       pending.startedProcessing = true;
-      pending.uploadPromise.then(async () => {
-        if(!pending.id) return;
-        try{ await fetch('/start/' + pending.id, { method:'POST' }); }catch(_){ /* ignore */ }
-      });
+      try{
+        await pending.uploadPromise;
+        if(!pending.id){
+          const fallback = pending.lastError || { code: CLIENT_ERROR.BAD_UPLOAD_RESPONSE, message: 'task is not ready to start' };
+          applyPendingError(pending, fallback, { showPopup: true });
+          return;
+        }
+        const resp = await fetch('/start/' + pending.id, { method:'POST' });
+        if(!resp.ok){
+          let payload = null;
+          try { payload = await resp.json(); } catch(_) {}
+          const err = payload
+            ? parseErrorPayload(payload, CLIENT_ERROR.START_FAILED, `start failed (http ${resp.status})`)
+            : { code: CLIENT_ERROR.START_FAILED, message: `start failed (http ${resp.status})` };
+          applyPendingError(pending, err, { showPopup: true });
+        } else {
+          pending.lastError = null;
+          clearTaskError(pending);
+        }
+      }catch(_){
+        applyPendingError(
+          pending,
+          { code: CLIENT_ERROR.NETWORK, message: 'network error while starting task' },
+          { showPopup: true },
+        );
+      }finally{
+        pending.startedProcessing = false;
+      }
     }
 
     async function startSequentialProcessing(){
       startPressed = true;
       const stems = selectedStems();
-      if(stems.length === 0){ showPopup('please select at least one stem'); return; }
+      if(stems.length === 0){
+        showPopup(`[${CLIENT_ERROR.NO_STEMS_SELECTED}] no stems selected; uploaded tasks will still be started`);
+      }
       for(const p of pendingItems){
         if(!p.uploadPromise){
+          if(stems.length === 0){
+            applyPendingError(
+              p,
+              { code: CLIENT_ERROR.NO_STEMS_SELECTED, message: 'this file has not been uploaded; select stems and click start again' },
+            );
+            continue;
+          }
           await uploadWithStems(p, stems);
         }
         if(p.uploadPromise){
           await p.uploadPromise;
         }
-        startTaskWhenReady(p);
+        await startTaskWhenReady(p);
       }
     }
-    if(startBtn) startBtn.addEventListener('click', startSequentialProcessing);
+    if(startBtn){
+      startBtn.disabled = false;
+      startBtn.style.pointerEvents = 'auto';
+      startBtn.addEventListener('click', startSequentialProcessing);
+    }
 
     // --- Progress tracking for uploads (SSE) ---
     function trackProgress(taskId, bar, st, dl, _a, _b, taskRef, _c, smooth, stopPad){
@@ -1008,14 +1137,17 @@
             st.textContent = 'queued';
           }
         });
-        es.addEventListener('error', () => {
+        es.addEventListener('error', (ev) => {
+          const err = parseErrorText(ev && ev.data ? ev.data : '', 'E011', 'processing failed');
           if (taskRef) {
-            taskRef.stage = 'stopped';
-            taskRef.pct = 0;
+            taskRef.stage = 'error';
+            taskRef.pct = -1;
+            taskRef.error = err;
             saveTasks();
           }
           if (st) {
-            st.textContent = 'error';
+            st.textContent = `error ${err.code}`;
+            st.title = err.message;
             st.classList.remove('hidden');
           }
           const parent = st && st.closest ? st.closest('.card') : null;
@@ -1036,8 +1168,13 @@
           updateUI();
         });
               }catch(e){
-        st.textContent = 'error';
-        if(taskRef){ taskRef.stage = 'error'; taskRef.pct = -1; saveTasks(); }
+        st.textContent = 'error E011';
+        if(taskRef){
+          taskRef.stage = 'error';
+          taskRef.pct = -1;
+          taskRef.error = { code: 'E011', message: 'progress stream failed' };
+          saveTasks();
+        }
         updateUI();
       }
     }
