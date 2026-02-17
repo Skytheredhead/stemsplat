@@ -752,6 +752,11 @@
     }
 
     function showModelsPopup(onCancel){
+      // This prompt belongs to the installer flow only, never the main app page.
+      if (!window.location.pathname.includes('install')) {
+        if (onCancel) onCancel();
+        return;
+      }
       const declined = localStorage.getItem('declinedModels');
       const msg = declined ? "you didn't put the models in :(" : 'models not found! would you like me to download them?';
       const yes = declined ? 'download' : 'yes please';
