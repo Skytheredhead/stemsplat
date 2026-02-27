@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import http.server
+import hashlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_PATH = BASE_DIR / "install_stemsplat.log"
+INSTALL_STATE_PATH = BASE_DIR / ".install_state.json"
 LEGACY_LOG = BASE_DIR / "stemsplat.log"
 if LEGACY_LOG.exists():
     try:
@@ -25,7 +27,6 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
     handlers=[
-        logging.StreamHandler(),
         logging.FileHandler(LOG_PATH, encoding="utf-8"),
     ],
 )
@@ -113,6 +114,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def _installed():
     return Path("venv").exists()
+
+
+def _requirements_hash() -> str:
+    req_file = Path("requirements.txt")
+    if not req_file.exists():
+        return ""
+    return hashlib.sha256(req_file.read_bytes()).hexdigest()
+
+
+def _current_install_state() -> dict[str, str]:
+    return {
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "requirements_hash": _requirements_hash(),
+    }
+
+
+def _install_state_valid() -> bool:
+    if not _installed() or not INSTALL_STATE_PATH.exists():
+        return False
+    try:
+        existing = json.loads(INSTALL_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return isinstance(existing, dict) and existing == _current_install_state()
+
+
+def _write_install_state() -> None:
+    INSTALL_STATE_PATH.write_text(json.dumps(_current_install_state()), encoding="utf-8")
 
 def run_server():
     handler = Handler
@@ -224,35 +253,45 @@ def install():
     try:
         progress['step'] = 'checking installation'
         progress['pct'] = 1
-        if _installed():
-            logger.info("virtual environment already present")
-        steps = []
-        if not _installed():
-            steps.append(('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']))
-        steps.append(('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip']))
-        reqs = []
-        req_file = Path('requirements.txt')
-        if req_file.exists():
-            for line in req_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    reqs.append(line)
-        steps.extend([
-            (f'installing {pkg}', [str(pip_path()), 'install', pkg]) for pkg in reqs
-        ])
+        deps_ready = _install_state_valid()
+        if deps_ready:
+            progress['step'] = 'dependencies already installed'
+            progress['pct'] = 90
+            logger.info("dependency bootstrap already completed; skipping pip install steps")
+        else:
+            if _installed():
+                logger.info("virtual environment present but dependency state changed; refreshing dependencies")
+            steps = []
+            if not _installed():
+                steps.append(('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']))
+            steps.append(('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip']))
+            reqs = []
+            req_file = Path('requirements.txt')
+            if req_file.exists():
+                for line in req_file.read_text().splitlines():
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        reqs.append(line)
+            steps.extend([
+                (f'installing {pkg}', [str(pip_path()), 'install', pkg]) for pkg in reqs
+            ])
 
-        total = max(1, len(steps))
-        for i, (msg, cmd) in enumerate(steps, start=1):
-            progress['step'] = msg
-            progress['pct'] = int((i-1)/total*100)
-            logger.info("running step %s/%s: %s", i, total, msg)
-            try:
-                subprocess.check_call(cmd)
-            except subprocess.CalledProcessError as exc:
-                logger.exception("error during %s", msg)
-                progress['step'] = f'error during {msg}: {exc}'
-                progress['pct'] = -1
-                return
+            total = max(1, len(steps))
+            with LOG_PATH.open("a", encoding="utf-8") as cmd_log:
+                for i, (msg, cmd) in enumerate(steps, start=1):
+                    progress['step'] = msg
+                    progress['pct'] = int((i-1)/total*100)
+                    logger.info("running step %s/%s: %s", i, total, msg)
+                    try:
+                        subprocess.run(cmd, check=True, stdout=cmd_log, stderr=subprocess.STDOUT)
+                    except subprocess.CalledProcessError as exc:
+                        logger.exception("error during %s", msg)
+                        progress['step'] = f'error during {msg}: {exc}'
+                        progress['pct'] = -1
+                        return
+
+            _write_install_state()
+            logger.info("dependency bootstrap completed and cached")
 
         if _models_missing():
             logger.info("models missing; waiting for user choice")

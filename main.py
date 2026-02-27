@@ -464,6 +464,7 @@ errors: dict[str, str] = {}
 tasks: dict[str, dict] = {}
 controls: dict[str, dict[str, threading.Event]] = {}
 process_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+last_uploaded_source: dict[str, str] | None = None
 
 def _worker() -> None:
     while True:
@@ -678,32 +679,42 @@ def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: l
     def run() -> None:
         try:
             tasks[task_id]["status"] = "running"
+            tasks[task_id]["zip"] = None
+            tasks[task_id]["file"] = None
             manager = ModelManager()
             cb("preparing", 0)
             cb("prepare.complete", 1)
             audio_path = conv_path
             stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
-
-            zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
-            cb("zip.start", 95)
-            try:
-                with zipfile.ZipFile(zip_path, "w") as zf:
-                    for name in stems_out:
-                        fp = out_dir / name
-                        if fp.exists():
-                            zf.write(fp, arcname=name)
-                            logger.debug("added %s to %s", fp, zip_path)
-                        else:
-                            logger.warning("expected stem %s missing at %s", name, fp)
-            except Exception as exc:
-                raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-            cb("zip.done", 98)
-            tasks[task_id]["zip"] = zip_path
             tasks[task_id]["stems"] = stems_out
+
+            if len(stems_out) > 1:
+                zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
+                cb("zip.start", 95)
+                try:
+                    with zipfile.ZipFile(zip_path, "w") as zf:
+                        for name in stems_out:
+                            fp = out_dir / name
+                            if fp.exists():
+                                zf.write(fp, arcname=name)
+                                logger.debug("added %s to %s", fp, zip_path)
+                            else:
+                                logger.warning("expected stem %s missing at %s", name, fp)
+                except Exception as exc:
+                    raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
+                cb("zip.done", 98)
+                tasks[task_id]["zip"] = zip_path
+                logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
+            elif len(stems_out) == 1:
+                single_file = out_dir / stems_out[0]
+                tasks[task_id]["file"] = single_file
+                logger.info("task %s completed; single stem file=%s", task_id, single_file)
+            else:
+                raise AppError(ErrorCode.INVALID_REQUEST, "No stems were produced for this task.")
+
             cb("finalizing", 99)
             progress[task_id] = {"stage": "done", "pct": 100}
             tasks[task_id]["status"] = "done"
-            logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
         except AppError as exc:
             progress[task_id] = {"stage": "error", "pct": -1}
             errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
@@ -829,6 +840,7 @@ def _separate_waveform(
 
 @app.post("/upload")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), stems: str = Form("vocals")):
+    global last_uploaded_source
     task_id = str(uuid.uuid4())
     pause_evt = threading.Event()
     stop_evt = threading.Event()
@@ -872,6 +884,11 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         "orig_src": str(path),
         "stem_list": stem_list,
         "status": "ready",
+    }
+    last_uploaded_source = {
+        "conv_src": str(conv_path),
+        "orig_src": str(path),
+        "name": Path(file.filename).name,
     }
     return {"task_id": task_id, "stems": expected, "status": "ready"}
 
@@ -947,6 +964,39 @@ async def rerun(task_id: str):
     return {"task_id": new_id, "stems": expected}
 
 
+@app.post("/rerun_last")
+async def rerun_last(stems: str = Form("vocals")):
+    source = last_uploaded_source
+    if not source:
+        raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "no songs uploaded").to_http(409)
+
+    conv_src = Path(source.get("conv_src", ""))
+    if not conv_src.exists():
+        raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "no songs uploaded").to_http(409)
+
+    stem_list = [s for s in stems.split(",") if s]
+    if not stem_list:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Please select at least one stem.").to_http(400)
+
+    new_id = str(uuid.uuid4())
+    controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
+    out_dir = conv_src.parent / f"{conv_src.stem}—stems"
+    expected = [f"{conv_src.stem} - {s}.wav" for s in stem_list]
+
+    progress[new_id] = {"stage": "queued", "pct": 0}
+    tasks[new_id] = {
+        "dir": out_dir,
+        "stems": expected,
+        "controls": controls[new_id],
+        "conv_src": str(conv_src),
+        "orig_src": source.get("orig_src"),
+        "stem_list": stem_list,
+        "status": "queued",
+    }
+    _queue_processing(new_id, conv_src, out_dir, stem_list)
+    return {"task_id": new_id, "stems": expected, "name": source.get("name", conv_src.name)}
+
+
 @app.get("/download/{task_id}")
 async def download(task_id: str):
     info = tasks.get(task_id)
@@ -956,11 +1006,16 @@ async def download(task_id: str):
     if zip_path and Path(zip_path).exists():
         logger.info("serving download for task %s at %s", task_id, zip_path)
         return FileResponse(path=zip_path, media_type="application/zip", filename=Path(zip_path).name)
+    file_path = info.get("file")
+    if file_path and Path(file_path).exists():
+        logger.info("serving single-stem download for task %s at %s", task_id, file_path)
+        return FileResponse(path=file_path, media_type="audio/wav", filename=Path(file_path).name)
     raise AppError(ErrorCode.INVALID_REQUEST, "Files not ready").to_http(409)
 
 
 @app.post("/clear_all_uploads")
 async def clear_all_uploads():
+    global last_uploaded_source
     dirs = ["uploads", "uploads_converted"]
     for d in dirs:
         dir_path = BASE_DIR / d
@@ -970,6 +1025,7 @@ async def clear_all_uploads():
                     shutil.rmtree(entry)
                 else:
                     entry.unlink()
+    last_uploaded_source = None
     logger.info("cleared upload directories")
     return {"status": "cleared"}
 

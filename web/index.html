@@ -117,6 +117,19 @@
     #clear-btn.show { opacity: 1; }
     #queue-spacer { height: 0; transition: height .18s ease-out; will-change: height; }
     .fade { transition: opacity .20s ease; }
+    .toast {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 70;
+      opacity: 0;
+      transform: translateY(-8px);
+      transition: opacity .2s ease, transform .2s ease;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
 
     
     .page-mask { position:fixed; inset:0; background: rgba(0,0,0,0.0); pointer-events:none; opacity:0; transition: opacity .28s ease; }
@@ -747,12 +760,20 @@
       overlay.addEventListener('keydown', e => { if(e.key === 'Enter') btn.click(); });
     }
 
-    function showPopup(msg){
+    function showToast(msg){
       const card = document.createElement('div');
       card.textContent = msg;
-      card.className = 'fixed top-4 right-4 glass px-4 py-2 rounded text-[var(--txt-main)]';
+      card.className = 'toast glass px-4 py-2 rounded text-[var(--txt-main)]';
       document.body.appendChild(card);
-      setTimeout(() => card.remove(), 3000);
+      requestAnimationFrame(() => card.classList.add('show'));
+      setTimeout(() => {
+        card.classList.remove('show');
+        setTimeout(() => card.remove(), 220);
+      }, 3200);
+    }
+
+    function showPopup(msg){
+      showToast(msg);
     }
 
     function showModelsPopup(onCancel){
@@ -785,6 +806,7 @@
       BAD_UPLOAD_RESPONSE: 'C002',
       START_FAILED: 'C003',
       NETWORK: 'C004',
+      RERUN_LAST_FAILED: 'C005',
     };
 
     function parseErrorPayload(payload, fallbackCode, fallbackMessage){
@@ -1066,11 +1088,61 @@
       }
     }
 
+    async function rerunLastSong(stems){
+      try{
+        const data = new FormData();
+        data.append('stems', stems.join(','));
+        const resp = await fetch('/rerun_last', { method:'POST', body:data });
+        if(!resp.ok){
+          let err = { code: CLIENT_ERROR.RERUN_LAST_FAILED, message: `could not rerun previous song (http ${resp.status})` };
+          try{
+            const payload = await resp.json();
+            err = parseErrorPayload(payload, CLIENT_ERROR.RERUN_LAST_FAILED, err.message);
+          }catch(_){ }
+          showPopup(`[${err.code}] ${err.message}`);
+          return;
+        }
+
+        const payload = await resp.json();
+        const task = {
+          id: payload.task_id,
+          name: payload.name || 'previous song',
+          pct: 0,
+          stage: 'queued',
+          stems: payload.stems || [],
+        };
+        tasks.push(task);
+        saveTasks();
+
+        const {bar, st, dl, stopPad, smooth} = createItem(task);
+        if (stopPad) {
+          stopPad.style.pointerEvents = '';
+          stopPad.style.opacity = '';
+          stopPad.title = 'stop';
+          setStopSquareIcon(stopPad);
+          stopPad.onclick = async (e) => {
+            e.preventDefault();
+            try { await fetch('/stop/' + task.id, {method:'POST'}); } catch(_){ }
+          };
+        }
+        trackProgress(task.id, bar, st, dl, null, null, task, null, smooth, stopPad);
+      }catch(_){
+        showPopup(`[${CLIENT_ERROR.RERUN_LAST_FAILED}] network error while rerunning previous song`);
+      }
+    }
+
     async function startSequentialProcessing(){
       startPressed = true;
       const stems = selectedStems();
       if(stems.length === 0){
         showPopup(`[${CLIENT_ERROR.NO_STEMS_SELECTED}] no stems selected; uploaded tasks will still be started`);
+      }
+      if(tasks.length === 0){
+        if(stems.length === 0){
+          return;
+        }
+        await rerunLastSong(stems);
+        return;
       }
       for(const p of pendingItems){
         if(!p.uploadPromise){
