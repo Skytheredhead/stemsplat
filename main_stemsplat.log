@@ -1,0 +1,12 @@
+2026-03-06 11:47:02,744 [INFO] stemsplat:158 attempting to close installer ui on port 6060
+2026-03-06 11:47:02,751 [DEBUG] stemsplat:163 installer ui not reachable on http://localhost:6060/installer_shutdown: <urlopen error [Errno 61] Connection refused>
+Started server process [75951]
+Started server process [75951]
+Waiting for application startup.
+Waiting for application startup.
+2026-03-06 11:47:03,227 [INFO] stemsplat:158 attempting to close installer ui on port 6060
+2026-03-06 11:47:03,228 [DEBUG] stemsplat:163 installer ui not reachable on http://localhost:6060/installer_shutdown: <urlopen error [Errno 61] Connection refused>
+Application startup complete.
+Application startup complete.
+Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
