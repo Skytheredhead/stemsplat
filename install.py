@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import http.server
-import hashlib
 import json
 import logging
 import os
@@ -13,10 +12,17 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+from typing import List, Optional
+
+try:
+    import certifi  # noqa: F401  # ensure dependency present for downloader context
+except Exception:
+    certifi = None
+
+from downloader import FILES as DL_FILES, download_to
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_PATH = BASE_DIR / "install_stemsplat.log"
-INSTALL_STATE_PATH = BASE_DIR / ".install_state.json"
 LEGACY_LOG = BASE_DIR / "stemsplat.log"
 if LEGACY_LOG.exists():
     try:
@@ -27,33 +33,27 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
     handlers=[
+        logging.StreamHandler(),
         logging.FileHandler(LOG_PATH, encoding="utf-8"),
     ],
 )
 logger = logging.getLogger("stemsplat.install")
 
-progress = {"pct": 0, "step": "starting"}
+progress = {"pct": 0, "step": "starting", "models_missing": []}
 choice_event = threading.Event()
 shutdown_event = threading.Event()
 PORT = 6060
 MAIN_PORT = 8000
-MODEL_URLS = [
-    ("Mel Band Roformer Vocals.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true"),
-    ("Mel Band Roformer Instrumental.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true"),
-    ("mel_band_roformer_karaoke_becruily.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true"),
-    ("becruily_guitar.ckpt",
-     "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true"),
-    ("kuielab_a_bass.onnx",
-     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true"),
-    ("kuielab_a_drums.onnx",
-     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true"),
-    ("kuielab_a_other.onnx",
-     "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true"),
-]
-TOTAL_BYTES = int(3.68 * 1024**3)
+MODEL_URLS = [(item["filename"], item["url"]) for item in DL_FILES]
+TOTAL_BYTES = int(2.60 * 1024**3)
+
+ALIAS_MAP = {
+    "models": {
+        "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
+        "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+        "becruily_deux.ckpt": ["becruily_deux.ckpt"],
+    },
+}
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -90,7 +90,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/download_models":
             logger.info("user requested model download")
+            length = int(self.headers.get("Content-Length", 0))
+            selection: Optional[List[str]] = None
+            if length:
+                try:
+                    body = self.rfile.read(length)
+                    parsed = json.loads(body.decode("utf-8"))
+                    if isinstance(parsed, dict) and isinstance(parsed.get("models"), list):
+                        selection = [str(x) for x in parsed["models"]]
+                except Exception:
+                    logger.debug("failed to parse selection body", exc_info=True)
             progress["choice"] = "download"
+            progress["selection"] = selection
             choice_event.set()
             self.send_response(200)
             self.end_headers()
@@ -115,34 +126,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 def _installed():
     return Path("venv").exists()
 
-
-def _requirements_hash() -> str:
-    req_file = Path("requirements.txt")
-    if not req_file.exists():
-        return ""
-    return hashlib.sha256(req_file.read_bytes()).hexdigest()
-
-
-def _current_install_state() -> dict[str, str]:
-    return {
-        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
-        "requirements_hash": _requirements_hash(),
-    }
-
-
-def _install_state_valid() -> bool:
-    if not _installed() or not INSTALL_STATE_PATH.exists():
-        return False
-    try:
-        existing = json.loads(INSTALL_STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    return isinstance(existing, dict) and existing == _current_install_state()
-
-
-def _write_install_state() -> None:
-    INSTALL_STATE_PATH.write_text(json.dumps(_current_install_state()), encoding="utf-8")
-
 def run_server():
     handler = Handler
     worker = threading.Thread(target=install, daemon=True)
@@ -158,7 +141,7 @@ def run_server():
     try:
         with socketserver.TCPServer(("localhost", PORT), handler) as httpd:
             logger.info("installer ui listening on http://localhost:%s", PORT)
-            webbrowser.open(f"http://localhost:{PORT}/")
+            webbrowser.open(f"http://localhost:{PORT}/", new=0)
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
             logger.debug("waiting for installer routine to finish before shutting ui")
@@ -169,6 +152,7 @@ def run_server():
                 httpd.shutdown()
                 httpd.server_close()
                 server_thread.join(timeout=2)
+                logger.debug("installer ui closed; main app launch handled by installer page")
             except KeyboardInterrupt:
                 logger.info("installer interrupted; shutting down")
                 httpd.shutdown()
@@ -201,113 +185,106 @@ def _port_available(port: int) -> bool:
             return False
 
 
-def _models_missing():
-    models_dir = Path('models')
-    for name, _ in MODEL_URLS:
-        if not (models_dir / name).exists():
-            return True
-    return False
+def _missing_required_models() -> list[str]:
+    model_roots = [
+        BASE_DIR / "models",
+        BASE_DIR / "Models",
+        Path("models"),
+        Path("Models"),
+        Path.home() / "Library/Application Support" / "stems",
+    ]
+    required_terms = ["instrumental", "vocals", "deux"]
+    found = {term: False for term in required_terms}
+    for models_dir in model_roots:
+        if not models_dir.exists():
+            continue
+        for path in models_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            name = path.name.lower()
+            if not name.endswith(".ckpt"):
+                continue
+            for term in required_terms:
+                if term in name:
+                    found[term] = True
+    return [term for term, present in found.items() if not present]
+
+
+def _models_missing() -> bool:
+    return len(_missing_required_models()) > 0
 
 
 def _start_server():
     logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
     if not _port_available(MAIN_PORT):
-        msg = f"Port {MAIN_PORT} is already in use. Please close the other process or change MAIN_PORT."
-        logger.error(msg)
-        print(msg)
+        logger.info("main server already running on port %s; opening browser", MAIN_PORT)
+        progress["main_running"] = True
+        logger.debug("main server already running; installer page will navigate")
         shutdown_event.set()
         return
     subprocess.Popen(
         [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
     )
+    logger.debug("main server started; installer page will navigate")
 
 
-def _download_models():
-    models_dir = Path('models')
-    models_dir.mkdir(exist_ok=True)
-    downloaded = 0
-    for name, url in MODEL_URLS:
-        logger.info("downloading model %s from %s", name, url)
-        progress['step'] = f'downloading {name}'
-        dest = models_dir / name
-        with urllib.request.urlopen(url) as resp, open(dest, 'wb') as out:
-            t0 = time.time()
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                now = time.time()
-                speed = len(chunk) / 1024 / 1024 / max(now - t0, 1e-6)
-                progress['pct'] = int(downloaded / TOTAL_BYTES * 100)
-                progress['step'] = f'downloading {name} ({speed:.1f} MB/s)'
-                t0 = now
-        logger.info("finished %s", name)
-    progress['pct'] = 100
-    progress['step'] = 'done'
-    _start_server()
+def _download_models(selection: Optional[list[str]] = None):
+    try:
+        base_dir = Path(__file__).resolve().parent
+        progress["step"] = "downloading models"
+        progress["pct"] = 5
+        download_to(base_dir, selection or [])
+        progress["pct"] = 100
+        progress["step"] = "done"
+        _start_server()
+    except Exception as exc:
+        logger.exception("model download failed")
+        progress["step"] = f"download failed: {exc}"
+        progress["error"] = str(exc)
+        progress["pct"] = -1
 
 def install():
     logger.info("install routine starting")
     try:
-        progress['step'] = 'checking installation'
+        progress['step'] = 'installing prerequisites'
         progress['pct'] = 1
-        deps_ready = _install_state_valid()
-        if deps_ready:
-            progress['step'] = 'dependencies already installed'
-            progress['pct'] = 90
-            logger.info("dependency bootstrap already completed; skipping pip install steps")
-        else:
-            if _installed():
-                logger.info("virtual environment present but dependency state changed; refreshing dependencies")
-            steps = []
-            if not _installed():
-                steps.append(('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']))
-            steps.append(('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip']))
-            reqs = []
-            req_file = Path('requirements.txt')
-            if req_file.exists():
-                for line in req_file.read_text().splitlines():
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        reqs.append(line)
-            steps.extend([
-                (f'installing {pkg}', [str(pip_path()), 'install', pkg]) for pkg in reqs
-            ])
+        progress["models_missing"] = _missing_required_models()
+        if _installed():
+            logger.info("virtual environment already present")
+        steps = []
+        if not _installed():
+            steps.append(('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']))
+        steps.append(('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip']))
+        reqs = []
+        req_file = Path('requirements.txt')
+        if req_file.exists():
+            for line in req_file.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    reqs.append(line)
+        steps.extend([
+            (f'installing {pkg}', [str(pip_path()), 'install', pkg]) for pkg in reqs
+        ])
 
-            total = max(1, len(steps))
-            with LOG_PATH.open("a", encoding="utf-8") as cmd_log:
-                for i, (msg, cmd) in enumerate(steps, start=1):
-                    progress['step'] = msg
-                    progress['pct'] = int((i-1)/total*100)
-                    logger.info("running step %s/%s: %s", i, total, msg)
-                    try:
-                        subprocess.run(cmd, check=True, stdout=cmd_log, stderr=subprocess.STDOUT)
-                    except subprocess.CalledProcessError as exc:
-                        logger.exception("error during %s", msg)
-                        progress['step'] = f'error during {msg}: {exc}'
-                        progress['pct'] = -1
-                        return
-
-            _write_install_state()
-            logger.info("dependency bootstrap completed and cached")
+        total = max(1, len(steps))
+        for i, (msg, cmd) in enumerate(steps, start=1):
+            progress['step'] = msg
+            progress['pct'] = int((i-1)/total*100)
+            logger.info("running step %s/%s: %s", i, total, msg)
+            try:
+                subprocess.check_call(cmd)
+            except subprocess.CalledProcessError as exc:
+                logger.exception("error during %s", msg)
+                progress['step'] = f'error during {msg}: {exc}'
+                progress['pct'] = -1
+                return
 
         if _models_missing():
-            logger.info("models missing; waiting for user choice")
-            progress['step'] = 'waiting for model choice'
-            progress['pct'] = 99
-            choice_event.wait()
-            choice_event.clear()
-            if progress.get('choice') == 'download':
-                _download_models()
-                return
-            else:
-                logger.info("user skipped downloads")
-                progress['pct'] = 100
-                progress['step'] = 'done'
-                _start_server()
-                return
+            logger.info("models missing; skipping downloads per v0.1 flow")
+            progress['step'] = 'models missing; add vocals, instrumental, and deux to the models folder'
+            progress['pct'] = 100
+            _start_server()
+            return
 
         progress['pct'] = 100
         progress['step'] = 'done'

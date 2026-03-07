@@ -1,0 +1,63 @@
+2026-03-06 14:15:04,128 [INFO] stemsplat.install:240 install routine starting
+2026-03-06 14:15:04,128 [INFO] stemsplat.install:266 running step 1/20: creating virtual environment
+2026-03-06 14:15:04,130 [ERROR] stemsplat.install:137 Port 6060 is already in use. Please close the other process or change PORT.
+2026-03-06 14:15:42,445 [INFO] stemsplat.install:240 install routine starting
+2026-03-06 14:15:42,445 [INFO] stemsplat.install:246 virtual environment already present
+2026-03-06 14:15:42,445 [INFO] stemsplat.install:266 running step 1/19: upgrading pip
+2026-03-06 14:15:42,447 [ERROR] stemsplat.install:287 installer crashed
+Traceback (most recent call last):
+  File "/Users/skylarenns/Desktop/stemsplat/install.py", line 268, in install
+    subprocess.check_call(cmd)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 414, in check_call
+    retcode = call(*popenargs, **kwargs)
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 395, in call
+    with Popen(*popenargs, **kwargs) as p:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 1972, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: 'venv/bin/pip'
+2026-03-06 14:15:42,448 [INFO] stemsplat.install:143 installer ui listening on http://localhost:6060
+2026-03-06 14:15:42,547 [DEBUG] stemsplat.install:147 waiting for installer routine to finish before shutting ui
+2026-03-06 14:15:42,548 [INFO] stemsplat.install:151 installer routine finished; shutting down installer ui
+2026-03-06 14:15:42,599 [DEBUG] stemsplat.install:155 installer ui closed; main app launch handled by installer page
+2026-03-06 14:20:38,385 [INFO] stemsplat.install:240 install routine starting
+2026-03-06 14:20:38,385 [INFO] stemsplat.install:246 virtual environment already present
+2026-03-06 14:20:38,385 [INFO] stemsplat.install:266 running step 1/19: upgrading pip
+2026-03-06 14:20:38,387 [ERROR] stemsplat.install:287 installer crashed
+Traceback (most recent call last):
+  File "/Users/skylarenns/Desktop/stemsplat/install.py", line 268, in install
+    subprocess.check_call(cmd)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 414, in check_call
+    retcode = call(*popenargs, **kwargs)
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 395, in call
+    with Popen(*popenargs, **kwargs) as p:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 1972, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: 'venv/bin/pip'
+2026-03-06 14:20:38,388 [INFO] stemsplat.install:143 installer ui listening on http://localhost:6060
+2026-03-06 14:20:38,483 [DEBUG] stemsplat.install:147 waiting for installer routine to finish before shutting ui
+2026-03-06 14:20:38,483 [INFO] stemsplat.install:151 installer routine finished; shutting down installer ui
+2026-03-06 14:20:38,539 [DEBUG] stemsplat.install:155 installer ui closed; main app launch handled by installer page

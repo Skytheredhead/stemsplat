@@ -1,69 +1,64 @@
-"""Unified entrypoint for stemsplat.
-
-This module consolidates the server, CLI, and model handling logic into a
-single location while focusing on Apple Silicon (Metal) execution. Detailed
-error codes are emitted for every failure so issues can be diagnosed quickly.
-"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
-from typing import Callable, Optional
-import urllib.request
 import argparse
 import asyncio
+import contextlib
+import gc
 import json
 import logging
 import os
 import queue
+import re
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
-import zipfile
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Optional
 
-import torch
+import numpy as np
 import soundfile as sf
-import torchaudio
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from sse_starlette.sse import EventSourceResponse
+import torch
+import yaml
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-# Optional heavy imports guarded for clarity
-try:  # noqa: SIM105 - deliberate broad guard with explicit error codes
-    import onnxruntime as ort  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    ort = None
+try:
+    from mutagen import File as MutagenFile
+except Exception:  # pragma: no cover - optional cleanup dependency
+    MutagenFile = None
 
-# “split” is a package; main() lives in split/split.py
-try:  # noqa: SIM105 - deliberate broad guard with explicit error codes
-    from split.split import load_model as _load_roformer
-    from split.split import main as split_main
-except Exception as _exc:  # pragma: no cover - capture import issues for error reporting
-    _load_roformer = None  # type: ignore
-    split_main = None  # type: ignore
-    _import_error = _exc
+BASE_DIR = Path(__file__).resolve().parent
+SPLIT_DIR = BASE_DIR / "split"
+if str(SPLIT_DIR) not in sys.path:
+    sys.path.append(str(SPLIT_DIR))
+
+try:  # pragma: no cover - import failure is surfaced at runtime
+    from mel_band_roformer import MelBandRoformer
+except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
+    MelBandRoformer = None  # type: ignore[assignment]
+    _model_import_error = exc
+else:
+    _model_import_error = None
 
 
 class ErrorCode(str, Enum):
-    TORCH_MISSING = "E001"
-    MPS_UNAVAILABLE = "E002"
-    SPLIT_IMPORT_FAILED = "E003"
-    MODEL_MISSING = "E004"
-    CONFIG_MISSING = "E005"
-    ONNX_RUNTIME_MISSING = "E006"
-    UPLOAD_FAILED = "E007"
-    AUDIO_LOAD_FAILED = "E008"
-    RESAMPLE_FAILED = "E009"
-    FFMPEG_MISSING = "E010"
-    SEPARATION_FAILED = "E011"
-    ZIP_FAILED = "E012"
-    TASK_NOT_FOUND = "E013"
-    INVALID_REQUEST = "E014"
-    RERUN_PREREQ_MISSING = "E015"
+    MODEL_IMPORT_FAILED = "E001"
+    MODEL_MISSING = "E002"
+    CONFIG_MISSING = "E003"
+    FFMPEG_MISSING = "E004"
+    AUDIO_DECODE_FAILED = "E005"
+    AUDIO_LOAD_FAILED = "E006"
+    SEPARATION_FAILED = "E007"
+    TASK_NOT_FOUND = "E008"
+    INVALID_REQUEST = "E009"
 
 
 @dataclass
@@ -75,92 +70,163 @@ class AppError(Exception):
         return HTTPException(status_code=status, detail={"code": self.code, "message": self.message})
 
 
-BASE_DIR = Path(__file__).resolve().parent
+class TaskStopped(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    filename: str
+    config: str
+    segment: int
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    suffix: str
+    codec: str | None
+    bit_rate: int | None
+    channels: int
+    has_cover: bool
+
+
+@dataclass(frozen=True)
+class ExportPlan:
+    suffix: str
+    audio_args: list[str]
+    supports_cover: bool
+
+
 MODEL_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "configs"
-SEGMENT = 352_800
-OVERLAP = 12
+RUNTIME_DIR = BASE_DIR / ".runtime"
+UPLOAD_DIR = RUNTIME_DIR / "uploads"
+WORK_DIR = RUNTIME_DIR / "work"
+OUTPUT_ROOT = (Path.home() / "Downloads").expanduser()
 LOG_PATH = BASE_DIR / "main_stemsplat.log"
-LEGACY_LOG = BASE_DIR / "stemsplat.log"
-if LEGACY_LOG.exists():
-    try:
-        LEGACY_LOG.unlink()
-    except Exception:
-        pass
+
+MODEL_SPECS: dict[str, ModelSpec] = {
+    "vocals": ModelSpec(
+        filename="mel_band_roformer_vocals_becruily.ckpt",
+        config="Mel Band Roformer Vocals Config.yaml",
+        segment=352_800,
+    ),
+    "instrumental": ModelSpec(
+        filename="mel_band_roformer_instrumental_becruily.ckpt",
+        config="Mel Band Roformer Instrumental Config.yaml",
+        segment=352_800,
+    ),
+    "deux": ModelSpec(
+        filename="becruily_deux.ckpt",
+        config="config_deux_becruily.yaml",
+        segment=573_300,
+    ),
+}
+
+MODEL_ALIAS_MAP = {
+    "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
+    "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+    "becruily_deux.ckpt": ["Mel Band Roformer Deux.ckpt"],
+}
+
+MODEL_URLS = {
+    "vocals": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
+    "instrumental": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
+    "deux": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
+}
+
+MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
+OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
+TERMINAL_STATUSES = {"done", "error", "stopped"}
+SUPPORTED_AUDIO_SUFFIXES = {
+    ".wav",
+    ".wave",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".aif",
+    ".aiff",
+    ".alac",
+    ".ogg",
+    ".opus",
+}
+OVERLAP_RATIO = 0.12
+
+
+def _ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ensure_unique_dir(path: Path) -> Path:
+    if not path.exists():
+        return path
+    counter = 2
+    while True:
+        candidate = path.with_name(f"{path.name}_{counter}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def ensure_unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    counter = 2
+    stem = path.stem
+    suffix = path.suffix
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _safe_stem(name: str) -> str:
+    raw = Path(name).stem or "split"
+    cleaned = re.sub(r"[^\w .-]+", "_", raw, flags=re.ASCII).strip(" ._")
+    return cleaned or "split"
+
+
+def _locate_case_insensitive(path: Path) -> Path | None:
+    if path.exists():
+        return path
+    parent = path.parent
+    if not parent.exists():
+        return None
+    target = path.name.lower()
+    for candidate in parent.iterdir():
+        if candidate.name.lower() == target:
+            return candidate
+    return None
+
 
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 stream_handler = logging.StreamHandler()
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
-    handlers=[
-        stream_handler,
-        file_handler,
-    ],
+    handlers=[stream_handler, file_handler],
 )
 logger = logging.getLogger("stemsplat")
-for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-    uvicorn_logger = logging.getLogger(name)
+logging.getLogger("python_multipart").setLevel(logging.INFO)
+for uvicorn_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uvicorn_logger = logging.getLogger(uvicorn_name)
     uvicorn_logger.setLevel(logging.INFO)
     uvicorn_logger.addHandler(file_handler)
 
-MODEL_URLS = [
-    (
-        "Mel Band Roformer Vocals.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
-    ),
-    (
-        "Mel Band Roformer Instrumental.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-    ),
-    (
-        "mel_band_roformer_karaoke_becruily.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-    ),
-    (
-        "becruily_guitar.ckpt",
-        "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-    ),
-    (
-        "kuielab_a_bass.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
-    ),
-    (
-        "kuielab_a_drums.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
-    ),
-    (
-        "kuielab_a_other.onnx",
-        "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
-    ),
-]
-
-
-# ── Device handling ─────────────────────────────────────────────────────────
-
-def _ensure_torch() -> None:
-    if not hasattr(torch, "backends"):
-        raise AppError(ErrorCode.TORCH_MISSING, "PyTorch is unavailable; install torch with Metal support.")
-
-
-def select_device() -> torch.device:
-    """Prefer Metal (MPS) on Apple Silicon; fall back to CPU with explicit warning."""
-    _ensure_torch()
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        return torch.device("mps")
-    raise AppError(ErrorCode.MPS_UNAVAILABLE, "Apple Metal (mps) device is unavailable; ensure torch==2.x with mps support.")
+for path in (MODEL_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, OUTPUT_ROOT):
+    _ensure_dir(path)
 
 
 def _close_installer_ui(port: int = 6060) -> None:
-    """Best-effort request to shut down the installer helper server."""
-
     url = f"http://localhost:{port}/installer_shutdown"
-    logger.info("attempting to close installer ui on port %s", port)
     try:
-        with urllib.request.urlopen(url, timeout=1) as resp:
-            logger.debug("installer ui shutdown status=%s", getattr(resp, "status", "unknown"))
-    except Exception as exc:
-        logger.debug("installer ui not reachable on %s: %s", url, exc)
+        with urllib.request.urlopen(url, timeout=1):
+            logger.debug("closed installer ui on %s", url)
+    except Exception:
+        logger.debug("installer ui not reachable at %s", url)
 
 
 def _port_available(port: int) -> bool:
@@ -173,311 +239,718 @@ def _port_available(port: int) -> bool:
             return False
 
 
-# ── Model management ────────────────────────────────────────────────────────
+def _ensure_ffmpeg() -> str:
+    path = shutil.which("ffmpeg")
+    candidates: list[str] = []
+    if path:
+        candidates.append(path)
+
+    try:  # pragma: no cover - optional fallback dependency
+        import imageio_ffmpeg  # type: ignore
+
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled:
+            candidates.append(bundled)
+    except Exception:
+        logger.debug("imageio-ffmpeg unavailable; relying on PATH")
+
+    for candidate in candidates:
+        try:
+            subprocess.run(
+                [candidate, "-version"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return candidate
+        except Exception:
+            logger.debug("ffmpeg candidate failed: %s", candidate, exc_info=True)
+
+    raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg or add imageio-ffmpeg.")
 
 
-def _load_optional_roformer(path: Path, config_path: Optional[Path], device: torch.device):
-    if _load_roformer is None:
-        raise AppError(ErrorCode.SPLIT_IMPORT_FAILED, f"split package unavailable: {_import_error}")
-    return _load_roformer(str(path), str(config_path or ""), device)
+def _ffprobe_path() -> str:
+    path = shutil.which("ffprobe")
+    if path:
+        return path
+    ffmpeg_path = _ensure_ffmpeg()
+    probe_candidate = str(Path(ffmpeg_path).with_name("ffprobe"))
+    if Path(probe_candidate).exists():
+        return probe_candidate
+    raise AppError(ErrorCode.FFMPEG_MISSING, "ffprobe not found; install ffmpeg.")
 
 
-class StemModel:
-    def __init__(self, path: Path | None, device: torch.device, config_path: Path | None = None):
-        self.device = device
-        self.kind = "none"
-        self.session = None
-        self.net = None
-        self.path = path
-        self.config_path = config_path
-        self.expects_waveform = False
-        if path is None:
+def _probe_source(path: Path) -> SourceInfo:
+    cmd = [
+        _ffprobe_path(),
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_type,codec_name,bit_rate,channels:format=bit_rate",
+        "-of",
+        "json",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        data = json.loads(result.stdout or "{}")
+    except Exception as exc:
+        logger.warning("ffprobe failed for %s: %s", path, exc)
+        return SourceInfo(
+            suffix=path.suffix.lower(),
+            codec=None,
+            bit_rate=None,
+            channels=2,
+            has_cover=False,
+        )
+
+    streams = data.get("streams") or []
+    audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    has_cover = any(stream.get("codec_type") == "video" for stream in streams)
+    bit_rate = audio_stream.get("bit_rate") or (data.get("format") or {}).get("bit_rate")
+    with contextlib.suppress(Exception):
+        bit_rate = int(bit_rate) if bit_rate else None
+    return SourceInfo(
+        suffix=path.suffix.lower(),
+        codec=audio_stream.get("codec_name"),
+        bit_rate=bit_rate if isinstance(bit_rate, int) else None,
+        channels=max(1, min(2, int(audio_stream.get("channels") or 2))),
+        has_cover=has_cover,
+    )
+
+
+def _clamp_kbps(bit_rate: int | None, fallback: int) -> int:
+    if not bit_rate:
+        return fallback
+    return max(96, min(320, int(round(bit_rate / 1000.0))))
+
+
+def _resolve_export_plan(source_info: SourceInfo, selection: str) -> ExportPlan:
+    if selection == "mp3_320":
+        return ExportPlan(".mp3", ["-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3"], True)
+    if selection == "mp3_128":
+        return ExportPlan(".mp3", ["-c:a", "libmp3lame", "-b:a", "128k", "-id3v2_version", "3"], True)
+    if selection == "wav":
+        return ExportPlan(".wav", ["-c:a", "pcm_s16le"], False)
+    if selection == "m4a":
+        return ExportPlan(".m4a", ["-c:a", "aac", "-b:a", "256k"], True)
+    if selection == "flac":
+        return ExportPlan(".flac", ["-c:a", "flac"], True)
+
+    codec = (source_info.codec or "").lower()
+    suffix = source_info.suffix
+    if suffix == ".mp3" or codec == "mp3":
+        kbps = _clamp_kbps(source_info.bit_rate, 320)
+        return ExportPlan(".mp3", ["-c:a", "libmp3lame", "-b:a", f"{kbps}k", "-id3v2_version", "3"], True)
+    if suffix in {".wav", ".wave"}:
+        return ExportPlan(".wav", ["-c:a", "pcm_s16le"], False)
+    if suffix in {".aif", ".aiff"}:
+        return ExportPlan(".aiff", ["-c:a", "pcm_s16be"], False)
+    if suffix == ".flac" or codec == "flac":
+        return ExportPlan(".flac", ["-c:a", "flac"], True)
+    if suffix == ".aac":
+        kbps = _clamp_kbps(source_info.bit_rate, 256)
+        return ExportPlan(".aac", ["-c:a", "aac", "-b:a", f"{kbps}k"], False)
+    if suffix == ".ogg":
+        kbps = _clamp_kbps(source_info.bit_rate, 192)
+        if codec == "opus":
+            return ExportPlan(".ogg", ["-c:a", "libopus", "-b:a", f"{kbps}k"], False)
+        return ExportPlan(".ogg", ["-c:a", "libvorbis", "-q:a", "6"], False)
+    if suffix == ".opus" or codec == "opus":
+        kbps = _clamp_kbps(source_info.bit_rate, 192)
+        return ExportPlan(".opus", ["-c:a", "libopus", "-b:a", f"{kbps}k"], False)
+    if suffix == ".m4a" or codec == "aac":
+        kbps = _clamp_kbps(source_info.bit_rate, 256)
+        return ExportPlan(".m4a", ["-c:a", "aac", "-b:a", f"{kbps}k"], True)
+    if suffix == ".alac" or codec == "alac":
+        return ExportPlan(".m4a", ["-c:a", "alac"], True)
+    if codec.startswith("pcm_"):
+        return ExportPlan(".wav", ["-c:a", "pcm_s16le"], False)
+    kbps = _clamp_kbps(source_info.bit_rate, 256)
+    return ExportPlan(".m4a", ["-c:a", "aac", "-b:a", f"{kbps}k"], True)
+
+
+def _strip_title_metadata(path: Path) -> None:
+    if MutagenFile is None:
+        return
+    try:
+        audio = MutagenFile(path)
+        if audio is None or audio.tags is None:
             return
-        if path.suffix.lower() == ".ckpt":
-            self.net = _load_optional_roformer(path, config_path, device)
-            self.net.eval()
-            self.kind = "roformer"
-            self.expects_waveform = True
-            return
-        if path.suffix.lower() == ".onnx":
-            if ort is None:
-                raise AppError(ErrorCode.ONNX_RUNTIME_MISSING, "onnxruntime is required for ONNX models on Apple Silicon (CPU mode).")
-            self.session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-            self.kind = "onnx"
-            return
-        self.net = torch.jit.load(str(path), map_location=device)
-        self.net.eval()
-        self.kind = "torchscript"
+        tags = audio.tags
+        with contextlib.suppress(Exception):
+            if hasattr(tags, "delall"):
+                for key in ("TIT2", "title", "\xa9nam"):
+                    tags.delall(key)
+        for key in list(tags.keys()):
+            lower = str(key).lower()
+            if lower in {"tit2", "title", "\xa9nam"}:
+                with contextlib.suppress(Exception):
+                    del tags[key]
+        audio.save()
+    except Exception:
+        logger.debug("failed to strip title metadata from %s", path, exc_info=True)
 
-    def __call__(self, mag: "torch.Tensor") -> "torch.Tensor":
-        if self.kind == "onnx" and self.session is not None:
-            inp_name = self.session.get_inputs()[0].name
-            out = self.session.run(None, {inp_name: mag.detach().cpu().numpy()})[0]
-            return torch.from_numpy(out).to(mag.device)
-        if self.net is None:
-            raise AppError(ErrorCode.MODEL_MISSING, "Model session not initialized.")
-        with torch.no_grad():
-            return self.net(mag)
+
+def _export_stem(
+    stem_wav: Path,
+    source_path: Path,
+    dest_path: Path,
+    plan: ExportPlan,
+    has_cover: bool,
+) -> Path:
+    ffmpeg_path = _ensure_ffmpeg()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate = ensure_unique_path(dest_path)
+
+    def _build_command(include_cover: bool) -> list[str]:
+        cmd = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(stem_wav),
+            "-i",
+            str(source_path),
+            "-map",
+            "0:a:0",
+            "-map_metadata",
+            "1",
+        ]
+        if include_cover:
+            cmd.extend(["-map", "1:v?"])
+        cmd.extend(plan.audio_args)
+        if include_cover:
+            cmd.extend(["-c:v", "copy", "-disposition:v", "attached_pic"])
+        cmd.extend(["-metadata", "title=", str(candidate)])
+        return cmd
+
+    attempts = [False]
+    if plan.supports_cover and has_cover:
+        attempts = [True, False]
+
+    last_error: Exception | None = None
+    for include_cover in attempts:
+        try:
+            subprocess.run(
+                _build_command(include_cover),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            _strip_title_metadata(candidate)
+            return candidate
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "export failed for %s with include_cover=%s: %s",
+                candidate,
+                include_cover,
+                exc,
+            )
+    raise AppError(ErrorCode.SEPARATION_FAILED, f"Export failed: {last_error}") from last_error
+
+
+def _decode_audio_to_wav(source_path: Path, work_dir: Path, channels: int) -> Path:
+    ffmpeg_path = _ensure_ffmpeg()
+    decoded_path = work_dir / "input.wav"
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
+        "-ar",
+        "44100",
+        "-ac",
+        str(max(1, min(2, channels))),
+        "-vn",
+        str(decoded_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError as exc:
+        raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found.") from exc
+    except Exception as exc:
+        raise AppError(ErrorCode.AUDIO_DECODE_FAILED, f"Could not decode audio: {exc}") from exc
+    if not decoded_path.exists():
+        raise AppError(ErrorCode.AUDIO_DECODE_FAILED, "Decoded WAV was not created.")
+    return decoded_path
+
+
+def _load_waveform(wav_path: Path) -> torch.Tensor:
+    try:
+        data, sample_rate = sf.read(str(wav_path), dtype="float32", always_2d=True)
+    except Exception as exc:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Could not read WAV: {exc}") from exc
+    if sample_rate != 44100:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Expected 44.1 kHz audio, got {sample_rate}.")
+    waveform = torch.from_numpy(data.T.copy())
+    if waveform.ndim != 2:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, "Decoded audio has an invalid shape.")
+    if waveform.shape[0] == 0:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, "Decoded audio is empty.")
+    return waveform
+
+
+def _write_temp_wave(out_dir: Path, name: str, tensor: torch.Tensor) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    candidate = out_dir / name
+    data = tensor.detach().cpu()
+    if not torch.isfinite(data).all():
+        data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+    data = torch.clamp(data.float(), -1.0, 1.0)
+    sf.write(candidate, data.T.contiguous().numpy(), 44100, subtype="PCM_16")
+    return candidate
+
+
+def _normalize_prediction(pred: torch.Tensor, input_channels: int, chunk_len: int) -> torch.Tensor:
+    if pred.dim() == 2:
+        if pred.shape[0] in (1, input_channels):
+            pred = pred.unsqueeze(0)
+        else:
+            pred = pred[:, None, :]
+    elif pred.dim() == 3 and pred.shape[1] not in (1, input_channels):
+        pred = pred.permute(1, 0, 2)
+    pred = pred[..., :chunk_len]
+    if pred.shape[1] == 1 and input_channels == 2:
+        pred = pred.repeat(1, 2, 1)
+    return pred
+
+
+def _prepare_model_input(waveform: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, int]:
+    original_channels = waveform.shape[0]
+    if original_channels == 1:
+        waveform = waveform.repeat(2, 1)
+    elif original_channels > 2:
+        waveform = waveform[:2]
+        original_channels = 2
+    return waveform.to(device=device, dtype=torch.float32), original_channels
+
+
+def _restore_output_channels(tensor: torch.Tensor, original_channels: int) -> torch.Tensor:
+    if original_channels <= 1 and tensor.shape[0] > 1:
+        return tensor.mean(dim=0, keepdim=True)
+    return tensor[: max(1, original_channels)]
+
+
+def _map_fraction(start_pct: int, end_pct: int, fraction: float) -> int:
+    fraction = max(0.0, min(1.0, fraction))
+    return int(round(start_pct + ((end_pct - start_pct) * fraction)))
+
+
+def _cleanup_path(path: Path | None) -> None:
+    if path is None or not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        with contextlib.suppress(Exception):
+            path.unlink()
+
+
+def _safe_mps_empty_cache() -> None:
+    if getattr(torch, "mps", None) and hasattr(torch.mps, "empty_cache"):
+        with contextlib.suppress(Exception):
+            torch.mps.empty_cache()
+
+
+def _load_roformer_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
+    if MelBandRoformer is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Roformer import failed: {_model_import_error}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        cfg = yaml.unsafe_load(handle)
+    model = MelBandRoformer(**(cfg.get("model") or {}))
+    state = torch.load(model_path, map_location="cpu")
+    model.load_state_dict(state.get("state_dict", state), strict=False)
+    return model.to(device).eval()
+
+
+def select_device() -> torch.device:
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return torch.device("mps")
+    logger.warning("MPS unavailable; falling back to CPU")
+    return torch.device("cpu")
 
 
 class ModelManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.device = select_device()
-        self.model_info = {
-            "vocals": ("Mel Band Roformer Vocals.ckpt", "Mel Band Roformer Vocals Config.yaml"),
-            "instrumental": ("Mel Band Roformer Instrumental.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
-            "drums": ("kuielab_a_drums.onnx", None),
-            "bass": ("kuielab_a_bass.onnx", None),
-            "other": ("kuielab_a_other.onnx", None),
-            "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
-            "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
-        }
-        self.refresh_models()
+        self.cache: dict[str, torch.nn.Module] = {}
 
-    def _resolve_path(self, filename: str) -> Path:
-        preferred = MODEL_DIR / filename
-        if preferred.exists():
-            return preferred
-        fallback = Path.home() / "Library/Application Support/stems" / filename
-        if fallback.exists():
-            return fallback
-        raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
+    def _resolve_model_path(self, filename: str) -> Path:
+        search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+        search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
+        for base_dir in search_dirs:
+            for search_name in search_names:
+                match = _locate_case_insensitive(base_dir / search_name)
+                if match:
+                    return match
+        raise AppError(ErrorCode.MODEL_MISSING, f"Missing model file: {filename}")
 
-    def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
-        if not filename:
-            return None
-        cfg = CONFIG_DIR / filename
-        if cfg.exists():
-            return cfg
-        raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
+    def _resolve_config_path(self, filename: str) -> Path:
+        found = _locate_case_insensitive(CONFIG_DIR / filename)
+        if found:
+            return found
+        raise AppError(ErrorCode.CONFIG_MISSING, f"Missing config file: {filename}")
 
-    def refresh_models(self) -> None:
-        for name, (model_fname, cfg_fname) in self.model_info.items():
-            model_path = self._resolve_path(model_fname)
-            cfg_path = self._resolve_config(cfg_fname)
-            setattr(self, name, StemModel(model_path, self.device, cfg_path))
-            if cfg_fname:
-                setattr(self, f"{name}_config", cfg_path)
+    def get(self, name: str) -> torch.nn.Module:
+        if name in self.cache:
+            return self.cache[name]
+        if name not in MODEL_SPECS:
+            raise AppError(ErrorCode.INVALID_REQUEST, f"Unknown model: {name}")
+        spec = MODEL_SPECS[name]
+        model_path = self._resolve_model_path(spec.filename)
+        config_path = self._resolve_config_path(spec.config)
+        model = _load_roformer_model(model_path, config_path, self.device)
+        self.cache[name] = model
+        return model
 
-    # Separation helpers
-    def split_vocals(
-        self,
-        waveform,
-        segment: int,
-        overlap: int,
-        progress_cb: Optional[Callable[[float], None]] = None,
-        delay: float = 0.0,
-    ):
-        if isinstance(waveform, torch.Tensor):
-            working = waveform.to(self.device)
-        else:
-            working = torch.tensor(waveform, dtype=torch.float32, device=self.device)
-        length = working.shape[1]
-        step = max(1, segment - overlap)
-        voc_acc = torch.zeros_like(working, device=self.device)
-        inst_acc = torch.zeros_like(working, device=self.device)
-        counts = torch.zeros((1, length), device=self.device)
-        if progress_cb:
-            progress_cb(0.0)
+
+_model_manager: ModelManager | None = None
+_model_manager_lock = threading.Lock()
+
+
+def _get_model_manager() -> ModelManager:
+    global _model_manager
+    with _model_manager_lock:
+        if _model_manager is None:
+            _model_manager = ModelManager()
+        return _model_manager
+
+
+def _run_model_chunks(
+    model: torch.nn.Module,
+    waveform: torch.Tensor,
+    segment: int,
+    progress_cb: Callable[[float], None],
+    stop_check: Callable[[], None],
+) -> torch.Tensor:
+    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
+    input_channels = working.shape[0]
+    length = working.shape[1]
+    step = max(1, int(segment * (1.0 - OVERLAP_RATIO)))
+    acc: torch.Tensor | None = None
+    counts = torch.zeros((1, length), device=working.device, dtype=working.dtype)
+
+    progress_cb(0.0)
+    with torch.no_grad():
         for start in range(0, length, step):
+            stop_check()
             end = min(start + segment, length)
-            seg = working[:, start:end]
-            if seg.shape[1] < segment:
-                padded = torch.zeros((working.shape[0], segment), device=self.device)
-                padded[:, : seg.shape[1]] = seg
+            chunk = working[:, start:end]
+            if chunk.shape[1] < segment:
+                padded = torch.zeros((input_channels, segment), device=working.device, dtype=working.dtype)
+                padded[:, : chunk.shape[1]] = chunk
             else:
-                padded = seg
-            with torch.no_grad():
-                pred = self.vocals(padded.unsqueeze(0))[0]
-            if pred.dim() == 2:
-                pred = pred[:, None, :]
-            elif pred.dim() == 3 and pred.shape[1] not in (1, working.shape[0]):
-                pred = pred.permute(1, 0, 2)
-            pred = pred[..., : seg.shape[1]]
-            voc_seg = pred[0]
-            inst_seg = pred[1] if pred.shape[0] > 1 else seg - voc_seg
-            sl = voc_seg.shape[1]
-            voc_acc[:, start : start + sl] += voc_seg
-            inst_acc[:, start : start + sl] += inst_seg
-            counts[:, start : start + sl] += 1
-            if progress_cb:
-                progress_cb(end / length)
-            if delay:
-                time.sleep(delay)
-        denom = counts.clamp_min(1)
-        return voc_acc / denom, inst_acc / denom
-
-    def split_pair_with_model(
-        self,
-        model: StemModel,
-        waveform,
-        segment: int,
-        overlap: int,
-        progress_cb: Optional[Callable[[float], None]] = None,
-        delay: float = 0.0,
-    ):
-        if isinstance(waveform, torch.Tensor):
-            working = waveform.to(self.device)
-        else:
-            working = torch.tensor(waveform, dtype=torch.float32, device=self.device)
-        length = working.shape[1]
-        step = max(1, segment - overlap)
-        out0 = torch.zeros_like(working, device=self.device)
-        out1 = torch.zeros_like(working, device=self.device)
-        counts = torch.zeros((1, length), device=self.device)
-        if progress_cb:
-            progress_cb(0.0)
-
-        if model.expects_waveform:
-            for start in range(0, length, step):
-                end = min(start + segment, length)
-                seg = working[:, start:end]
-                if seg.shape[1] < segment:
-                    padded = torch.zeros((working.shape[0], segment), device=self.device)
-                    padded[:, : seg.shape[1]] = seg
-                else:
-                    padded = seg
-                with torch.no_grad():
-                    pred = model(padded.unsqueeze(0))[0]
-                if pred.dim() == 2:
-                    pred = pred[:, None, :]
-                elif pred.dim() == 3 and pred.shape[1] not in (1, working.shape[0]):
-                    pred = pred.permute(1, 0, 2)
-                pred = pred[..., : seg.shape[1]]
-                stem0 = pred[0]
-                stem1 = pred[1] if pred.shape[0] > 1 else seg - stem0
-                sl = stem0.shape[1]
-                out0[:, start : start + sl] += stem0
-                out1[:, start : start + sl] += stem1
-                counts[:, start : start + sl] += 1
-                if progress_cb:
-                    progress_cb(end / length)
-                if delay:
-                    time.sleep(delay)
-            denom = counts.clamp_min(1)
-            return out0 / denom, out1 / denom
-
-        # STFT mask path
-        n_fft = 2048
-        hop = 441
-        win = torch.hann_window(n_fft, device=self.device)
-        for start in range(0, length, step):
-            end = min(start + segment, length)
-            seg = working[:, start:end]
-            if seg.shape[1] < n_fft:
-                out0[:, start:end] += seg
-                if progress_cb:
-                    progress_cb(end / length)
-                continue
-            spec = torch.stft(seg, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=win, return_complex=True)
-            mag = spec.abs().unsqueeze(0)
-            mask = model(mag)[0]
-            stem0_spec = spec * mask
-            stem0 = torch.istft(
-                stem0_spec,
-                n_fft=n_fft,
-                hop_length=hop,
-                win_length=n_fft,
-                window=win,
-                length=seg.shape[1],
-            )
-            out0[:, start : start + stem0.shape[1]] += stem0
-            out1[:, start : start + stem0.shape[1]] += seg[:, : stem0.shape[1]] - stem0
-            if progress_cb:
-                progress_cb(end / length)
-            if delay:
-                time.sleep(delay)
-        return out0, out1
-
-    def split_instrumental(
-        self,
-        waveform,
-        segment: int,
-        overlap: int,
-        progress_cb: Optional[Callable[[float], None]] = None,
-        delay: float = 0.0,
-    ):
-        if isinstance(waveform, torch.Tensor):
-            working = waveform.to(self.device)
-        else:
-            working = torch.tensor(waveform, dtype=torch.float32, device=self.device)
-        length = working.shape[1]
-        step = max(1, segment - overlap)
-        n_fft = 2048
-        hop = 441
-        win = torch.hann_window(n_fft, device=self.device)
-        drums = torch.zeros_like(working, device=self.device)
-        bass = torch.zeros_like(working, device=self.device)
-        other = torch.zeros_like(working, device=self.device)
-        karaoke = torch.zeros_like(working, device=self.device)
-        guitar = torch.zeros_like(working, device=self.device)
-        if progress_cb:
-            progress_cb(0.0)
-        for start in range(0, length, step):
-            end = min(start + segment, length)
-            seg = working[:, start:end]
-            if seg.shape[1] < n_fft:
-                for tensor in (drums, bass, other, karaoke, guitar):
-                    tensor[:, start:end] += seg * 0
-                if progress_cb:
-                    progress_cb(end / length)
-                continue
-            spec = torch.stft(seg, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=win, return_complex=True)
-            mag = spec.abs().unsqueeze(0)
-            masks = {
-                "drums": self.drums(mag)[0],
-                "bass": self.bass(mag)[0],
-                "other": self.other(mag)[0],
-                "karaoke": self.karaoke(mag)[0],
-                "guitar": self.guitar(mag)[0],
-            }
-            stems = {
-                "drums": drums,
-                "bass": bass,
-                "other": other,
-                "karaoke": karaoke,
-                "guitar": guitar,
-            }
-            for name, mask in masks.items():
-                spec_masked = spec * mask
-                stem = torch.istft(
-                    spec_masked,
-                    n_fft=n_fft,
-                    hop_length=hop,
-                    win_length=n_fft,
-                    window=win,
-                    length=seg.shape[1],
+                padded = chunk
+            pred = model(padded.unsqueeze(0))[0]
+            pred = _normalize_prediction(pred, input_channels, chunk.shape[1])
+            if acc is None:
+                acc = torch.zeros(
+                    (pred.shape[0], pred.shape[1], length),
+                    device=working.device,
+                    dtype=pred.dtype,
                 )
-                stems[name][:, start : start + stem.shape[1]] += stem
-            if progress_cb:
-                progress_cb(end / length)
-            if delay:
-                time.sleep(delay)
-        return drums, bass, other, karaoke, guitar
+            acc[:, :, start : start + pred.shape[-1]] += pred
+            counts[:, start : start + pred.shape[-1]] += 1
+            progress_cb(end / max(1, length))
 
+    if acc is None:
+        raise AppError(ErrorCode.SEPARATION_FAILED, "Model produced no output.")
 
-# ── Task orchestration ─────────────────────────────────────────────────────-
+    denom = counts.clamp_min(1).unsqueeze(0)
+    restored = acc / denom
+    outputs = []
+    for index in range(restored.shape[0]):
+        outputs.append(_restore_output_channels(restored[index], original_channels))
+    return torch.stack(outputs, dim=0)
+
 
 app = FastAPI()
-progress: dict[str, dict[str, int | str]] = {}
-errors: dict[str, str] = {}
-tasks: dict[str, dict] = {}
-controls: dict[str, dict[str, threading.Event]] = {}
-process_queue: queue.Queue[Callable[[], None]] = queue.Queue()
-last_uploaded_source: dict[str, str] | None = None
+tasks_lock = threading.RLock()
+tasks: dict[str, dict[str, Any]] = {}
+task_queue: queue.Queue[str] = queue.Queue()
 
-def _worker() -> None:
+
+def _public_task(task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": task["id"],
+        "name": task["original_name"],
+        "mode": task["mode"],
+        "output_format": task["output_format"],
+        "status": task["status"],
+        "stage": task["stage"],
+        "pct": task["pct"],
+        "eta_seconds": task["eta_seconds"],
+        "out_dir": task["out_dir"],
+        "outputs": list(task["outputs"]),
+        "error": task["error"],
+        "version": task["version"],
+    }
+
+
+def _require_task(task_id: str) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        return task
+
+
+def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
+    started_at = task.get("started_at")
+    if started_at is None or pct < 3 or pct >= 100:
+        return 0 if pct >= 100 else None
+    elapsed = max(1.0, time.time() - started_at)
+    estimate = int((elapsed / (pct / 100.0)) - elapsed)
+    previous = task.get("eta_seconds")
+    if isinstance(previous, int) and previous > 0:
+        estimate = int((previous * 0.6) + (estimate * 0.4))
+    return max(0, estimate)
+
+
+def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
+    with tasks_lock:
+        task = tasks[task_id]
+        if task["started_at"] is None:
+            task["started_at"] = time.time()
+        if task["status"] not in TERMINAL_STATUSES:
+            task["status"] = "running"
+        task["stage"] = stage
+        task["pct"] = max(0, min(100, int(pct)))
+        task["eta_seconds"] = _estimate_eta(task, task["pct"])
+        task["version"] += 1
+
+
+def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
+    with tasks_lock:
+        task = tasks[task_id]
+        task["status"] = "done"
+        task["stage"] = "Done"
+        task["pct"] = 100
+        task["eta_seconds"] = 0
+        task["out_dir"] = str(out_dir)
+        task["outputs"] = list(outputs)
+        task["error"] = None
+        task["finished_at"] = time.time()
+        task["version"] += 1
+
+
+def _mark_task_error(task_id: str, message: str) -> None:
+    with tasks_lock:
+        task = tasks[task_id]
+        task["status"] = "error"
+        task["stage"] = "Error"
+        task["pct"] = max(0, int(task.get("pct", 0)))
+        task["eta_seconds"] = None
+        task["error"] = message
+        task["finished_at"] = time.time()
+        task["version"] += 1
+
+
+def _mark_task_stopped(task_id: str) -> None:
+    with tasks_lock:
+        task = tasks[task_id]
+        task["status"] = "stopped"
+        task["stage"] = "Stopped"
+        task["eta_seconds"] = None
+        task["finished_at"] = time.time()
+        task["version"] += 1
+
+
+def _request_task_stop(task_id: str) -> None:
+    with tasks_lock:
+        task = tasks[task_id]
+        task["stop_event"].set()
+        if task["status"] == "queued":
+            task["status"] = "stopped"
+            task["stage"] = "Stopped"
+            task["eta_seconds"] = None
+        elif task["status"] == "running":
+            task["stage"] = "Stopping"
+            task["eta_seconds"] = None
+        task["version"] += 1
+
+
+def _stop_check(task_id: str) -> None:
+    with tasks_lock:
+        if tasks[task_id]["stop_event"].is_set():
+            raise TaskStopped()
+
+
+def _build_task_payload(
+    *,
+    task_id: str,
+    original_name: str,
+    source_path: Path,
+    mode: str,
+    output_format: str,
+) -> dict[str, Any]:
+    return {
+        "id": task_id,
+        "original_name": original_name,
+        "source_path": str(source_path),
+        "mode": mode,
+        "output_format": output_format,
+        "status": "queued",
+        "stage": "Waiting in queue",
+        "pct": 0,
+        "eta_seconds": None,
+        "out_dir": None,
+        "outputs": [],
+        "error": None,
+        "version": 0,
+        "created_at": time.time(),
+        "started_at": None,
+        "finished_at": None,
+        "stop_event": threading.Event(),
+    }
+
+
+def _create_output_dir(filename: str) -> Path:
+    base_name = _safe_stem(filename)
+    return _ensure_dir(ensure_unique_dir(OUTPUT_ROOT / base_name))
+
+
+def _process_task(task_id: str) -> None:
+    work_dir: Path | None = None
+    output_dir: Path | None = None
+    manager: ModelManager | None = None
+    try:
+        task = _require_task(task_id)
+        if task["stop_event"].is_set():
+            raise TaskStopped()
+
+        source_path = Path(task["source_path"])
+        if not source_path.exists():
+            raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded source file is missing.")
+
+        _set_task_progress(task_id, "Loading models", 1)
+        manager = ModelManager()
+        source_info = _probe_source(source_path)
+        output_dir = _create_output_dir(task["original_name"])
+        with tasks_lock:
+            tasks[task_id]["out_dir"] = str(output_dir)
+            tasks[task_id]["version"] += 1
+
+        work_dir = Path(tempfile.mkdtemp(prefix=f"stemsplat_{task_id[:8]}_", dir=str(WORK_DIR)))
+        _set_task_progress(task_id, "Preparing audio", 4)
+        decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
+        _stop_check(task_id)
+        waveform = _load_waveform(decoded_path)
+
+        temp_outputs: list[tuple[str, Path]] = []
+        mode = task["mode"]
+
+        if mode == "vocals":
+            vocals_model = manager.get("vocals")
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 88, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
+        elif mode == "instrumental":
+            instrumental_model = manager.get("instrumental")
+            instrumental_pred = _run_model_chunks(
+                instrumental_model,
+                waveform,
+                MODEL_SPECS["instrumental"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(6, 88, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
+        elif mode == "both_deux":
+            deux_model = manager.get("deux")
+            pair_pred = _run_model_chunks(
+                deux_model,
+                waveform,
+                MODEL_SPECS["deux"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running deux model", _map_fraction(6, 90, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            vocals_tensor = pair_pred[0]
+            instrumental_tensor = (
+                pair_pred[1]
+                if pair_pred.shape[0] > 1
+                else waveform[: vocals_tensor.shape[0], : vocals_tensor.shape[1]] - vocals_tensor
+            )
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_tensor)))
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_tensor)))
+        elif mode == "both_separate":
+            vocals_model = manager.get("vocals")
+            instrumental_model = manager.get("instrumental")
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 48, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
+            instrumental_pred = _run_model_chunks(
+                instrumental_model,
+                waveform,
+                MODEL_SPECS["instrumental"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(50, 90, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
+        else:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
+
+        _stop_check(task_id)
+        export_plan = _resolve_export_plan(source_info, task["output_format"])
+        exported_files: list[str] = []
+        total_exports = len(temp_outputs)
+        for index, (label, temp_path) in enumerate(temp_outputs, start=1):
+            start_pct = _map_fraction(92, 98, (index - 1) / max(1, total_exports))
+            _set_task_progress(task_id, f"Exporting {label}", start_pct)
+            final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{export_plan.suffix}"
+            exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
+            exported_files.append(exported.name)
+            _set_task_progress(task_id, f"Exporting {label}", _map_fraction(92, 99, index / max(1, total_exports)))
+
+        _mark_task_done(task_id, output_dir, exported_files)
+    except TaskStopped:
+        if output_dir is not None:
+            _cleanup_path(output_dir)
+        _mark_task_stopped(task_id)
+    except AppError as exc:
+        if output_dir is not None:
+            _cleanup_path(output_dir)
+        _mark_task_error(task_id, f"{exc.code}: {exc.message}")
+    except Exception as exc:  # pragma: no cover - safety net
+        logger.exception("task %s crashed", task_id)
+        if output_dir is not None:
+            _cleanup_path(output_dir)
+        _mark_task_error(task_id, f"{ErrorCode.SEPARATION_FAILED}: {exc}")
+    finally:
+        if manager is not None:
+            del manager
+        _cleanup_path(work_dir)
+        gc.collect()
+        _safe_mps_empty_cache()
+
+
+def _task_worker() -> None:
     while True:
-        fn = process_queue.get()
+        task_id = task_queue.get()
         try:
-            fn()
+            _process_task(task_id)
         finally:
-            process_queue.task_done()
+            task_queue.task_done()
 
-threading.Thread(target=_worker, daemon=True).start()
 
-download_lock = threading.Lock()
-downloading = False
+threading.Thread(target=_task_worker, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -486,642 +959,1328 @@ async def _startup_cleanup() -> None:
 
 
 @app.exception_handler(AppError)
-async def _handle_app_error(request: Request, exc: AppError):  # noqa: D401 - FastAPI signature
-    """Return JSON-encoded error responses while logging the failure."""
-
+async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
     logger.error("app error for %s %s: %s %s", request.method, request.url.path, exc.code, exc.message)
     return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
 
 
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    logger.info("request %s %s from %s", request.method, request.url.path, request.client.host if request.client else "?")
-    try:
-        response = await call_next(request)
-    except Exception:
-        logger.exception("unhandled error for %s %s", request.method, request.url.path)
-        raise
-    duration = (time.time() - start) * 1000
-    logger.info("completed %s %s in %.1fms status=%s", request.method, request.url.path, duration, response.status_code)
+async def _log_requests(request: Request, call_next):
+    started = time.time()
+    response = await call_next(request)
+    elapsed_ms = (time.time() - started) * 1000
+    logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
     return response
 
 
-def _download_models() -> None:
-    global downloading
-    with download_lock:
-        if downloading:
-            return
-        downloading = True
-    MODEL_DIR.mkdir(exist_ok=True)
-    for name, url in MODEL_URLS:
-        dest = MODEL_DIR / name
+@app.get("/api/models_status")
+async def models_status() -> dict[str, list[str]]:
+    missing = []
+    manager = ModelManager()
+    for key, spec in MODEL_SPECS.items():
         try:
-            import urllib.request
-
-            with urllib.request.urlopen(url) as resp, open(dest, "wb") as out:
-                while True:
-                    chunk = resp.read(8192)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    logger.debug("downloaded chunk for %s", name)
-        except Exception as exc:  # pragma: no cover - network errors
-            logging.error("model download failed: %s", exc)
-            logger.exception("model download failure for %s", name)
-    downloading = False
+            manager._resolve_model_path(spec.filename)
+        except AppError:
+            missing.append(key)
+    return {"missing": missing}
 
 
-@app.post("/download_models")
-async def download_models():
-    thread = threading.Thread(target=_download_models, daemon=True)
-    thread.start()
-    return {"status": "started"}
+@app.post("/api/tasks")
+async def create_task(
+    file: UploadFile = File(...),
+    mode: str = Form("vocals"),
+    output_format: str = Form("same_as_input"),
+):
+    if mode not in MODE_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.").to_http()
+    if output_format not in OUTPUT_FORMAT_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
 
+    original_name = Path(file.filename or "upload").name
+    suffix = Path(original_name).suffix.lower()
+    if suffix and suffix not in SUPPORTED_AUDIO_SUFFIXES:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}").to_http()
 
-# ── Separation helpers ─────────────────────────────────────────────────────-
-
-def _prepare_waveform(audio_path: Path) -> torch.Tensor:
-    try:
-        logger.info("loading audio %s", audio_path)
-        waveform, sr = torchaudio.load(str(audio_path))
-    except Exception as exc:
-        logger.exception("failed to load %s", audio_path)
-        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
-    if sr != 44100:
-        try:
-            logger.info("resampling %s from %s to 44100", audio_path, sr)
-            waveform = torchaudio.functional.resample(waveform, sr, 44100)
-        except Exception as exc:
-            logger.exception("resample failed for %s", audio_path)
-            raise AppError(ErrorCode.RESAMPLE_FAILED, f"Resample failed: {exc}") from exc
-    logger.debug("loaded waveform shape=%s sr=44100", tuple(waveform.shape))
-    return waveform
-
-def _ensure_ffmpeg() -> str:
-    """Return a usable ffmpeg executable path, downloading a bundled copy if needed."""
-
-    import shutil
-    import subprocess
-
-    path = shutil.which("ffmpeg")
-    candidates: list[str] = []
-    if path:
-        candidates.append(path)
-
-    try:  # fallback to bundled binary if available
-        import imageio_ffmpeg  # type: ignore
-
-        try:
-            bundled = imageio_ffmpeg.get_ffmpeg_exe()
-            if bundled:
-                candidates.append(bundled)
-                logger.debug("using bundled ffmpeg at %s", bundled)
-        except Exception:
-            logger.debug("imageio-ffmpeg present but failed to provide binary", exc_info=True)
-    except Exception:
-        logger.debug("imageio-ffmpeg not available; relying on system ffmpeg")
-
-    for candidate in candidates:
-        try:
-            subprocess.run([candidate, "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return candidate
-        except FileNotFoundError:
-            logger.debug("ffmpeg candidate missing at %s", candidate)
-        except Exception as exc:
-            logger.debug("ffmpeg candidate at %s failed health check: %s", candidate, exc)
-
-    logger.error("ffmpeg binary missing from PATH and bundled lookup failed; conversion cannot proceed")
-    raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg or ensure imageio-ffmpeg can download it.")
-
-
-def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
-    """Convert ``audio_path`` to WAV in-place and optionally drop the original copy."""
-
-    ffmpeg_path = _ensure_ffmpeg()
-
-    if audio_path.suffix.lower() in {".wav", ".wave"}:
-        logger.debug("%s already wav; skipping convert", audio_path)
-        return audio_path
-
-    wav_path = audio_path.with_suffix(".wav")
-    logger.info("converting %s to wav at %s", audio_path, wav_path)
-    cmd = [ffmpeg_path, "-y", "-i", str(audio_path), "-ar", "44100", "-ac", "2", "-vn", str(wav_path)]
-    conversion_ok = False
-    try:
-        import subprocess
-
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        logger.debug("ffmpeg stdout for %s: %s", audio_path, result.stdout)
-        logger.debug("ffmpeg stderr for %s: %s", audio_path, result.stderr)
-        conversion_ok = True
-    except FileNotFoundError as exc:
-        raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
-    except Exception as exc:
-        logger.exception("conversion to wav failed for %s", audio_path)
-        raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
-
-    if conversion_ok and not wav_path.exists():
-        raise AppError(ErrorCode.UPLOAD_FAILED, f"WAV conversion did not create output for {audio_path}")
-
-    if remove_source and conversion_ok and wav_path != audio_path:
-        try:
-            audio_path.unlink()
-        except Exception as exc:
-            logging.warning("failed to remove source %s after conversion: %s", audio_path, exc)
-    elif remove_source and not conversion_ok and audio_path.exists():
-        logger.debug("preserving original %s because conversion did not complete", audio_path)
-    return wav_path
-
-
-def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool = True) -> Path:
-    """Place a copy of ``src`` into ``dest_dir`` and normalize it to WAV."""
-
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    staged = dest_dir / src.name
-    if staged != src:
-        logger.debug("copying %s (%s bytes) to %s", src, src.stat().st_size if src.exists() else "n/a", staged)
-        shutil.copy2(src, staged)
-    try:
-        wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
-    except AppError:
-        if staged.exists() and staged.suffix.lower() != ".wav":
-            try:
-                staged.unlink()
-                logger.debug("cleaned failed staging copy %s", staged)
-            except Exception as exc:
-                logger.warning("failed to clean staging copy %s after error: %s", staged, exc)
-        raise
-    if staged.exists() and staged.suffix.lower() != ".wav" and staged != wav_path:
-        try:
-            staged.unlink()
-            logger.debug("removed non-wav staging copy %s after conversion", staged)
-        except Exception as exc:
-            logger.warning("failed to remove staging copy %s: %s", staged, exc)
-    logger.info("staged %s as %s", src, wav_path)
-    return wav_path
-
-
-def _queue_processing(task_id: str, conv_path: Path, out_dir: Path, stem_list: list[str]) -> None:
-    pause_evt = controls.setdefault(task_id, {}).setdefault("pause", threading.Event())
-    stop_evt = controls.setdefault(task_id, {}).setdefault("stop", threading.Event())
-
-    def cb(stage: str, pct: int):
-        while pause_evt.is_set():
-            progress[task_id] = {"stage": "paused", "pct": pct}
-            time.sleep(0.5)
-        if stop_evt.is_set():
-            progress[task_id] = {"stage": "stopped", "pct": 0}
-            raise AppError(ErrorCode.INVALID_REQUEST, "Task stopped by user")
-        logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
-        progress[task_id] = {"stage": stage, "pct": pct}
-
-    def run() -> None:
-        try:
-            tasks[task_id]["status"] = "running"
-            tasks[task_id]["zip"] = None
-            tasks[task_id]["file"] = None
-            manager = ModelManager()
-            cb("preparing", 0)
-            cb("prepare.complete", 1)
-            audio_path = conv_path
-            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, out_dir)
-            tasks[task_id]["stems"] = stems_out
-
-            if len(stems_out) > 1:
-                zip_path = out_dir.parent / f"{audio_path.stem}—stems.zip"
-                cb("zip.start", 95)
-                try:
-                    with zipfile.ZipFile(zip_path, "w") as zf:
-                        for name in stems_out:
-                            fp = out_dir / name
-                            if fp.exists():
-                                zf.write(fp, arcname=name)
-                                logger.debug("added %s to %s", fp, zip_path)
-                            else:
-                                logger.warning("expected stem %s missing at %s", name, fp)
-                except Exception as exc:
-                    raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-                cb("zip.done", 98)
-                tasks[task_id]["zip"] = zip_path
-                logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
-            elif len(stems_out) == 1:
-                single_file = out_dir / stems_out[0]
-                tasks[task_id]["file"] = single_file
-                logger.info("task %s completed; single stem file=%s", task_id, single_file)
-            else:
-                raise AppError(ErrorCode.INVALID_REQUEST, "No stems were produced for this task.")
-
-            cb("finalizing", 99)
-            progress[task_id] = {"stage": "done", "pct": 100}
-            tasks[task_id]["status"] = "done"
-        except AppError as exc:
-            progress[task_id] = {"stage": "error", "pct": -1}
-            errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
-            tasks[task_id]["status"] = "error"
-            logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
-            logger.debug("task %s context dir=%s conv_src=%s stems=%s", task_id, out_dir, conv_path, stem_list)
-        except Exception as exc:  # pragma: no cover - safety net
-            logging.exception("processing failed")
-            progress[task_id] = {"stage": "error", "pct": -1}
-            errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
-            tasks[task_id]["status"] = "error"
-            logger.exception("task %s crashed", task_id)
-
-    tasks[task_id]["status"] = "queued"
-    progress[task_id] = {"stage": "queued", "pct": 0}
-    process_queue.put(run)
-
-
-def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
-    """Convert all supported audio files in ``input_dir`` to WAV under ``output_dir``."""
-
-    _ensure_ffmpeg()
-
-    if not input_dir.exists() or not input_dir.is_dir():
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Input directory not found: {input_dir}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    converted: list[Path] = []
-    supported = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".alac", ".opus", ".m4a"}
-
-    for src_path in input_dir.rglob("*"):
-        if src_path.suffix.lower() not in supported:
-            continue
-        relative_subpath = src_path.relative_to(input_dir)
-        staged_dest = output_dir / relative_subpath
-        staged_dest.parent.mkdir(parents=True, exist_ok=True)
-        if staged_dest != src_path:
-            logger.debug("copying %s to %s", src_path, staged_dest)
-            shutil.copy2(src_path, staged_dest)
-        wav_path = _convert_to_wav(staged_dest, remove_source=True)
-        converted.append(wav_path)
-    return converted
-
-
-def _write_wave(out_dir: Path, fname: str, tensor: torch.Tensor, sr: int = 44100) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("writing stem %s to %s", fname, out_dir)
-    sf.write(out_dir / fname, tensor.T.cpu().numpy(), sr)
-
-
-def _separate_waveform(
-    manager: "ModelManager",
-    audio_path: Path,
-    stem_list: list[str],
-    cb: Callable[[str, int], None],
-    out_dir: Path,
-) -> list[str]:
-    logger.info("starting separation for %s with stems %s", audio_path, stem_list)
-    waveform = _prepare_waveform(audio_path)
-    cb("load_audio.done", 2)
-
-    temp_dir = Path(tempfile.gettempdir())
-    stems_out: list[str] = []
-
-    need_vocal_pass = ("vocals" in stem_list) or any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-    need_instrumental_model = "instrumental" in stem_list
-
-    inst_path: Optional[Path] = None
-
-    if need_vocal_pass:
-        def _cb(frac: float) -> None:
-            cb("vocals", 1 + int(frac * 99))
-
-        cb("split_vocals.start", 2)
-        voc, inst = manager.split_vocals(waveform, SEGMENT, OVERLAP, progress_cb=_cb)
-        cb("split_vocals.done", 50)
-        if "vocals" in stem_list:
-            fname = f"{audio_path.stem} - vocals.wav"
-            _write_wave(out_dir, fname, voc)
-            stems_out.append(fname)
-            cb("write.vocals", 52)
-        need_inst = any(s in stem_list for s in ["drums", "bass", "other", "guitar"])
-        if need_inst:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            _write_wave(temp_dir, inst_path.name, inst)
-        del voc, inst
-
-    if need_instrumental_model:
-        cb("instrumental.start", 52)
-        inst_model = manager.instrumental
-        if inst_path is None:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            waveform_np = waveform.cpu().numpy()
-            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
-        inst_wave = _prepare_waveform(inst_path)
-        inst_pred = inst_model(inst_wave)
-        fname = f"{audio_path.stem} - instrumental.wav"
-        _write_wave(out_dir, fname, inst_pred)
-        stems_out.append(fname)
-        cb("instrumental.done", 75)
-
-    for stem_name in ["drums", "bass", "other", "guitar"]:
-        if stem_name not in stem_list:
-            continue
-        cb(f"{stem_name}.start", 75)
-        inst_model = getattr(manager, stem_name)
-        if inst_path is None:
-            inst_path = temp_dir / f"{uuid.uuid4()}_inst.wav"
-            waveform_np = waveform.cpu().numpy()
-            _write_wave(temp_dir, inst_path.name, torch.from_numpy(waveform_np))
-        inst_wave = _prepare_waveform(inst_path)
-        pred = inst_model(inst_wave)
-        fname = f"{audio_path.stem} - {stem_name}.wav"
-        _write_wave(out_dir, fname, pred)
-        stems_out.append(fname)
-        cb(f"{stem_name}.done", min(98, 75 + len(stems_out)))
-
-    cb("done", 100)
-    return stems_out
-
-
-# ── API endpoints ─────────────────────────────────────────────────────────--
-
-@app.post("/upload")
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), stems: str = Form("vocals")):
-    global last_uploaded_source
     task_id = str(uuid.uuid4())
-    pause_evt = threading.Event()
-    stop_evt = threading.Event()
-    controls[task_id] = {"pause": pause_evt, "stop": stop_evt}
-    stem_list = [s for s in stems.split(",") if s]
-    logger.info("upload received task=%s filename=%s stems=%s", task_id, file.filename, stem_list)
+    stored_name = f"{task_id}_{original_name}"
+    source_path = UPLOAD_DIR / stored_name
     try:
-        path = Path("uploads") / file.filename
-        path.parent.mkdir(exist_ok=True)
-        with path.open("wb") as f:
-            content = await file.read()
-            f.write(content)
-        logger.info("persisted upload %s (%s bytes) to %s", file.filename, len(content), path)
-        logger.debug("persisted upload bytes head=%s tail=%s", content[:32], content[-32:])
-    except Exception as exc:
-        logger.exception("failed to persist upload %s", file.filename)
-        raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
-
-    conv_dir = Path("uploads_converted")
-    conv_dir.mkdir(exist_ok=True)
-    try:
-        conv_path = _stage_audio_copy(path, conv_dir)
-    except AppError as exc:
-        logger.error("conversion staging failed for %s: %s %s", file.filename, exc.code, exc.message)
-        raise exc.to_http() if hasattr(exc, "to_http") else exc
-    try:
-        conv_size = conv_path.stat().st_size
-    except Exception:
-        conv_size = "unknown"
-    logger.info("queued conversion source %s -> %s (size=%s)", path, conv_path, conv_size)
-
-    out_dir = conv_dir / f"{Path(file.filename).stem}—stems"
-    expected = [f"{Path(file.filename).stem} - {s}.wav" for s in stem_list]
-
-    progress[task_id] = {"stage": "ready", "pct": 0}
-    tasks[task_id] = {
-        "dir": out_dir,
-        "stems": expected,
-        "controls": controls[task_id],
-        "conv_src": str(conv_path),
-        "orig_src": str(path),
-        "stem_list": stem_list,
-        "status": "ready",
-    }
-    last_uploaded_source = {
-        "conv_src": str(conv_path),
-        "orig_src": str(path),
-        "name": Path(file.filename).name,
-    }
-    return {"task_id": task_id, "stems": expected, "status": "ready"}
-
-
-@app.post("/start/{task_id}")
-async def start_task(task_id: str):
-    info = tasks.get(task_id)
-    if not info:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    if info.get("status") in {"queued", "running"}:
-        return {"task_id": task_id, "status": info.get("status")}
-    conv_src = Path(info.get("conv_src", ""))
-    if not conv_src.exists():
-        raise AppError(ErrorCode.UPLOAD_FAILED, "Converted source missing; please re-upload.").to_http()
-    out_dir = Path(info.get("dir", conv_src.parent / f"{conv_src.stem}—stems"))
-    stem_list = info.get("stem_list") or []
-    logger.info("starting task %s on demand", task_id)
-    _queue_processing(task_id, conv_src, out_dir, stem_list)
-    return {"task_id": task_id, "status": "queued"}
-
-
-@app.get("/progress/{task_id}")
-async def progress_stream(task_id: str):
-    async def event_generator():
-        last = None
-        while True:
-            info = progress.get(task_id, {"stage": "queued", "pct": 0})
-            current = (info["stage"], info["pct"])
-            if current != last:
-                if info.get("stage") == "stopped":
-                    yield {"event": "message", "data": json.dumps({"stage": "stopped", "pct": 0})}
-                elif info.get("pct", 0) < 0:
-                    yield {"event": "error", "data": errors.get(task_id, "processing failed")}
-                else:
-                    yield {"event": "message", "data": json.dumps({"stage": info["stage"], "pct": info["pct"]})}
-                last = current
-                if info.get("stage") == "stopped" or info.get("pct", 0) >= 100 or info.get("pct", 0) < 0:
+        with source_path.open("wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
                     break
-            await asyncio.sleep(0.5)
+                handle.write(chunk)
+        await file.close()
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}").to_http() from exc
 
-    return EventSourceResponse(event_generator())
-
-
-@app.post("/rerun/{task_id}")
-async def rerun(task_id: str):
-    old = tasks.get(task_id)
-    if not old:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    conv_src = Path(old.get("conv_src", ""))
-    stem_list = old.get("stem_list") or []
-    logger.info("rerun requested for task %s", task_id)
-    if not conv_src.exists() or not stem_list:
-        raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "Missing source or stems for rerun").to_http(409)
-
-    new_id = str(uuid.uuid4())
-    controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
-    conv_dir = conv_src.parent
-    out_dir = conv_dir / f"{conv_src.stem}—stems"
-    expected = [f"{conv_src.stem} - {s}.wav" for s in stem_list]
-
-    progress[new_id] = {"stage": "queued", "pct": 0}
-    tasks[new_id] = {
-        "dir": out_dir,
-        "stems": expected,
-        "controls": controls[new_id],
-        "conv_src": str(conv_src),
-        "orig_src": old.get("orig_src"),
-        "stem_list": stem_list,
-        "zip": old.get("zip"),
-        "status": "queued",
-    }
-    _queue_processing(new_id, conv_src, out_dir, stem_list)
-    return {"task_id": new_id, "stems": expected}
+    payload = _build_task_payload(
+        task_id=task_id,
+        original_name=original_name,
+        source_path=source_path,
+        mode=mode,
+        output_format=output_format,
+    )
+    with tasks_lock:
+        tasks[task_id] = payload
+    task_queue.put(task_id)
+    return _public_task(payload)
 
 
-@app.post("/rerun_last")
-async def rerun_last(stems: str = Form("vocals")):
-    source = last_uploaded_source
-    if not source:
-        raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "no songs uploaded").to_http(409)
+@app.get("/api/tasks/{task_id}/events")
+async def task_events(task_id: str):
+    _require_task(task_id)
 
-    conv_src = Path(source.get("conv_src", ""))
-    if not conv_src.exists():
-        raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "no songs uploaded").to_http(409)
+    async def _event_stream():
+        last_version = -1
+        while True:
+            with tasks_lock:
+                task = tasks.get(task_id)
+                if task is None:
+                    break
+                snapshot = _public_task(task)
+            if snapshot["version"] != last_version:
+                yield f"data: {json.dumps(snapshot)}\n\n"
+                last_version = snapshot["version"]
+                if snapshot["status"] in TERMINAL_STATUSES:
+                    break
+            await asyncio.sleep(0.35)
 
-    stem_list = [s for s in stems.split(",") if s]
-    if not stem_list:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Please select at least one stem.").to_http(400)
-
-    new_id = str(uuid.uuid4())
-    controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
-    out_dir = conv_src.parent / f"{conv_src.stem}—stems"
-    expected = [f"{conv_src.stem} - {s}.wav" for s in stem_list]
-
-    progress[new_id] = {"stage": "queued", "pct": 0}
-    tasks[new_id] = {
-        "dir": out_dir,
-        "stems": expected,
-        "controls": controls[new_id],
-        "conv_src": str(conv_src),
-        "orig_src": source.get("orig_src"),
-        "stem_list": stem_list,
-        "status": "queued",
-    }
-    _queue_processing(new_id, conv_src, out_dir, stem_list)
-    return {"task_id": new_id, "stems": expected, "name": source.get("name", conv_src.name)}
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-@app.get("/download/{task_id}")
-async def download(task_id: str):
-    info = tasks.get(task_id)
-    if not info:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    zip_path = info.get("zip")
-    if zip_path and Path(zip_path).exists():
-        logger.info("serving download for task %s at %s", task_id, zip_path)
-        return FileResponse(path=zip_path, media_type="application/zip", filename=Path(zip_path).name)
-    file_path = info.get("file")
-    if file_path and Path(file_path).exists():
-        logger.info("serving single-stem download for task %s at %s", task_id, file_path)
-        return FileResponse(path=file_path, media_type="audio/wav", filename=Path(file_path).name)
-    raise AppError(ErrorCode.INVALID_REQUEST, "Files not ready").to_http(409)
-
-
-@app.post("/clear_all_uploads")
-async def clear_all_uploads():
-    global last_uploaded_source
-    dirs = ["uploads", "uploads_converted"]
-    for d in dirs:
-        dir_path = BASE_DIR / d
-        if dir_path.exists():
-            for entry in dir_path.iterdir():
-                if entry.is_dir():
-                    shutil.rmtree(entry)
-                else:
-                    entry.unlink()
-    last_uploaded_source = None
-    logger.info("cleared upload directories")
-    return {"status": "cleared"}
-
-
-@app.post("/pause/{task_id}")
-async def pause_task(task_id: str):
-    ctrl = controls.get(task_id)
-    if not ctrl:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
-    ctrl["pause"].set()
-    logger.info("paused task %s", task_id)
-    return {"status": "paused"}
-
-
-@app.post("/resume/{task_id}")
-async def resume_task(task_id: str):
-    ctrl = controls.get(task_id)
-    if not ctrl:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
-    ctrl["pause"].clear()
-    logger.info("resumed task %s", task_id)
-    return {"status": "resumed"}
-
-
-@app.post("/stop/{task_id}")
+@app.post("/api/tasks/{task_id}/stop")
 async def stop_task(task_id: str):
-    ctrl = controls.get(task_id)
-    if not ctrl:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
-    ctrl["stop"].set()
-    logger.info("stopped task %s", task_id)
-    return {"status": "stopped"}
+    _require_task(task_id)
+    _request_task_stop(task_id)
+    return _public_task(_require_task(task_id))
+
+
+@app.post("/api/tasks/{task_id}/retry")
+async def retry_task(task_id: str):
+    old_task = _require_task(task_id)
+    source_path = Path(old_task["source_path"])
+    if not source_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Original upload is missing; re-add the file.").to_http()
+
+    new_id = str(uuid.uuid4())
+    payload = _build_task_payload(
+        task_id=new_id,
+        original_name=old_task["original_name"],
+        source_path=source_path,
+        mode=old_task["mode"],
+        output_format=old_task["output_format"],
+    )
+    with tasks_lock:
+        tasks[new_id] = payload
+    task_queue.put(new_id)
+    return _public_task(payload)
+
+
+@app.post("/api/tasks/{task_id}/reveal")
+async def reveal_output(task_id: str):
+    task = _require_task(task_id)
+    out_dir = task.get("out_dir")
+    if not out_dir:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output is not ready.").to_http(409)
+    out_path = Path(out_dir)
+    if not out_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output folder is missing.").to_http(404)
+
+    try:
+        if sys.platform.startswith("darwin"):
+            subprocess.Popen(["open", str(out_path)])
+        elif sys.platform.startswith("win"):
+            os.startfile(str(out_path))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(out_path)])
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open output folder: {exc}").to_http(500) from exc
+
+    return {"status": "opened", "path": str(out_path)}
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    html_path = BASE_DIR / "web" / "index.html"
-    return HTMLResponse(html_path.read_text())
+async def index() -> HTMLResponse:
+    return HTMLResponse(INDEX_HTML)
 
 
-@app.post("/shutdown")
+@app.get("/favicon.ico")
+async def favicon():
+    icon_path = BASE_DIR / "web" / "favicon.ico"
+    if icon_path.exists():
+        return FileResponse(icon_path, media_type="image/x-icon")
+    raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
+
+
+@app.api_route("/shutdown", methods=["POST", "GET"])
 async def shutdown():
-    logger.warning("shutdown requested via api; terminating process")
+    logger.warning("shutdown requested; exiting process")
+    _close_installer_ui()
 
-    def _stop():
-        logger.debug("shutdown thread armed; sleeping briefly to flush logs")
+    def _exit_soon() -> None:
         time.sleep(0.25)
         os._exit(0)
 
-    threading.Thread(target=_stop, daemon=True).start()
+    threading.Thread(target=_exit_soon, daemon=True).start()
     return {"status": "shutting down"}
 
 
-# ── CLI entrypoint ─────────────────────────────────────────────────────────-
-
-
-def _process_local_file(path: Path, stem_list: list[str]) -> list[str]:
-    conv_dir = Path("uploads_converted")
-    conv_path = _stage_audio_copy(path, conv_dir)
-    out_dir = conv_dir / f"{conv_path.stem}—stems"
-
-    def cb(stage: str, pct: int) -> None:
-        logging.info("%s: %s%%", stage, pct)
-
-    manager = ModelManager()
-    stems_out = _separate_waveform(manager, conv_path, stem_list, cb, out_dir)
-    return [str(out_dir / stem) for stem in stems_out]
-
 def cli_main(argv: Optional[list[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="Run stemsplat server or process a file")
-    parser.add_argument("--serve", action="store_true", help="Start the FastAPI server with uvicorn")
-    parser.add_argument("files", nargs="*", help="Optional list of audio files to process locally")
-    parser.add_argument("--stems", default="vocals", help="Comma-separated stems when processing locally")
+    parser = argparse.ArgumentParser(description="Run the stemsplat server.")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
 
-    if args.serve:
-        import uvicorn
+    import uvicorn
 
-        _close_installer_ui()
-        if not _port_available(8000):
-            logger.error("Port 8000 is already in use; aborting startup")
-            raise SystemExit("Port 8000 is already in use. Please free the port and try again.")
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
-        return
+    _close_installer_ui()
+    if not _port_available(args.port):
+        raise SystemExit(f"Port {args.port} is already in use.")
+    uvicorn.run("main:app", host=args.host, port=args.port, reload=False)
 
-    if not args.files:
-        parser.error("No files provided and --serve not set")
 
-    stem_list = [s for s in args.stems.split(",") if s]
-    for file_path in args.files:
-        path = Path(file_path)
-        if not path.exists():
-            raise AppError(ErrorCode.UPLOAD_FAILED, f"File not found: {file_path}")
-        outputs = _process_local_file(path, stem_list)
-        for out in outputs:
-            print(out)
+INDEX_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stemsplat</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-1: #0F2027;
+      --bg-2: #2C5364;
+      --text: #E7ECEF;
+      --muted: #B8C4CC;
+      --accent: #8ED8FF;
+      --accent-soft: #96c5d6;
+      --icon: #9BB6C2;
+      --card: rgba(23, 35, 41, 0.55);
+      --card-done: rgba(40, 66, 77, 0.7);
+      --border: rgba(255,255,255,0.06);
+      --danger: #f57a6d;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-family: "Nunito Sans", sans-serif;
+      color: var(--text);
+      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
+      padding: 56px 0;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat;
+      opacity: .18;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.022) 0 1px, transparent 1px 2px),
+        repeating-linear-gradient(90deg, rgba(0,0,0,0.024) 0 1px, transparent 1px 2px);
+      opacity: .14;
+      mix-blend-mode: soft-light;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(980px, calc(100vw - 28px));
+      margin: auto;
+      padding: 0;
+    }
+
+    .shade {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: rgba(0,0,0,0.24);
+      z-index: -1;
+    }
+
+    .title {
+      margin: 0 0 26px;
+      text-align: center;
+      font-size: clamp(2.7rem, 5vw, 4.6rem);
+      font-weight: 300;
+      letter-spacing: 0.5px;
+      text-shadow: 0 8px 40px rgba(0,0,0,.45);
+    }
+
+    .close-button {
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.14);
+      color: var(--text);
+      font-size: 18px;
+      margin: 0;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      backdrop-filter: blur(10px) saturate(120%);
+      -webkit-backdrop-filter: blur(10px) saturate(120%);
+      z-index: 20;
+    }
+
+    .close-button:hover {
+      background: rgba(255,255,255,0.22);
+    }
+
+    .controls {
+      display: flex;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .glass {
+      background: var(--card);
+      backdrop-filter: blur(12px) saturate(110%);
+      -webkit-backdrop-filter: blur(12px) saturate(110%);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 26px rgba(0,0,0,.28);
+    }
+
+    .glass-light {
+      background: rgba(255,255,255,0.12);
+      backdrop-filter: blur(10px) saturate(110%);
+      -webkit-backdrop-filter: blur(10px) saturate(110%);
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow: 0 8px 26px rgba(0,0,0,.28);
+    }
+
+    .dropzone {
+      flex: 1 1 auto;
+      min-height: 292px;
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      border-radius: 28px;
+      text-align: center;
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .dropzone.dragging {
+      transform: translateY(-2px);
+      border-color: rgba(255,255,255,.16);
+    }
+
+    .dropzone svg {
+      width: 54px;
+      height: 54px;
+      color: var(--icon);
+    }
+
+    .dropzone h3 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+
+    .dropzone p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 1rem;
+    }
+
+    .dropzone .note {
+      font-size: 0.88rem;
+    }
+
+    .hidden-input {
+      display: none;
+    }
+
+    .controls-side {
+      width: 270px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .split-card {
+      position: relative;
+      border-radius: 28px;
+      padding: 20px 18px 18px;
+      color: var(--text);
+    }
+
+    .split-head {
+      display: flex;
+      justify-content: flex-end;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 12px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .icon-button:hover {
+      background: rgba(255,255,255,0.08);
+    }
+
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .modes {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mode-card {
+      position: relative;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      cursor: pointer;
+      padding: 2px 0;
+    }
+
+    .mode-card input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .mode-card:hover {
+      opacity: 0.92;
+    }
+
+    .mode-card .checkbox {
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      border: 1.5px solid rgba(255,255,255,.35);
+      margin-top: 2px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+
+    .mode-card.active .checkbox {
+      background: linear-gradient(135deg, var(--accent-soft), #5fa3b5);
+      border-color: transparent;
+    }
+
+    .mode-card.active .checkbox::after {
+      content: "";
+      width: 6px;
+      height: 10px;
+      border: 2px solid #0F2027;
+      border-top: 0;
+      border-left: 0;
+      transform: rotate(45deg);
+    }
+
+    .mode-card strong {
+      display: block;
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }
+
+    .mode-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+
+    .small-note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    .small-note strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .warning {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(245,122,109,0.12);
+      border: 1px solid rgba(245,122,109,0.16);
+      color: #ffd7d2;
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+
+    .warning.show {
+      display: block;
+    }
+
+    .start-button {
+      border-radius: 28px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: white;
+      text-align: center;
+      min-height: 88px;
+    }
+
+    .start-button .start-icon {
+      font-size: 1.15rem;
+      line-height: 1;
+    }
+
+    .start-button .start-text {
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    .queue-panel {
+      margin-top: 18px;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+
+    .queue-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .queue-head h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    .queue-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
+    .queue-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .queue-item {
+      padding: 16px 18px;
+      border-radius: 22px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 26px rgba(0,0,0,.28);
+      backdrop-filter: blur(12px) saturate(110%);
+      -webkit-backdrop-filter: blur(12px) saturate(110%);
+    }
+
+    .queue-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .queue-main {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .queue-name {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      word-break: break-word;
+    }
+
+    .queue-subline {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(255,255,255,0.1);
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    .status-badge.status-running,
+    .status-badge.status-queued,
+    .status-badge.status-uploading {
+      color: var(--accent-strong);
+      border: 1px solid rgba(181,255,216,0.18);
+    }
+
+    .status-badge.status-done {
+      color: #dfffe5;
+      background: rgba(106, 189, 128, 0.12);
+    }
+
+    .status-badge.status-error,
+    .status-badge.status-stopped {
+      color: #ffd7d2;
+      background: rgba(245,122,109,0.12);
+    }
+
+    .queue-stage {
+      margin-top: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+
+    .queue-stage strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .progress-shell {
+      margin-top: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      width: 0%;
+      transition: width 0.28s ease;
+      background: linear-gradient(90deg, #76cfba 0%, #baf7d8 55%, #e0fff3 100%);
+      box-shadow: inset 0 0 16px rgba(255,255,255,0.22);
+    }
+
+    .queue-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      min-width: 160px;
+    }
+
+    .button {
+      border-radius: 14px;
+      padding: 10px 14px;
+      font-weight: 700;
+    }
+
+    .button:hover { transform: translateY(-1px); }
+    .button:disabled { cursor: not-allowed; opacity: 0.5; transform: none; }
+
+    .button.primary {
+      background: linear-gradient(135deg, #89dbc2, #baffde);
+      color: #081116;
+      box-shadow: 0 14px 34px rgba(132, 213, 191, 0.22);
+    }
+
+    .button.secondary {
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .button.ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .button.danger {
+      background: rgba(245,122,109,0.12);
+      color: #ffd7d2;
+      border: 1px solid rgba(245,122,109,0.16);
+    }
+
+    .empty {
+      padding: 34px 20px;
+      text-align: center;
+      color: var(--muted);
+      border-radius: 20px;
+      border: 1px dashed rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .modal-shell {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(4, 10, 13, 0.56);
+      backdrop-filter: blur(10px);
+      padding: 24px;
+    }
+
+    .modal-shell.open {
+      display: grid;
+    }
+
+    .modal {
+      width: min(460px, 100%);
+      padding: 24px;
+    }
+
+    .modal h3 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: -0.04em;
+    }
+
+    .modal p {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .field label {
+      font-size: 0.88rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .field select {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      padding: 14px;
+    }
+
+    .modal-actions {
+      margin-top: 22px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    @media (max-width: 900px) {
+      .controls {
+        flex-direction: column;
+      }
+      .controls-side {
+        width: 100%;
+      }
+      .queue-row {
+        flex-direction: column;
+      }
+      .queue-actions {
+        width: 100%;
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .shell {
+        width: min(100vw, calc(100vw - 18px));
+      }
+      body {
+        padding: 40px 0;
+      }
+      .button {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shade"></div>
+  <button id="close-button" class="close-button" type="button" aria-label="Quit">×</button>
+
+  <main class="shell">
+    <h1 class="title">stemsplat</h1>
+
+    <section class="controls">
+      <label id="dropzone" class="dropzone glass" for="file-input">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z"></path>
+        </svg>
+        <div>
+          <h3>drop songs here</h3>
+          <p>or click to choose files</p>
+        </div>
+        <input id="file-input" class="hidden-input" type="file" accept="audio/*" multiple>
+      </label>
+
+      <div class="controls-side">
+        <section class="split-card glass">
+          <div class="split-head">
+            <button id="settings-button" class="icon-button" type="button" aria-label="Open settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
+              </svg>
+            </button>
+          </div>
+
+          <div class="modes" id="mode-picker">
+            <label class="mode-card active" data-mode="vocals">
+              <input type="radio" name="split-mode" value="vocals" checked>
+              <div class="checkbox"></div>
+              <div>
+                <strong>vocals</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="instrumental">
+              <input type="radio" name="split-mode" value="instrumental">
+              <div class="checkbox"></div>
+              <div>
+                <strong>instrumental</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="both_deux">
+              <input type="radio" name="split-mode" value="both_deux">
+              <div class="checkbox"></div>
+              <div>
+                <strong>both (deux)</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="both_separate">
+              <input type="radio" name="split-mode" value="both_separate">
+              <div class="checkbox"></div>
+              <div>
+                <strong>both (separate)</strong>
+              </div>
+            </label>
+          </div>
+
+        </section>
+
+        <button id="start-button" class="start-button glass-light" type="button" disabled>start</button>
+        <div id="models-warning" class="warning"></div>
+      </div>
+    </section>
+
+    <section id="queue-panel" class="queue-panel">
+      <div id="empty-state" class="empty">nothing queued yet.</div>
+      <div id="queue" class="queue-list"></div>
+    </section>
+  </main>
+
+  <div id="settings-modal" class="modal-shell" aria-hidden="true">
+    <div class="modal glass" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h3 id="settings-title">settings</h3>
+      <p>Choose the format for exported stems.</p>
+      <div class="field">
+        <label for="output-format">output format</label>
+        <select id="output-format">
+          <option value="same_as_input">same as input</option>
+          <option value="mp3_320">320kb mp3</option>
+          <option value="mp3_128">128kb mp3</option>
+          <option value="wav">wav</option>
+          <option value="m4a">m4a</option>
+          <option value="flac">flac</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="settings-cancel" class="button ghost" type="button">cancel</button>
+        <button id="settings-save" class="button primary" type="button">save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MODE_LABELS = {
+      vocals: 'vocals',
+      instrumental: 'instrumental',
+      both_deux: 'both (deux)',
+      both_separate: 'both (separate)',
+    };
+
+    const OUTPUT_LABELS = {
+      same_as_input: 'same as input',
+      mp3_320: '320kb mp3',
+      mp3_128: '128kb mp3',
+      wav: 'wav',
+      m4a: 'm4a',
+      flac: 'flac',
+    };
+
+    const queueEl = document.getElementById('queue');
+    const queuePanelEl = document.getElementById('queue-panel');
+    const emptyStateEl = document.getElementById('empty-state');
+    const startButton = document.getElementById('start-button');
+    const fileInput = document.getElementById('file-input');
+    const dropzone = document.getElementById('dropzone');
+    const settingsButton = document.getElementById('settings-button');
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsCancel = document.getElementById('settings-cancel');
+    const settingsSave = document.getElementById('settings-save');
+    const outputFormatSelect = document.getElementById('output-format');
+    const closeButton = document.getElementById('close-button');
+    const modelsWarning = document.getElementById('models-warning');
+
+    const settings = {
+      output_format: localStorage.getItem('stemsplat.output_format') || 'same_as_input',
+    };
+
+    let selectedMode = 'vocals';
+    let tasks = [];
+    let startBusy = false;
+
+    function updateOutputSummary() {
+      outputFormatSelect.value = settings.output_format;
+    }
+
+    function setMode(mode) {
+      selectedMode = mode;
+      document.querySelectorAll('.mode-card').forEach((card) => {
+        const active = card.dataset.mode === mode;
+        card.classList.toggle('active', active);
+        const input = card.querySelector('input');
+        if (input) input.checked = active;
+      });
+    }
+
+    function humanEta(seconds) {
+      if (!Number.isFinite(seconds) || seconds <= 0) return '';
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      if (mins >= 60) {
+        const hours = Math.floor(mins / 60);
+        const remMins = mins % 60;
+        return `${hours}h ${remMins}m remaining`;
+      }
+      if (mins > 0) return `${mins}m ${secs}s remaining`;
+      return `${secs}s remaining`;
+    }
+
+    function statusLabel(status) {
+      if (status === 'queued') return 'queued';
+      if (status === 'running') return 'running';
+      if (status === 'done') return 'done';
+      if (status === 'error') return 'error';
+      if (status === 'stopped') return 'stopped';
+      if (status === 'uploading') return 'uploading';
+      return 'ready';
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function isTerminal(task) {
+      return ['done', 'error', 'stopped'].includes(task.status);
+    }
+
+    function makeLocalTask(file) {
+      return {
+        localId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        id: null,
+        file,
+        name: file.name,
+        mode: selectedMode,
+        output_format: settings.output_format,
+        status: 'pending',
+        stage: 'ready',
+        pct: 0,
+        eta_seconds: null,
+        out_dir: null,
+        outputs: [],
+        error: null,
+        eventSource: null,
+      };
+    }
+
+    function updateStartButton() {
+      const pendingCount = tasks.filter((task) => task.status === 'pending').length;
+      startButton.disabled = startBusy || pendingCount === 0;
+      startButton.textContent = startBusy ? 'starting...' : 'start';
+    }
+
+    function updateQueueSummary() {
+      const queueSummaryEl = document.getElementById('queue-summary');
+      if (!queueSummaryEl) {
+        return;
+      }
+      if (tasks.length === 0) {
+        queueSummaryEl.textContent = 'add songs, then press start.';
+        return;
+      }
+      const pending = tasks.filter((task) => task.status === 'pending').length;
+      const active = tasks.filter((task) => ['queued', 'running', 'uploading'].includes(task.status)).length;
+      const done = tasks.filter((task) => task.status === 'done').length;
+      queueSummaryEl.textContent = `${tasks.length} song${tasks.length === 1 ? '' : 's'} • ${pending} waiting • ${active} working • ${done} done`;
+    }
+
+    function renderQueue() {
+      queueEl.innerHTML = '';
+      if (queuePanelEl) {
+        queuePanelEl.style.display = tasks.length === 0 ? 'none' : 'block';
+      }
+      emptyStateEl.style.display = 'none';
+
+      tasks.forEach((task) => {
+        const item = document.createElement('article');
+        item.className = 'queue-item';
+
+        const pct = Math.max(0, Math.min(100, task.pct || 0));
+        const eta = humanEta(task.eta_seconds);
+        const stageText = task.error ? task.error : task.stage || 'waiting';
+        const modeLabel = MODE_LABELS[task.mode] || task.mode;
+        const outputLabel = task.output_format === 'same_as_input'
+          ? ''
+          : (OUTPUT_LABELS[task.output_format] || task.output_format);
+        const queueMeta = outputLabel ? `${modeLabel} • ${outputLabel}` : modeLabel;
+        const progressSide = `${pct}%${eta ? ` • ${eta}` : ''}`;
+
+        item.innerHTML = `
+          <div class="queue-row">
+            <div class="queue-main">
+              <p class="queue-name">${escapeHtml(task.name)}</p>
+              <div class="queue-subline">${escapeHtml(queueMeta)}</div>
+              <div class="status-badge status-${task.status}">${statusLabel(task.status)}</div>
+              <div class="queue-stage">
+                <strong>${escapeHtml(stageText)}</strong>
+                <span>${escapeHtml(progressSide)}</span>
+              </div>
+              <div class="progress-shell">
+                <div class="progress-fill" style="width:${pct}%"></div>
+              </div>
+            </div>
+            <div class="queue-actions" data-actions="${task.localId}">
+            </div>
+          </div>
+        `;
+
+        const actions = item.querySelector('.queue-actions');
+        if (task.status === 'pending') {
+          const remove = document.createElement('button');
+          remove.className = 'button ghost';
+          remove.textContent = 'remove';
+          remove.addEventListener('click', () => {
+            tasks = tasks.filter((entry) => entry.localId !== task.localId);
+            renderQueue();
+          });
+          actions.appendChild(remove);
+        } else {
+          if (!task.id) {
+            const remove = document.createElement('button');
+            remove.className = 'button ghost';
+            remove.textContent = 'remove';
+            remove.addEventListener('click', () => {
+              tasks = tasks.filter((entry) => entry.localId !== task.localId);
+              renderQueue();
+            });
+            actions.appendChild(remove);
+          }
+
+          if (['queued', 'running', 'uploading'].includes(task.status) && task.id) {
+            const stop = document.createElement('button');
+            stop.className = 'button danger';
+            stop.textContent = 'stop';
+            stop.disabled = task.status === 'uploading';
+            stop.addEventListener('click', async () => {
+              try {
+                await fetch(`/api/tasks/${task.id}/stop`, { method: 'POST' });
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            actions.appendChild(stop);
+          }
+
+          if (task.status === 'done' && task.id) {
+            const reveal = document.createElement('button');
+            reveal.className = 'button secondary';
+            reveal.textContent = 'open folder';
+            reveal.addEventListener('click', async () => {
+              try {
+                await fetch(`/api/tasks/${task.id}/reveal`, { method: 'POST' });
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            actions.appendChild(reveal);
+          }
+
+          if (task.id && isTerminal(task)) {
+            const retry = document.createElement('button');
+            retry.className = 'button ghost';
+            retry.textContent = 'retry';
+            retry.addEventListener('click', async () => {
+              try {
+                const res = await fetch(`/api/tasks/${task.id}/retry`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || data.detail?.message || 'Retry failed');
+                if (task.eventSource) task.eventSource.close();
+                Object.assign(task, {
+                  id: data.id,
+                  status: data.status,
+                  stage: data.stage,
+                  pct: data.pct,
+                  eta_seconds: data.eta_seconds,
+                  out_dir: data.out_dir,
+                  outputs: data.outputs,
+                  error: data.error,
+                });
+                subscribeToTask(task);
+                renderQueue();
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            actions.appendChild(retry);
+          }
+        }
+
+        queueEl.appendChild(item);
+      });
+
+      updateQueueSummary();
+      updateStartButton();
+    }
+
+    function subscribeToTask(task) {
+      if (!task.id) return;
+      if (task.eventSource) task.eventSource.close();
+      const source = new EventSource(`/api/tasks/${task.id}/events`);
+      task.eventSource = source;
+      source.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        Object.assign(task, {
+          id: data.id,
+          status: data.status,
+          stage: data.stage,
+          pct: data.pct,
+          eta_seconds: data.eta_seconds,
+          out_dir: data.out_dir,
+          outputs: data.outputs || [],
+          error: data.error,
+        });
+        renderQueue();
+        if (isTerminal(task)) {
+          source.close();
+          task.eventSource = null;
+        }
+      };
+      source.onerror = () => {
+        if (isTerminal(task)) {
+          source.close();
+          task.eventSource = null;
+        }
+      };
+    }
+
+    async function addFiles(fileList) {
+      const incoming = Array.from(fileList || []).filter(Boolean);
+      if (incoming.length === 0) return;
+      incoming.forEach((file) => tasks.push(makeLocalTask(file)));
+      renderQueue();
+    }
+
+    async function startPending() {
+      const pending = tasks.filter((task) => task.status === 'pending' && task.file);
+      if (pending.length === 0) return;
+      startBusy = true;
+      updateStartButton();
+      try {
+        for (const task of pending) {
+          try {
+            task.status = 'uploading';
+            task.stage = 'uploading';
+            task.pct = 0;
+            task.error = null;
+            renderQueue();
+
+            const body = new FormData();
+            body.append('file', task.file);
+            body.append('mode', task.mode);
+            body.append('output_format', task.output_format);
+
+            const res = await fetch('/api/tasks', { method: 'POST', body });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.message || data.detail?.message || 'Upload failed');
+            }
+
+            task.file = null;
+            task.id = data.id;
+            task.status = data.status;
+            task.stage = data.stage;
+            task.pct = data.pct;
+            task.eta_seconds = data.eta_seconds;
+            task.out_dir = data.out_dir;
+            task.outputs = data.outputs || [];
+            task.error = data.error;
+            subscribeToTask(task);
+            renderQueue();
+          } catch (error) {
+            task.status = 'error';
+            task.stage = 'error';
+            task.error = error?.message || 'Upload failed';
+            renderQueue();
+          }
+        }
+      } finally {
+        startBusy = false;
+        updateStartButton();
+      }
+    }
+
+    function openSettings() {
+      settingsModal.classList.add('open');
+      settingsModal.setAttribute('aria-hidden', 'false');
+      outputFormatSelect.value = settings.output_format;
+    }
+
+    function closeSettings() {
+      settingsModal.classList.remove('open');
+      settingsModal.setAttribute('aria-hidden', 'true');
+    }
+
+    function showModelsWarning(missing) {
+      if (!Array.isArray(missing) || missing.length === 0) {
+        modelsWarning.classList.remove('show');
+        modelsWarning.textContent = '';
+        return;
+      }
+      modelsWarning.classList.add('show');
+      modelsWarning.textContent = `missing models: ${missing.join(', ')}. add them to the models folder before starting.`;
+    }
+
+    async function loadModelsWarning() {
+      try {
+        const res = await fetch('/api/models_status');
+        if (!res.ok) return;
+        const data = await res.json();
+        showModelsWarning(data.missing || []);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    fileInput.addEventListener('change', (event) => addFiles(event.target.files));
+    dropzone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      dropzone.classList.add('dragging');
+    });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragging'));
+    dropzone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      dropzone.classList.remove('dragging');
+      addFiles(event.dataTransfer.files);
+    });
+
+    document.querySelectorAll('.mode-card').forEach((card) => {
+      card.addEventListener('click', () => setMode(card.dataset.mode));
+    });
+
+    startButton.addEventListener('click', startPending);
+
+    settingsButton.addEventListener('click', openSettings);
+    settingsCancel.addEventListener('click', closeSettings);
+    settingsSave.addEventListener('click', () => {
+      settings.output_format = outputFormatSelect.value;
+      localStorage.setItem('stemsplat.output_format', settings.output_format);
+      updateOutputSummary();
+      closeSettings();
+    });
+
+    settingsModal.addEventListener('click', (event) => {
+      if (event.target === settingsModal) closeSettings();
+    });
+
+    closeButton.addEventListener('click', async () => {
+      try {
+        await fetch('/shutdown', { method: 'POST', keepalive: true });
+      } catch (error) {
+        console.error(error);
+      }
+      setTimeout(() => {
+        try { window.close(); } catch (_) {}
+        window.location.replace('about:blank');
+      }, 250);
+    });
+
+    updateOutputSummary();
+    setMode(selectedMode);
+    renderQueue();
+    loadModelsWarning();
+  </script>
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":  # pragma: no cover

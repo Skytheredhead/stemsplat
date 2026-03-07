@@ -9,6 +9,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root{ --bg-1:#0F2027; --bg-2:#2C5364; --txt:#E7ECEF; --accent:#8ED8FF; --card:rgba(23,35,41,.55); --border:rgba(255,255,255,.06); }
+    html, body { background-color: #0B1A1F; }
     body{ background: linear-gradient(135deg,#0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); color:var(--txt); font-family:'Nunito Sans',system-ui,sans-serif; }
     @view-transition { navigation: auto; }
     .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
@@ -19,37 +20,45 @@
     .fade-out{ opacity:0; transition: opacity .28s ease; }
     .fade-in{ animation:fade .6s ease both; }
     @keyframes fade{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
-    .bar{ height: 12px; background: rgba(255,255,255,.08); border-radius:999px; overflow:hidden; }
-    .bar>div{ height:100%; width:0%; background:linear-gradient(90deg,#e7eef2,#dfe7ec); transition:width .35s cubic-bezier(.2,.7,.2,1); }
     .fade-shell{ transition: opacity .35s ease; }
     .fade-shell.fade-out{ opacity:0; }
+    .spin{
+      width:18px; height:18px; border-radius:999px;
+      border:3px solid rgba(255,255,255,.14);
+      border-top-color:var(--accent);
+      border-right-color:rgba(142,216,255,.65);
+      box-shadow: 0 0 0 1px rgba(11,26,31,.35) inset;
+      animation:spin 1s linear infinite;
+    }
+    @keyframes spin{ to{ transform:rotate(360deg); } }
   </style>
 </head>
-<body class="min-h-screen flex flex-col items-center justify-center gap-10">
+<body class="min-h-screen flex flex-col items-center justify-center gap-14">
   <div class="noise fixed inset-0 -z-10"></div>
   <div class="shade"></div>
   <div id="installer-shell" class="fade-shell">
     <h1 class="text-4xl md:text-5xl font-light fade-in select-none">stemsplat setup</h1>
-    <div id="card" class="sheen glass w-11/12 max-w-xl px-8 py-6 rounded-2xl flex flex-col gap-4 fade-in">
-    <span id="status">starting…</span>
-    <div class="bar"><div id="bar"></div></div>
-    <div id="note" class="opacity-70 text-sm">this might take a minute (it'll probably take way less)</div>
-    <div id="log" class="text-xs h-4"></div>
-    <div id="error" class="hidden text-red-300 text-sm"></div>
-  </div>
+    <div id="card" class="sheen glass w-11/12 max-w-xl px-8 py-6 rounded-2xl flex flex-col gap-4 fade-in mt-2">
+      <div class="flex items-center gap-3">
+        <span id="status">starting…</span>
+        <div id="spinner" class="spin" aria-hidden="true"></div>
+      </div>
+      <div id="note" class="opacity-70 text-sm">this might take a minute (it'll probably take way less)</div>
+      <div id="error" class="hidden text-red-300 text-sm"></div>
+    </div>
   </div>
   <div id="loading" class="hidden">starting server…</div>
 
   <script>
-    let lastStep = '';
-    let prompted = false;
     let launched = false;
     let pingTimer = null;
-    let promptOverlay = null;
-    const appHost = window.location.hostname || 'localhost';
-    const appProtocol = window.location.protocol || 'http:';
-    const mainOrigin = `${appProtocol}//${appHost}:8000`;
-    const installerOrigin = `${appProtocol}//${appHost}:6060`;
+    let mainAlreadyRunning = false;
+    let downloadPopupOpen = false;
+    let downloadPopupClosed = false;
+    let pendingLaunch = false;
+    const hasInstalledBefore = localStorage.getItem('installedOnce') === '1';
+    const noteOnce = document.getElementById('note');
+    if(hasInstalledBefore && noteOnce){ noteOnce.classList.add('hidden'); }
 
     function startPinging(){
       if (!pingTimer) { pingTimer = setInterval(pingMainServer, 900); }
@@ -58,56 +67,81 @@
     async function poll(){
       const res = await fetch('/progress');
       const data = await res.json();
-      const barEl = document.getElementById('bar');
       const status = document.getElementById('status');
-      const log = document.getElementById('log');
+      const spinner = document.getElementById('spinner');
+      const note = document.getElementById('note');
       const err = document.getElementById('error');
-      if(data.pct >= 0){ barEl.style.width = data.pct + '%'; }
-      status.textContent = data.step;
-      if(data.step && data.step !== lastStep){ log.textContent = data.step; log.classList.remove('opacity-0'); lastStep = data.step; }
-      if(data.step === 'waiting for model choice' && !prompted){ showPrompt(); prompted = true; }
-      if(data.pct === -1){ err.textContent = 'installation failed'; err.classList.remove('hidden'); return; }
+
+      if (status) {
+        status.textContent = data.pct < 100 && data.pct !== -1
+          ? 'installing prerequisites. This may take a minute or two.'
+          : 'checking…';
+      }
+      if(spinner){ spinner.classList.toggle('hidden', data.pct >= 100 || data.pct === -1); }
+      if(data.pct === -1){
+        err.textContent = data.error || 'installation failed';
+        err.classList.remove('hidden');
+        return;
+      }
+      if(data.main_running){
+        mainAlreadyRunning = true;
+      }
+      if (data.pct >= 100) {
+        localStorage.setItem('installedOnce','1');
+        if(note){ note.classList.add('hidden'); }
+      }
+      const missingModels = Array.isArray(data.models_missing) ? data.models_missing : [];
+      if (missingModels.length > 0) {
+        showDownloadPopup();
+      }
       startPinging();
-      if(data.pct >= 100){ waitForServer(); return; }
+      if(data.pct >= 100){
+        if(!downloadPopupOpen || downloadPopupClosed){
+          waitForServer();
+        }else{
+          pendingLaunch = true;
+        }
+        return;
+      }
       setTimeout(poll, 1000);
     }
 
-    function showPrompt(){
-      if (promptOverlay) return;
+    function showDownloadPopup(){
+      if(downloadPopupOpen || downloadPopupClosed) return;
+      downloadPopupOpen = true;
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 grid place-items-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-3 max-w-md w-11/12"><div class="flex items-start justify-between gap-4"><p>models not found! would you like me to download them?</p><button id="prompt-close" class="px-2 py-1 rounded-lg glass" aria-label="close">✕</button></div><div class="flex justify-end gap-2"><button id="skip" class="px-3 py-1 rounded-lg glass">nah i got it</button><button id="dl" class="px-3 py-1 rounded-lg bg-white/90 text-gray-900">yes please</button></div></div>`;
+      overlay.innerHTML = `<div class="sheen glass p-6 rounded-2xl flex flex-col gap-4 max-w-lg w-full">
+        <h2 class="text-2xl font-light">Download Models</h2>
+        <p class="text-sm opacity-80">Download these models and place them in the Stemsplat/Models folder. The download links are also available in the <a class="underline" href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer">Github</a>.</p>
+        <ul class="list-disc list-inside text-sm opacity-90">
+          <li><a class="underline" href="https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true" target="_blank" rel="noopener noreferrer">Mel Band Roformer Vocals</a></li>
+          <li><a class="underline" href="https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true" target="_blank" rel="noopener noreferrer">Mel Band Roformer Instrumental</a></li>
+          <li><a class="underline" href="https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true" target="_blank" rel="noopener noreferrer">Becruily Deux</a></li>
+        </ul>
+        <div class="flex justify-end">
+          <button id="close-models" class="px-4 py-1 rounded-lg bg-white/90 text-gray-900">close</button>
+        </div>
+      </div>`;
       document.body.appendChild(overlay);
-      promptOverlay = overlay;
-
-      const dismiss = () => {
-        if (!overlay.isConnected) return;
+      const closeBtn = overlay.querySelector('#close-models');
+      closeBtn.onclick = () => {
+        downloadPopupOpen = false;
+        downloadPopupClosed = true;
         overlay.remove();
-        promptOverlay = null;
+        if(pendingLaunch){
+          pendingLaunch = false;
+          waitForServer();
+        }
       };
-
-      const sendChoice = (path) => {
-        fetch(path, {method:'POST'}).catch(() => {});
-      };
-
-      overlay.querySelector('#dl').onclick = () => {
-        dismiss();
-        sendChoice('/download_models');
-      };
-      overlay.querySelector('#skip').onclick = () => {
-        dismiss();
-        sendChoice('/skip_models');
-      };
-      overlay.querySelector('#prompt-close').onclick = () => {
-        dismiss();
-        sendChoice('/skip_models');
-      };
+      overlay.tabIndex = 0;
+      overlay.focus();
     }
 
     async function pingMainServer(){
       if (launched) return;
       try{
-        await fetch(`${mainOrigin}/`, {mode:'no-cors'});
+        await fetch('http://localhost:8000/', {mode:'no-cors'});
         await launchApp();
       }catch(_){ }
     }
@@ -125,17 +159,17 @@
       const loading = document.getElementById('loading');
       // start a quick fade-out and cue the intro for the app page
       const shell = document.getElementById('installer-shell');
-      document.body.classList.add('fade-out');
       if(shell){ shell.classList.add('fade-out'); }
       card.style.animation = 'fade .4s ease reverse both';
       loading.classList.remove('hidden');
       // ensure the fade is visible before navigating
       await new Promise(r=>setTimeout(r,260));
       localStorage.setItem('playIntro','1');
-      try { navigator.sendBeacon(`${installerOrigin}/installer_shutdown`); } catch(_) {
-        try { fetch(`${installerOrigin}/installer_shutdown`, { method:'POST', mode:'no-cors', keepalive:true }); } catch(_){}
+      try { navigator.sendBeacon('http://localhost:6060/installer_shutdown'); } catch(_) {
+        try { fetch('http://localhost:6060/installer_shutdown', { method:'POST', mode:'no-cors', keepalive:true }); } catch(_){}
       }
-      location.replace(`${mainOrigin}/`);
+      const target = mainAlreadyRunning ? 'http://localhost:8000/?reopen=1' : 'http://localhost:8000/';
+      location.replace(target);
     }
     startPinging();
     poll();

@@ -1,12 +1,149 @@
-2026-03-06 11:47:02,744 [INFO] stemsplat:158 attempting to close installer ui on port 6060
-2026-03-06 11:47:02,751 [DEBUG] stemsplat:163 installer ui not reachable on http://localhost:6060/installer_shutdown: <urlopen error [Errno 61] Connection refused>
-Started server process [75951]
-Started server process [75951]
-Waiting for application startup.
-Waiting for application startup.
-2026-03-06 11:47:03,227 [INFO] stemsplat:158 attempting to close installer ui on port 6060
-2026-03-06 11:47:03,228 [DEBUG] stemsplat:163 installer ui not reachable on http://localhost:6060/installer_shutdown: <urlopen error [Errno 61] Connection refused>
-Application startup complete.
-Application startup complete.
-Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-03-06 17:57:38,551 [INFO] stemsplat:972 POST /api/tasks -> 200 in 36.7ms
+2026-03-06 17:57:38,561 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 17:58:16,454 [INFO] stemsplat:972 POST /api/tasks -> 200 in 50.7ms
+2026-03-06 17:58:16,486 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 17:58:33,598 [INFO] stemsplat:972 POST /api/tasks -> 200 in 3.4ms
+2026-03-06 17:58:33,616 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:06:51,062 [INFO] stemsplat:972 POST /api/tasks -> 200 in 18.6ms
+2026-03-06 18:06:51,072 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:06:57,630 [INFO] stemsplat:972 POST /api/tasks -> 200 in 2.0ms
+2026-03-06 18:06:57,643 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:07:12,748 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.3ms
+2026-03-06 18:07:12,757 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:07:32,416 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.6ms
+2026-03-06 18:07:32,438 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:07:50,085 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.5ms
+2026-03-06 18:07:50,110 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:07:53,140 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.5ms
+2026-03-06 18:07:53,160 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:07:56,686 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.5ms
+2026-03-06 18:07:56,706 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:08:00,235 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.2ms
+2026-03-06 18:08:00,254 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:08:05,219 [INFO] stemsplat:972 POST /api/tasks -> 200 in 4.1ms
+2026-03-06 18:08:05,258 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:08:08,783 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.1ms
+2026-03-06 18:08:08,803 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 18:08:37,554 [INFO] uvicorn.error:92 Started server process [40686]
+2026-03-06 18:08:37,554 [INFO] uvicorn.error:92 Started server process [40686]
+2026-03-06 18:08:37,554 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:08:37,554 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:08:37,561 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:08:37,561 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:08:37,561 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:08:37,561 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:09:06,608 [INFO] stemsplat:972 GET / -> 200 in 0.2ms
+2026-03-06 18:09:06,608 [INFO] uvicorn.access:483 127.0.0.1:64815 - "GET / HTTP/1.1" 200
+2026-03-06 18:09:06,709 [INFO] stemsplat:972 GET /api/models_status -> 200 in 12.9ms
+2026-03-06 18:09:06,709 [INFO] uvicorn.access:483 127.0.0.1:64815 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 18:09:07,443 [INFO] stemsplat:972 POST /api/tasks -> 200 in 2.0ms
+2026-03-06 18:09:07,443 [INFO] uvicorn.access:483 127.0.0.1:64815 - "POST /api/tasks HTTP/1.1" 200
+2026-03-06 18:09:07,457 [INFO] stemsplat:972 GET /api/tasks/31087426-2677-4f49-abb5-e97e8b487e09/events -> 200 in 1.0ms
+2026-03-06 18:09:07,457 [INFO] uvicorn.access:483 127.0.0.1:64815 - "GET /api/tasks/31087426-2677-4f49-abb5-e97e8b487e09/events HTTP/1.1" 200
+2026-03-06 18:09:27,604 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 18:09:27,605 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.2ms
+2026-03-06 18:09:27,605 [INFO] uvicorn.access:483 127.0.0.1:64818 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 18:20:26,198 [INFO] uvicorn.error:92 Started server process [42251]
+2026-03-06 18:20:26,198 [INFO] uvicorn.error:92 Started server process [42251]
+2026-03-06 18:20:26,198 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:20:26,198 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:20:26,205 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:20:26,205 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:20:26,205 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:20:26,205 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:20:46,747 [INFO] stemsplat:972 GET / -> 200 in 0.2ms
+2026-03-06 18:20:46,747 [INFO] uvicorn.access:483 127.0.0.1:64969 - "GET / HTTP/1.1" 200
+2026-03-06 18:20:46,859 [INFO] stemsplat:972 GET /api/models_status -> 200 in 13.0ms
+2026-03-06 18:20:46,859 [INFO] uvicorn.access:483 127.0.0.1:64969 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 18:20:47,625 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.7ms
+2026-03-06 18:20:47,626 [INFO] uvicorn.access:483 127.0.0.1:64969 - "POST /api/tasks HTTP/1.1" 200
+2026-03-06 18:20:47,640 [INFO] stemsplat:972 GET /api/tasks/1024e809-f9ee-4235-8448-0f8b495be07a/events -> 200 in 0.8ms
+2026-03-06 18:20:47,640 [INFO] uvicorn.access:483 127.0.0.1:64969 - "GET /api/tasks/1024e809-f9ee-4235-8448-0f8b495be07a/events HTTP/1.1" 200
+2026-03-06 18:21:02,189 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 18:21:02,190 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.7ms
+2026-03-06 18:21:02,190 [INFO] uvicorn.access:483 127.0.0.1:64976 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 18:32:58,316 [INFO] uvicorn.error:92 Started server process [44632]
+2026-03-06 18:32:58,316 [INFO] uvicorn.error:92 Started server process [44632]
+2026-03-06 18:32:58,316 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:32:58,316 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:32:58,323 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:32:58,323 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:32:58,323 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:32:58,323 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:33:09,630 [INFO] stemsplat:972 GET / -> 200 in 0.3ms
+2026-03-06 18:33:09,630 [INFO] uvicorn.access:483 127.0.0.1:65198 - "GET / HTTP/1.1" 200
+2026-03-06 18:33:09,724 [INFO] stemsplat:972 GET /api/models_status -> 200 in 11.7ms
+2026-03-06 18:33:09,724 [INFO] uvicorn.access:483 127.0.0.1:65198 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 18:33:43,052 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 18:33:43,052 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.2ms
+2026-03-06 18:33:43,052 [INFO] uvicorn.access:483 127.0.0.1:65208 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 18:33:49,224 [INFO] uvicorn.error:92 Started server process [45059]
+2026-03-06 18:33:49,224 [INFO] uvicorn.error:92 Started server process [45059]
+2026-03-06 18:33:49,224 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:33:49,224 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 18:33:49,232 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:33:49,232 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 18:33:49,232 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:33:49,232 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 18:33:59,450 [INFO] stemsplat:972 GET / -> 200 in 0.3ms
+2026-03-06 18:33:59,450 [INFO] uvicorn.access:483 127.0.0.1:65215 - "GET / HTTP/1.1" 200
+2026-03-06 18:33:59,531 [INFO] stemsplat:972 GET /api/models_status -> 200 in 12.4ms
+2026-03-06 18:33:59,531 [INFO] uvicorn.access:483 127.0.0.1:65215 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 18:34:00,386 [INFO] stemsplat:972 POST /api/tasks -> 200 in 1.5ms
+2026-03-06 18:34:00,392 [INFO] uvicorn.access:483 127.0.0.1:65215 - "POST /api/tasks HTTP/1.1" 200
+2026-03-06 18:34:00,395 [INFO] stemsplat:972 GET /api/tasks/5d016e00-b257-484c-83ce-3346b5319885/events -> 200 in 1.1ms
+2026-03-06 18:34:00,395 [INFO] uvicorn.access:483 127.0.0.1:65215 - "GET /api/tasks/5d016e00-b257-484c-83ce-3346b5319885/events HTTP/1.1" 200
+2026-03-06 18:34:21,751 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 18:34:21,752 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.6ms
+2026-03-06 18:34:21,752 [INFO] uvicorn.access:483 127.0.0.1:65251 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 20:06:14,085 [INFO] uvicorn.error:92 Started server process [49797]
+2026-03-06 20:06:14,085 [INFO] uvicorn.error:92 Started server process [49797]
+2026-03-06 20:06:14,086 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:06:14,086 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:06:14,092 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:06:14,092 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:06:14,092 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 20:06:14,092 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 20:06:28,872 [INFO] stemsplat:972 GET / -> 200 in 0.3ms
+2026-03-06 20:06:28,872 [INFO] uvicorn.access:483 127.0.0.1:51732 - "GET / HTTP/1.1" 200
+2026-03-06 20:06:29,039 [INFO] stemsplat:972 GET /api/models_status -> 200 in 14.4ms
+2026-03-06 20:06:29,039 [INFO] uvicorn.access:483 127.0.0.1:51732 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 20:06:40,959 [INFO] stemsplat:972 GET / -> 200 in 0.2ms
+2026-03-06 20:06:40,959 [INFO] uvicorn.access:483 127.0.0.1:51734 - "GET / HTTP/1.1" 200
+2026-03-06 20:06:41,075 [INFO] stemsplat:972 GET /api/models_status -> 200 in 0.4ms
+2026-03-06 20:06:41,075 [INFO] uvicorn.access:483 127.0.0.1:51734 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 20:07:04,506 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 20:07:04,507 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.4ms
+2026-03-06 20:07:04,507 [INFO] uvicorn.access:483 127.0.0.1:51740 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 20:07:11,788 [INFO] uvicorn.error:92 Started server process [50397]
+2026-03-06 20:07:11,788 [INFO] uvicorn.error:92 Started server process [50397]
+2026-03-06 20:07:11,788 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:07:11,788 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:07:11,794 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:07:11,794 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:07:11,795 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 20:07:11,795 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 20:07:28,386 [INFO] stemsplat:972 GET / -> 200 in 0.3ms
+2026-03-06 20:07:28,386 [INFO] uvicorn.access:483 127.0.0.1:51755 - "GET / HTTP/1.1" 200
+2026-03-06 20:07:28,525 [INFO] stemsplat:972 GET /api/models_status -> 200 in 15.2ms
+2026-03-06 20:07:28,525 [INFO] uvicorn.access:483 127.0.0.1:51755 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 20:07:45,647 [INFO] stemsplat:972 POST /api/tasks -> 200 in 12.0ms
+2026-03-06 20:07:45,656 [INFO] httpx:1025 HTTP Request: POST http://testserver/api/tasks "HTTP/1.1 200 OK"
+2026-03-06 20:07:56,288 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 20:07:56,289 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.2ms
+2026-03-06 20:07:56,289 [INFO] uvicorn.access:483 127.0.0.1:51767 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 20:44:43,103 [INFO] uvicorn.error:92 Started server process [54213]
+2026-03-06 20:44:43,103 [INFO] uvicorn.error:92 Started server process [54213]
+2026-03-06 20:44:43,103 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:44:43,103 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:44:43,110 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:44:43,110 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:44:43,110 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 20:44:43,110 [INFO] uvicorn.error:224 Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-03-06 20:45:07,400 [INFO] stemsplat:972 GET / -> 200 in 0.4ms
+2026-03-06 20:45:07,400 [INFO] uvicorn.access:483 127.0.0.1:53706 - "GET / HTTP/1.1" 200
+2026-03-06 20:45:07,523 [INFO] stemsplat:972 GET /api/models_status -> 200 in 12.8ms
+2026-03-06 20:45:07,523 [INFO] uvicorn.access:483 127.0.0.1:53706 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 20:45:25,780 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-06 20:45:25,781 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.0ms
+2026-03-06 20:45:25,781 [INFO] uvicorn.access:483 127.0.0.1:53722 - "POST /shutdown HTTP/1.1" 200
