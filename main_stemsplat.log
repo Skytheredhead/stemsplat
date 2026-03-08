@@ -147,3 +147,25 @@
 2026-03-06 20:45:25,780 [WARNING] stemsplat:1123 shutdown requested; exiting process
 2026-03-06 20:45:25,781 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.0ms
 2026-03-06 20:45:25,781 [INFO] uvicorn.access:483 127.0.0.1:53722 - "POST /shutdown HTTP/1.1" 200
+2026-03-06 20:59:59,101 [INFO] uvicorn.error:92 Started server process [62461]
+2026-03-06 20:59:59,101 [INFO] uvicorn.error:92 Started server process [62461]
+2026-03-06 20:59:59,101 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:59:59,101 [INFO] uvicorn.error:48 Waiting for application startup.
+2026-03-06 20:59:59,107 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:59:59,107 [INFO] uvicorn.error:62 Application startup complete.
+2026-03-06 20:59:59,107 [INFO] uvicorn.error:224 Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-03-06 20:59:59,107 [INFO] uvicorn.error:224 Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-03-06 20:59:59,145 [INFO] stemsplat:972 GET / -> 200 in 0.3ms
+2026-03-06 20:59:59,146 [INFO] uvicorn.access:483 127.0.0.1:54911 - "GET / HTTP/1.1" 200
+2026-03-06 20:59:59,582 [INFO] stemsplat:972 GET / -> 200 in 1.2ms
+2026-03-06 20:59:59,582 [INFO] uvicorn.access:483 127.0.0.1:54913 - "GET / HTTP/1.1" 200
+2026-03-06 20:59:59,854 [INFO] stemsplat:972 GET / -> 200 in 0.2ms
+2026-03-06 20:59:59,854 [INFO] uvicorn.access:483 127.0.0.1:54915 - "GET / HTTP/1.1" 200
+2026-03-06 20:59:59,971 [INFO] stemsplat:972 GET /api/models_status -> 200 in 20.6ms
+2026-03-06 20:59:59,971 [INFO] uvicorn.access:483 127.0.0.1:54915 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 21:00:00,150 [INFO] stemsplat:972 GET / -> 200 in 0.6ms
+2026-03-06 21:00:00,150 [INFO] uvicorn.access:483 127.0.0.1:54915 - "GET / HTTP/1.1" 200
+2026-03-06 21:00:00,159 [INFO] stemsplat:972 GET /api/models_status -> 200 in 0.8ms
+2026-03-06 21:00:00,159 [INFO] uvicorn.access:483 127.0.0.1:54915 - "GET /api/models_status HTTP/1.1" 200
+2026-03-06 21:00:06,440 [INFO] stemsplat:972 GET / -> 200 in 0.2ms
+2026-03-06 21:00:06,440 [INFO] uvicorn.access:483 127.0.0.1:54916 - "GET / HTTP/1.1" 200

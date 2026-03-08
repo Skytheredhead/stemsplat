@@ -26,4 +26,16 @@ EOF
 fi
 
 cd "${SCRIPT_DIR}"
-python3 install.py
+
+if [[ -x "${SCRIPT_DIR}/venv/bin/python" ]]; then
+  PYTHON_BIN="${SCRIPT_DIR}/venv/bin/python"
+elif [[ -x "$(command -v python3)" ]]; then
+  PYTHON_BIN="$(command -v python3)"
+elif [[ -x "$(command -v python)" ]]; then
+  PYTHON_BIN="$(command -v python)"
+else
+  echo "No Python interpreter found." >&2
+  exit 1
+fi
+
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/install.py"

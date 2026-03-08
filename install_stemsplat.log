@@ -61,3 +61,109 @@ FileNotFoundError: [Errno 2] No such file or directory: 'venv/bin/pip'
 2026-03-06 14:20:38,483 [DEBUG] stemsplat.install:147 waiting for installer routine to finish before shutting ui
 2026-03-06 14:20:38,483 [INFO] stemsplat.install:151 installer routine finished; shutting down installer ui
 2026-03-06 14:20:38,539 [DEBUG] stemsplat.install:155 installer ui closed; main app launch handled by installer page
+2026-03-06 20:57:11,940 [INFO] stemsplat.install:247 install routine starting
+2026-03-06 20:57:11,941 [INFO] stemsplat.install:253 virtual environment already present
+2026-03-06 20:57:11,941 [INFO] stemsplat.install:273 running step 1/16: upgrading pip
+2026-03-06 20:57:11,942 [ERROR] stemsplat.install:294 installer crashed
+Traceback (most recent call last):
+  File "/Users/skylarenns/Desktop/stemsplat/install.py", line 275, in install
+    subprocess.check_call(cmd)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 414, in check_call
+    retcode = call(*popenargs, **kwargs)
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 395, in call
+    with Popen(*popenargs, **kwargs) as p:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py", line 1972, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: 'venv/bin/pip'
+2026-03-06 20:57:11,943 [INFO] stemsplat.install:143 installer ui listening on http://localhost:6060
+2026-03-06 20:57:12,045 [DEBUG] stemsplat.install:147 waiting for installer routine to finish before shutting ui
+2026-03-06 20:57:12,045 [INFO] stemsplat.install:151 installer routine finished; shutting down installer ui
+2026-03-06 20:57:12,125 [DEBUG] stemsplat.install:155 installer ui closed; main app launch handled by installer page
+2026-03-06 20:59:14,856 [INFO] stemsplat.install:262 install routine starting
+2026-03-06 20:59:14,856 [INFO] stemsplat.install:268 virtual environment already present
+2026-03-06 20:59:14,856 [INFO] stemsplat.install:287 running step 1/17: preparing virtual environment
+2026-03-06 20:59:14,856 [INFO] stemsplat.install:152 bootstrapping pip in virtual environment
+2026-03-06 20:59:14,858 [INFO] stemsplat.install:170 installer ui listening on http://localhost:6060
+2026-03-06 20:59:14,959 [DEBUG] stemsplat.install:174 waiting for installer routine to finish before shutting ui
+2026-03-06 20:59:15,031 [DEBUG] stemsplat.install:76 serving installer ui /
+2026-03-06 20:59:15,033 [INFO] stemsplat.install:64 HTTP "GET / HTTP/1.1" 304 -
+2026-03-06 20:59:15,203 [DEBUG] stemsplat.install:68 progress requested: {'pct': 0, 'step': 'preparing virtual environment', 'models_missing': []}
+2026-03-06 20:59:15,203 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:15,621 [INFO] stemsplat.install:287 running step 2/17: upgrading pip
+2026-03-06 20:59:16,213 [DEBUG] stemsplat.install:68 progress requested: {'pct': 5, 'step': 'upgrading pip', 'models_missing': []}
+2026-03-06 20:59:16,214 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:16,489 [INFO] stemsplat.install:287 running step 3/17: installing torch
+2026-03-06 20:59:16,689 [INFO] stemsplat.install:287 running step 4/17: installing fastapi
+2026-03-06 20:59:16,899 [INFO] stemsplat.install:287 running step 5/17: installing uvicorn[standard]
+2026-03-06 20:59:17,109 [INFO] stemsplat.install:287 running step 6/17: installing python-multipart
+2026-03-06 20:59:17,220 [DEBUG] stemsplat.install:68 progress requested: {'pct': 29, 'step': 'installing python-multipart', 'models_missing': []}
+2026-03-06 20:59:17,220 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:17,329 [INFO] stemsplat.install:287 running step 7/17: installing numpy
+2026-03-06 20:59:17,551 [INFO] stemsplat.install:287 running step 8/17: installing pyyaml
+2026-03-06 20:59:17,771 [INFO] stemsplat.install:287 running step 9/17: installing soundfile
+2026-03-06 20:59:17,784 [DEBUG] stemsplat.install:76 serving installer ui /
+2026-03-06 20:59:17,784 [INFO] stemsplat.install:64 HTTP "GET / HTTP/1.1" 200 -
+2026-03-06 20:59:17,994 [INFO] stemsplat.install:287 running step 10/17: installing einops
+2026-03-06 20:59:18,210 [INFO] stemsplat.install:287 running step 11/17: installing rotary_embedding_torch
+2026-03-06 20:59:18,228 [DEBUG] stemsplat.install:68 progress requested: {'pct': 58, 'step': 'installing rotary_embedding_torch', 'models_missing': []}
+2026-03-06 20:59:18,228 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:18,442 [INFO] stemsplat.install:287 running step 12/17: installing packaging
+2026-03-06 20:59:18,650 [INFO] stemsplat.install:287 running step 13/17: installing beartype>=0.17
+2026-03-06 20:59:18,850 [INFO] stemsplat.install:287 running step 14/17: installing librosa
+2026-03-06 20:59:19,061 [INFO] stemsplat.install:287 running step 15/17: installing imageio-ffmpeg
+2026-03-06 20:59:19,232 [DEBUG] stemsplat.install:68 progress requested: {'pct': 82, 'step': 'installing imageio-ffmpeg', 'models_missing': []}
+2026-03-06 20:59:19,232 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:19,273 [INFO] stemsplat.install:287 running step 16/17: installing certifi
+2026-03-06 20:59:19,476 [INFO] stemsplat.install:287 running step 17/17: installing mutagen
+2026-03-06 20:59:19,670 [INFO] stemsplat.install:314 prerequisites satisfied; launching server
+2026-03-06 20:59:19,670 [INFO] stemsplat.install:233 starting main server with uvicorn on port 8000
+2026-03-06 20:59:19,672 [DEBUG] stemsplat.install:243 main server started; installer page will navigate
+2026-03-06 20:59:19,672 [INFO] stemsplat.install:178 installer routine finished; shutting down installer ui
+2026-03-06 20:59:19,733 [DEBUG] stemsplat.install:182 installer ui closed; main app launch handled by installer page
+2026-03-06 20:59:54,002 [INFO] stemsplat.install:267 install routine starting
+2026-03-06 20:59:54,002 [INFO] stemsplat.install:273 virtual environment already present
+2026-03-06 20:59:54,003 [INFO] stemsplat.install:292 running step 1/17: preparing virtual environment
+2026-03-06 20:59:54,003 [INFO] stemsplat.install:152 bootstrapping pip in virtual environment
+2026-03-06 20:59:54,005 [INFO] stemsplat.install:170 installer ui listening on http://localhost:6060
+2026-03-06 20:59:54,084 [DEBUG] stemsplat.install:174 waiting for installer routine to finish before shutting ui
+2026-03-06 20:59:54,175 [DEBUG] stemsplat.install:68 progress requested: {'pct': 0, 'step': 'preparing virtual environment', 'models_missing': []}
+2026-03-06 20:59:54,175 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:54,675 [INFO] stemsplat.install:292 running step 2/17: upgrading pip
+2026-03-06 20:59:54,975 [INFO] stemsplat.install:292 running step 3/17: installing torch
+2026-03-06 20:59:55,177 [INFO] stemsplat.install:292 running step 4/17: installing fastapi
+2026-03-06 20:59:55,185 [DEBUG] stemsplat.install:68 progress requested: {'pct': 17, 'step': 'installing fastapi', 'models_missing': []}
+2026-03-06 20:59:55,185 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:55,383 [INFO] stemsplat.install:292 running step 5/17: installing uvicorn[standard]
+2026-03-06 20:59:55,587 [INFO] stemsplat.install:292 running step 6/17: installing python-multipart
+2026-03-06 20:59:55,784 [INFO] stemsplat.install:292 running step 7/17: installing numpy
+2026-03-06 20:59:55,977 [INFO] stemsplat.install:292 running step 8/17: installing pyyaml
+2026-03-06 20:59:56,179 [INFO] stemsplat.install:292 running step 9/17: installing soundfile
+2026-03-06 20:59:56,190 [DEBUG] stemsplat.install:68 progress requested: {'pct': 47, 'step': 'installing soundfile', 'models_missing': []}
+2026-03-06 20:59:56,190 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:56,395 [INFO] stemsplat.install:292 running step 10/17: installing einops
+2026-03-06 20:59:56,595 [INFO] stemsplat.install:292 running step 11/17: installing rotary_embedding_torch
+2026-03-06 20:59:56,797 [INFO] stemsplat.install:292 running step 12/17: installing packaging
+2026-03-06 20:59:56,995 [INFO] stemsplat.install:292 running step 13/17: installing beartype>=0.17
+2026-03-06 20:59:57,195 [DEBUG] stemsplat.install:68 progress requested: {'pct': 70, 'step': 'installing beartype>=0.17', 'models_missing': []}
+2026-03-06 20:59:57,195 [INFO] stemsplat.install:64 HTTP "GET /progress HTTP/1.1" 200 -
+2026-03-06 20:59:57,195 [INFO] stemsplat.install:292 running step 14/17: installing librosa
+2026-03-06 20:59:57,410 [INFO] stemsplat.install:292 running step 15/17: installing imageio-ffmpeg
+2026-03-06 20:59:57,610 [INFO] stemsplat.install:292 running step 16/17: installing certifi
+2026-03-06 20:59:57,811 [INFO] stemsplat.install:292 running step 17/17: installing mutagen
+2026-03-06 20:59:58,011 [INFO] stemsplat.install:319 prerequisites satisfied; launching server
+2026-03-06 20:59:58,012 [INFO] stemsplat.install:233 starting main server with uvicorn on port 8000
+2026-03-06 20:59:58,013 [DEBUG] stemsplat.install:248 main server started; installer page will navigate
+2026-03-06 20:59:58,013 [INFO] stemsplat.install:178 installer routine finished; shutting down installer ui
+2026-03-06 20:59:58,197 [DEBUG] stemsplat.install:182 installer ui closed; main app launch handled by installer page

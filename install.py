@@ -124,7 +124,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
 def _installed():
-    return Path("venv").exists()
+    return python_path().exists()
+
+def pip_path():
+    if os.name == 'nt':
+        return BASE_DIR / 'venv' / 'Scripts' / 'pip'
+    else:
+        return BASE_DIR / 'venv' / 'bin' / 'pip'
+
+def python_path():
+    if os.name == 'nt':
+        return BASE_DIR / 'venv' / 'Scripts' / 'python'
+    else:
+        return BASE_DIR / 'venv' / 'bin' / 'python'
+
+
+def pip_cmd(*args: str) -> list[str]:
+    return [str(python_path()), "-m", "pip", *args]
+
+
+def _ensure_venv() -> None:
+    if not _installed():
+        logger.info("creating virtual environment at %s", BASE_DIR / "venv")
+        subprocess.check_call([sys.executable, "-m", "venv", str(BASE_DIR / "venv")], cwd=BASE_DIR)
+    if not python_path().exists():
+        raise FileNotFoundError(f"Virtual environment python missing at {python_path()}")
+    logger.info("bootstrapping pip in virtual environment")
+    subprocess.check_call([str(python_path()), "-m", "ensurepip", "--upgrade"], cwd=BASE_DIR)
+
 
 def run_server():
     handler = Handler
@@ -161,18 +188,6 @@ def run_server():
         logger.error("failed to bind install server on port %s: %s", PORT, exc)
         print(f"Port {PORT} is already in use. Please close the other process or change PORT.")
         sys.exit(1)
-
-def pip_path():
-    if os.name == 'nt':
-        return Path('venv') / 'Scripts' / 'pip'
-    else:
-        return Path('venv') / 'bin' / 'pip'
-
-def python_path():
-    if os.name == 'nt':
-        return Path('venv') / 'Scripts' / 'python'
-    else:
-        return Path('venv') / 'bin' / 'python'
 
 
 def _port_available(port: int) -> bool:
@@ -223,7 +238,12 @@ def _start_server():
         shutdown_event.set()
         return
     subprocess.Popen(
-        [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
+        [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)],
+        cwd=BASE_DIR,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     logger.debug("main server started; installer page will navigate")
 
@@ -252,18 +272,17 @@ def install():
         if _installed():
             logger.info("virtual environment already present")
         steps = []
-        if not _installed():
-            steps.append(('creating virtual environment', [sys.executable, '-m', 'venv', 'venv']))
-        steps.append(('upgrading pip', [str(pip_path()), 'install', '--upgrade', 'pip']))
+        steps.append(('preparing virtual environment', None))
+        steps.append(('upgrading pip', pip_cmd('install', '--upgrade', 'pip')))
         reqs = []
-        req_file = Path('requirements.txt')
+        req_file = BASE_DIR / 'requirements.txt'
         if req_file.exists():
             for line in req_file.read_text().splitlines():
                 line = line.strip()
                 if line and not line.startswith('#'):
                     reqs.append(line)
         steps.extend([
-            (f'installing {pkg}', [str(pip_path()), 'install', pkg]) for pkg in reqs
+            (f'installing {pkg}', pip_cmd('install', pkg)) for pkg in reqs
         ])
 
         total = max(1, len(steps))
@@ -272,10 +291,19 @@ def install():
             progress['pct'] = int((i-1)/total*100)
             logger.info("running step %s/%s: %s", i, total, msg)
             try:
-                subprocess.check_call(cmd)
+                if msg == 'preparing virtual environment':
+                    _ensure_venv()
+                else:
+                    subprocess.check_call(cmd, cwd=BASE_DIR)
             except subprocess.CalledProcessError as exc:
                 logger.exception("error during %s", msg)
                 progress['step'] = f'error during {msg}: {exc}'
+                progress['pct'] = -1
+                return
+            except FileNotFoundError as exc:
+                logger.exception("missing executable during %s", msg)
+                progress['step'] = f'error during {msg}: {exc}'
+                progress['error'] = str(exc)
                 progress['pct'] = -1
                 return
 
