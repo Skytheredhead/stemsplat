@@ -308,3 +308,6 @@
 2026-03-08 23:07:38,690 [INFO] uvicorn.access:483 127.0.0.1:53213 - "GET /api/models_status HTTP/1.1" 200
 2026-03-08 23:07:48,973 [INFO] stemsplat:972 POST /api/tasks/ecfbc146-aec2-4f4c-b278-25029e867210/reveal -> 200 in 15.9ms
 2026-03-08 23:07:48,973 [INFO] uvicorn.access:483 127.0.0.1:53185 - "POST /api/tasks/ecfbc146-aec2-4f4c-b278-25029e867210/reveal HTTP/1.1" 200
+2026-03-09 09:49:03,118 [WARNING] stemsplat:1123 shutdown requested; exiting process
+2026-03-09 09:49:03,120 [INFO] stemsplat:972 POST /shutdown -> 200 in 1.9ms
+2026-03-09 09:49:03,120 [INFO] uvicorn.access:483 127.0.0.1:56411 - "POST /shutdown HTTP/1.1" 200
