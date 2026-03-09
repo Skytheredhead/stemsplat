@@ -152,6 +152,8 @@ SUPPORTED_AUDIO_SUFFIXES = {
     ".opus",
 }
 OVERLAP_RATIO = 0.12
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+RUNTIME_CLEANUP_MAX_AGE_SEC = 24 * 60 * 60
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -214,7 +216,8 @@ logging.getLogger("python_multipart").setLevel(logging.INFO)
 for uvicorn_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     uvicorn_logger = logging.getLogger(uvicorn_name)
     uvicorn_logger.setLevel(logging.INFO)
-    uvicorn_logger.addHandler(file_handler)
+    if file_handler not in uvicorn_logger.handlers:
+        uvicorn_logger.addHandler(file_handler)
 
 for path in (MODEL_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, OUTPUT_ROOT):
     _ensure_dir(path)
@@ -227,6 +230,54 @@ def _close_installer_ui(port: int = 6060) -> None:
             logger.debug("closed installer ui on %s", url)
     except Exception:
         logger.debug("installer ui not reachable at %s", url)
+
+
+def _cleanup_old_runtime_entries(path: Path, max_age_seconds: int = RUNTIME_CLEANUP_MAX_AGE_SEC) -> None:
+    cutoff = time.time() - max_age_seconds
+    for candidate in path.iterdir():
+        try:
+            if candidate.stat().st_mtime >= cutoff:
+                continue
+            _cleanup_path(candidate)
+        except Exception:
+            logger.debug("failed to cleanup runtime entry %s", candidate, exc_info=True)
+
+
+def _required_models_for_mode(mode: str) -> list[str]:
+    if mode == "vocals":
+        return ["vocals"]
+    if mode == "instrumental":
+        return ["instrumental"]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode == "both_separate":
+        return ["vocals", "instrumental"]
+    return []
+
+
+def _model_file_exists(filename: str) -> bool:
+    search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+    search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
+    for base_dir in search_dirs:
+        for search_name in search_names:
+            if _locate_case_insensitive(base_dir / search_name):
+                return True
+    return False
+
+
+def _find_missing_models_for_mode(mode: str) -> list[str]:
+    missing: list[str] = []
+    for key in _required_models_for_mode(mode):
+        if not _model_file_exists(MODEL_SPECS[key].filename):
+            missing.append(key)
+    return missing
+
+
+def _validate_models_for_mode(mode: str) -> None:
+    missing = _find_missing_models_for_mode(mode)
+    if missing:
+        joined = ", ".join(missing)
+        raise AppError(ErrorCode.MODEL_MISSING, f"Missing required model files: {joined}.")
 
 
 def _port_available(port: int) -> bool:
@@ -445,6 +496,7 @@ def _export_stem(
             return candidate
         except Exception as exc:
             last_error = exc
+            _cleanup_path(candidate)
             logger.warning(
                 "export failed for %s with include_cover=%s: %s",
                 candidate,
@@ -814,14 +866,15 @@ def _build_task_payload(
 
 
 def _create_output_dir(filename: str) -> Path:
-    base_name = _safe_stem(filename)
-    return _ensure_dir(ensure_unique_dir(OUTPUT_ROOT / base_name))
+    _ = filename
+    return _ensure_dir(OUTPUT_ROOT)
 
 
 def _process_task(task_id: str) -> None:
     work_dir: Path | None = None
     output_dir: Path | None = None
     manager: ModelManager | None = None
+    written_outputs: list[Path] = []
     try:
         task = _require_task(task_id)
         if task["stop_event"].is_set():
@@ -916,22 +969,23 @@ def _process_task(task_id: str) -> None:
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
             final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{export_plan.suffix}"
             exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
+            written_outputs.append(exported)
             exported_files.append(exported.name)
             _set_task_progress(task_id, f"Exporting {label}", _map_fraction(92, 99, index / max(1, total_exports)))
 
         _mark_task_done(task_id, output_dir, exported_files)
     except TaskStopped:
-        if output_dir is not None:
-            _cleanup_path(output_dir)
+        for output_path in written_outputs:
+            _cleanup_path(output_path)
         _mark_task_stopped(task_id)
     except AppError as exc:
-        if output_dir is not None:
-            _cleanup_path(output_dir)
+        for output_path in written_outputs:
+            _cleanup_path(output_path)
         _mark_task_error(task_id, f"{exc.code}: {exc.message}")
     except Exception as exc:  # pragma: no cover - safety net
         logger.exception("task %s crashed", task_id)
-        if output_dir is not None:
-            _cleanup_path(output_dir)
+        for output_path in written_outputs:
+            _cleanup_path(output_path)
         _mark_task_error(task_id, f"{ErrorCode.SEPARATION_FAILED}: {exc}")
     finally:
         if manager is not None:
@@ -956,6 +1010,8 @@ threading.Thread(target=_task_worker, daemon=True).start()
 @app.on_event("startup")
 async def _startup_cleanup() -> None:
     _close_installer_ui()
+    _cleanup_old_runtime_entries(WORK_DIR)
+    _cleanup_old_runtime_entries(UPLOAD_DIR)
 
 
 @app.exception_handler(AppError)
@@ -975,13 +1031,7 @@ async def _log_requests(request: Request, call_next):
 
 @app.get("/api/models_status")
 async def models_status() -> dict[str, list[str]]:
-    missing = []
-    manager = ModelManager()
-    for key, spec in MODEL_SPECS.items():
-        try:
-            manager._resolve_model_path(spec.filename)
-        except AppError:
-            missing.append(key)
+    missing = sorted({item for mode in MODE_CHOICES for item in _find_missing_models_for_mode(mode)})
     return {"missing": missing}
 
 
@@ -995,25 +1045,37 @@ async def create_task(
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.").to_http()
     if output_format not in OUTPUT_FORMAT_CHOICES:
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
+    _validate_models_for_mode(mode)
 
     original_name = Path(file.filename or "upload").name
     suffix = Path(original_name).suffix.lower()
+    content_type = (file.content_type or "").lower()
     if suffix and suffix not in SUPPORTED_AUDIO_SUFFIXES:
         raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}").to_http()
+    if not suffix and not content_type.startswith("audio/"):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio file.").to_http()
 
     task_id = str(uuid.uuid4())
     stored_name = f"{task_id}_{original_name}"
     source_path = UPLOAD_DIR / stored_name
+    bytes_written = 0
     try:
         with source_path.open("wb") as handle:
             while True:
-                chunk = await file.read(1024 * 1024)
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
                 if not chunk:
                     break
                 handle.write(chunk)
-        await file.close()
+                bytes_written += len(chunk)
     except Exception as exc:
+        _cleanup_path(source_path)
         raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}").to_http() from exc
+    finally:
+        with contextlib.suppress(Exception):
+            await file.close()
+    if bytes_written <= 0:
+        _cleanup_path(source_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is empty.").to_http()
 
     payload = _build_task_payload(
         task_id=task_id,
@@ -1034,6 +1096,7 @@ async def task_events(task_id: str):
 
     async def _event_stream():
         last_version = -1
+        last_ping_at = time.time()
         while True:
             with tasks_lock:
                 task = tasks.get(task_id)
@@ -1043,8 +1106,12 @@ async def task_events(task_id: str):
             if snapshot["version"] != last_version:
                 yield f"data: {json.dumps(snapshot)}\n\n"
                 last_version = snapshot["version"]
+                last_ping_at = time.time()
                 if snapshot["status"] in TERMINAL_STATUSES:
                     break
+            elif time.time() - last_ping_at >= 10:
+                yield ": ping\n\n"
+                last_ping_at = time.time()
             await asyncio.sleep(0.35)
 
     return StreamingResponse(
@@ -1067,6 +1134,7 @@ async def retry_task(task_id: str):
     source_path = Path(old_task["source_path"])
     if not source_path.exists():
         raise AppError(ErrorCode.INVALID_REQUEST, "Original upload is missing; re-add the file.").to_http()
+    _validate_models_for_mode(old_task["mode"])
 
     new_id = str(uuid.uuid4())
     payload = _build_task_payload(
@@ -1090,19 +1158,30 @@ async def reveal_output(task_id: str):
         raise AppError(ErrorCode.INVALID_REQUEST, "Output is not ready.").to_http(409)
     out_path = Path(out_dir)
     if not out_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "Output folder is missing.").to_http(404)
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output location is missing.").to_http(404)
+    outputs = [out_path / str(name) for name in (task.get("outputs") or [])]
+    existing_outputs = [path for path in outputs if path.exists()]
+    if outputs and not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output files are missing.").to_http(404)
+    single_output = existing_outputs[0] if len(existing_outputs) == 1 else None
 
     try:
         if sys.platform.startswith("darwin"):
-            subprocess.Popen(["open", str(out_path)])
+            if single_output is not None:
+                subprocess.Popen(["open", "-R", str(single_output)])
+            else:
+                subprocess.Popen(["open", str(out_path)])
         elif sys.platform.startswith("win"):
-            os.startfile(str(out_path))  # type: ignore[attr-defined]
+            if single_output is not None:
+                subprocess.Popen(["explorer", "/select,", str(single_output)])
+            else:
+                os.startfile(str(out_path))  # type: ignore[attr-defined]
         else:
-            subprocess.Popen(["xdg-open", str(out_path)])
+            subprocess.Popen(["xdg-open", str(single_output.parent if single_output is not None else out_path)])
     except Exception as exc:
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open output folder: {exc}").to_http(500) from exc
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not reveal output: {exc}").to_http(500) from exc
 
-    return {"status": "opened", "path": str(out_path)}
+    return {"status": "opened", "path": str(single_output or out_path)}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1162,6 +1241,7 @@ INDEX_HTML = """<!DOCTYPE html>
       --text: #E7ECEF;
       --muted: #B8C4CC;
       --accent: #8ED8FF;
+      --accent-strong: #b5ffd8;
       --accent-soft: #96c5d6;
       --icon: #9BB6C2;
       --card: rgba(23, 35, 41, 0.55);
@@ -1201,6 +1281,57 @@ INDEX_HTML = """<!DOCTYPE html>
         repeating-linear-gradient(90deg, rgba(0,0,0,0.024) 0 1px, transparent 1px 2px);
       opacity: .14;
       mix-blend-mode: soft-light;
+    }
+
+    @keyframes fadeUpIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-in {
+      opacity: 0;
+      animation: fadeUpIn 0.55s ease forwards;
+    }
+
+    .delay-1 { animation-delay: 0.04s; }
+    .delay-2 { animation-delay: 0.12s; }
+    .delay-3 { animation-delay: 0.2s; }
+    .delay-4 { animation-delay: 0.28s; }
+
+    @keyframes overlayBlurIn {
+      from {
+        backdrop-filter: blur(0px);
+        -webkit-backdrop-filter: blur(0px);
+        background-color: rgba(4, 10, 13, 0);
+      }
+      to {
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        background-color: rgba(4, 10, 13, 0.56);
+      }
+    }
+
+    @keyframes overlayBlurOut {
+      from {
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        background-color: rgba(4, 10, 13, 0.56);
+      }
+      to {
+        backdrop-filter: blur(0px);
+        -webkit-backdrop-filter: blur(0px);
+        background-color: rgba(4, 10, 13, 0);
+      }
+    }
+
+    @keyframes settingsCardIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes settingsCardOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(6px) scale(0.98); }
     }
 
     button, input, select {
@@ -1289,6 +1420,11 @@ INDEX_HTML = """<!DOCTYPE html>
       text-align: center;
       cursor: pointer;
       transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .dropzone:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(0,0,0,.32);
     }
 
     .dropzone.dragging {
@@ -1680,11 +1816,25 @@ INDEX_HTML = """<!DOCTYPE html>
 
     .modal-shell.open {
       display: grid;
+      animation: overlayBlurIn .28s ease both;
+    }
+
+    .modal-shell.closing {
+      display: grid;
+      animation: overlayBlurOut .18s ease both;
     }
 
     .modal {
       width: min(460px, 100%);
       padding: 24px;
+    }
+
+    .settings-card-in {
+      animation: settingsCardIn .28s cubic-bezier(.2,.7,.2,1) both;
+    }
+
+    .settings-card-out {
+      animation: settingsCardOut .18s ease both;
     }
 
     .modal h3 {
@@ -1763,10 +1913,10 @@ INDEX_HTML = """<!DOCTYPE html>
   <button id="close-button" class="close-button" type="button" aria-label="Quit">×</button>
 
   <main class="shell">
-    <h1 class="title">stemsplat</h1>
+    <h1 class="title fade-in delay-1">stemsplat</h1>
 
     <section class="controls">
-      <label id="dropzone" class="dropzone glass" for="file-input">
+      <label id="dropzone" class="dropzone glass fade-in delay-2" for="file-input" role="button" tabindex="0">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z"></path>
         </svg>
@@ -1778,7 +1928,7 @@ INDEX_HTML = """<!DOCTYPE html>
       </label>
 
       <div class="controls-side">
-        <section class="split-card glass">
+        <section class="split-card glass fade-in delay-3">
           <div class="split-head">
             <button id="settings-button" class="icon-button" type="button" aria-label="Open settings">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1821,12 +1971,12 @@ INDEX_HTML = """<!DOCTYPE html>
 
         </section>
 
-        <button id="start-button" class="start-button glass-light" type="button" disabled>start</button>
+        <button id="start-button" class="start-button glass-light fade-in delay-4" type="button" disabled>start</button>
         <div id="models-warning" class="warning"></div>
       </div>
     </section>
 
-    <section id="queue-panel" class="queue-panel">
+    <section id="queue-panel" class="queue-panel fade-in delay-4">
       <div id="empty-state" class="empty">nothing queued yet.</div>
       <div id="queue" class="queue-list"></div>
     </section>
@@ -1884,6 +2034,7 @@ INDEX_HTML = """<!DOCTYPE html>
     const outputFormatSelect = document.getElementById('output-format');
     const closeButton = document.getElementById('close-button');
     const modelsWarning = document.getElementById('models-warning');
+    const settingsCard = settingsModal.querySelector('.modal');
 
     const settings = {
       output_format: localStorage.getItem('stemsplat.output_format') || 'same_as_input',
@@ -1892,6 +2043,26 @@ INDEX_HTML = """<!DOCTYPE html>
     let selectedMode = 'vocals';
     let tasks = [];
     let startBusy = false;
+    let settingsCloseTimer = null;
+    let missingModels = [];
+
+    function missingForMode(mode) {
+      if (mode === 'vocals') return missingModels.includes('vocals') ? ['vocals'] : [];
+      if (mode === 'instrumental') return missingModels.includes('instrumental') ? ['instrumental'] : [];
+      if (mode === 'both_deux') return missingModels.includes('deux') ? ['deux'] : [];
+      if (mode === 'both_separate') {
+        return ['vocals', 'instrumental'].filter((name) => missingModels.includes(name));
+      }
+      return [];
+    }
+
+    function pendingMissingModels() {
+      const missing = new Set();
+      tasks
+        .filter((task) => task.status === 'pending')
+        .forEach((task) => missingForMode(task.mode).forEach((name) => missing.add(name)));
+      return Array.from(missing);
+    }
 
     function updateOutputSummary() {
       outputFormatSelect.value = settings.output_format;
@@ -1905,6 +2076,7 @@ INDEX_HTML = """<!DOCTYPE html>
         const input = card.querySelector('input');
         if (input) input.checked = active;
       });
+      showModelsWarning(missingModels);
     }
 
     function humanEta(seconds) {
@@ -1959,12 +2131,14 @@ INDEX_HTML = """<!DOCTYPE html>
         outputs: [],
         error: null,
         eventSource: null,
+        abortController: null,
+        removed: false,
       };
     }
 
     function updateStartButton() {
       const pendingCount = tasks.filter((task) => task.status === 'pending').length;
-      startButton.disabled = startBusy || pendingCount === 0;
+      startButton.disabled = startBusy || pendingCount === 0 || pendingMissingModels().length > 0;
       startButton.textContent = startBusy ? 'starting...' : 'start';
     }
 
@@ -2003,13 +2177,19 @@ INDEX_HTML = """<!DOCTYPE html>
           : (OUTPUT_LABELS[task.output_format] || task.output_format);
         const queueMeta = outputLabel ? `${modeLabel} • ${outputLabel}` : modeLabel;
         const progressSide = `${pct}%${eta ? ` • ${eta}` : ''}`;
+        const badgeText = statusLabel(task.status);
+        const showStatusBadge = ['error', 'stopped'].includes(task.status)
+          || (task.status === 'done' && stageText.trim().toLowerCase() !== badgeText);
+        const statusBadgeHtml = showStatusBadge
+          ? `<div class="status-badge status-${task.status}">${badgeText}</div>`
+          : '';
 
         item.innerHTML = `
           <div class="queue-row">
             <div class="queue-main">
               <p class="queue-name">${escapeHtml(task.name)}</p>
               <div class="queue-subline">${escapeHtml(queueMeta)}</div>
-              <div class="status-badge status-${task.status}">${statusLabel(task.status)}</div>
+              ${statusBadgeHtml}
               <div class="queue-stage">
                 <strong>${escapeHtml(stageText)}</strong>
                 <span>${escapeHtml(progressSide)}</span>
@@ -2029,6 +2209,7 @@ INDEX_HTML = """<!DOCTYPE html>
           remove.className = 'button ghost';
           remove.textContent = 'remove';
           remove.addEventListener('click', () => {
+            task.removed = true;
             tasks = tasks.filter((entry) => entry.localId !== task.localId);
             renderQueue();
           });
@@ -2039,6 +2220,11 @@ INDEX_HTML = """<!DOCTYPE html>
             remove.className = 'button ghost';
             remove.textContent = 'remove';
             remove.addEventListener('click', () => {
+              task.removed = true;
+              if (task.abortController) {
+                task.abortController.abort();
+                task.abortController = null;
+              }
               tasks = tasks.filter((entry) => entry.localId !== task.localId);
               renderQueue();
             });
@@ -2063,7 +2249,7 @@ INDEX_HTML = """<!DOCTYPE html>
           if (task.status === 'done' && task.id) {
             const reveal = document.createElement('button');
             reveal.className = 'button secondary';
-            reveal.textContent = 'open folder';
+            reveal.textContent = (task.outputs || []).length === 1 ? 'show song' : 'show files';
             reveal.addEventListener('click', async () => {
               try {
                 await fetch(`/api/tasks/${task.id}/reveal`, { method: 'POST' });
@@ -2107,6 +2293,7 @@ INDEX_HTML = """<!DOCTYPE html>
         queueEl.appendChild(item);
       });
 
+      showModelsWarning(missingModels);
       updateQueueSummary();
       updateStartButton();
     }
@@ -2144,6 +2331,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
     async function addFiles(fileList) {
       const incoming = Array.from(fileList || []).filter(Boolean);
+      fileInput.value = '';
       if (incoming.length === 0) return;
       incoming.forEach((file) => tasks.push(makeLocalTask(file)));
       renderQueue();
@@ -2152,10 +2340,17 @@ INDEX_HTML = """<!DOCTYPE html>
     async function startPending() {
       const pending = tasks.filter((task) => task.status === 'pending' && task.file);
       if (pending.length === 0) return;
+      if (pendingMissingModels().length > 0) {
+        renderQueue();
+        return;
+      }
       startBusy = true;
       updateStartButton();
       try {
         for (const task of pending) {
+          if (task.removed || !tasks.includes(task)) {
+            continue;
+          }
           try {
             task.status = 'uploading';
             task.stage = 'uploading';
@@ -2167,11 +2362,19 @@ INDEX_HTML = """<!DOCTYPE html>
             body.append('file', task.file);
             body.append('mode', task.mode);
             body.append('output_format', task.output_format);
+            task.abortController = new AbortController();
 
-            const res = await fetch('/api/tasks', { method: 'POST', body });
+            const res = await fetch('/api/tasks', { method: 'POST', body, signal: task.abortController.signal });
             const data = await res.json();
+            task.abortController = null;
             if (!res.ok) {
               throw new Error(data.message || data.detail?.message || 'Upload failed');
+            }
+            if (task.removed || !tasks.includes(task)) {
+              if (data.id) {
+                fetch(`/api/tasks/${data.id}/stop`, { method: 'POST' }).catch(() => {});
+              }
+              continue;
             }
 
             task.file = null;
@@ -2186,6 +2389,10 @@ INDEX_HTML = """<!DOCTYPE html>
             subscribeToTask(task);
             renderQueue();
           } catch (error) {
+            task.abortController = null;
+            if (error?.name === 'AbortError' || task.removed) {
+              continue;
+            }
             task.status = 'error';
             task.stage = 'error';
             task.error = error?.message || 'Upload failed';
@@ -2199,24 +2406,50 @@ INDEX_HTML = """<!DOCTYPE html>
     }
 
     function openSettings() {
+      if (settingsCloseTimer) {
+        clearTimeout(settingsCloseTimer);
+        settingsCloseTimer = null;
+      }
       settingsModal.classList.add('open');
+      settingsModal.classList.remove('closing');
       settingsModal.setAttribute('aria-hidden', 'false');
+      if (settingsCard) {
+        settingsCard.classList.remove('settings-card-out');
+        void settingsCard.offsetWidth;
+        settingsCard.classList.add('settings-card-in');
+      }
       outputFormatSelect.value = settings.output_format;
     }
 
     function closeSettings() {
-      settingsModal.classList.remove('open');
+      if (!settingsModal.classList.contains('open')) return;
+      settingsModal.classList.add('closing');
       settingsModal.setAttribute('aria-hidden', 'true');
+      if (settingsCard) {
+        settingsCard.classList.remove('settings-card-in');
+        settingsCard.classList.add('settings-card-out');
+      }
+      settingsCloseTimer = window.setTimeout(() => {
+        settingsModal.classList.remove('open', 'closing');
+        if (settingsCard) {
+          settingsCard.classList.remove('settings-card-out');
+        }
+        settingsCloseTimer = null;
+      }, 180);
     }
 
     function showModelsWarning(missing) {
-      if (!Array.isArray(missing) || missing.length === 0) {
+      missingModels = Array.isArray(missing) ? [...missing] : [];
+      const relevantMissing = pendingMissingModels().length > 0 ? pendingMissingModels() : missingForMode(selectedMode);
+      if (relevantMissing.length === 0) {
         modelsWarning.classList.remove('show');
         modelsWarning.textContent = '';
+        updateStartButton();
         return;
       }
       modelsWarning.classList.add('show');
-      modelsWarning.textContent = `missing models: ${missing.join(', ')}. add them to the models folder before starting.`;
+      modelsWarning.textContent = `missing models: ${relevantMissing.join(', ')}. add them to the models folder before starting.`;
+      updateStartButton();
     }
 
     async function loadModelsWarning() {
@@ -2231,6 +2464,12 @@ INDEX_HTML = """<!DOCTYPE html>
     }
 
     fileInput.addEventListener('change', (event) => addFiles(event.target.files));
+    dropzone.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        fileInput.click();
+      }
+    });
     dropzone.addEventListener('dragover', (event) => {
       event.preventDefault();
       dropzone.classList.add('dragging');
@@ -2244,6 +2483,9 @@ INDEX_HTML = """<!DOCTYPE html>
 
     document.querySelectorAll('.mode-card').forEach((card) => {
       card.addEventListener('click', () => setMode(card.dataset.mode));
+    });
+    document.querySelectorAll('.mode-card input').forEach((input) => {
+      input.addEventListener('change', (event) => setMode(event.target.value));
     });
 
     startButton.addEventListener('click', startPending);
@@ -2259,6 +2501,11 @@ INDEX_HTML = """<!DOCTYPE html>
 
     settingsModal.addEventListener('click', (event) => {
       if (event.target === settingsModal) closeSettings();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && settingsModal.classList.contains('open')) {
+        closeSettings();
+      }
     });
 
     closeButton.addEventListener('click', async () => {
