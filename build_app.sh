@@ -15,11 +15,12 @@ ARGS=(
   --osx-bundle-identifier "com.stemsplat.app"
   --collect-submodules uvicorn
   --collect-submodules split
+  --collect-submodules webview
   --add-data "${SCRIPT_DIR}/configs:configs"
   --add-data "${SCRIPT_DIR}/web:web"
 )
 
-if find "${SCRIPT_DIR}/models" -maxdepth 1 -type f ! -name ".gitkeep" | grep -q .; then
+if [[ "${BUNDLE_MODELS:-0}" == "1" ]] && find "${SCRIPT_DIR}/models" -maxdepth 1 -type f ! -name ".gitkeep" | grep -q .; then
   echo "Including local model files in app bundle..."
   ARGS+=(--add-data "${SCRIPT_DIR}/models:models")
 fi
@@ -30,7 +31,6 @@ APP_BUNDLE="${SCRIPT_DIR}/dist/Stemsplat.app"
 INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
 
 if [[ -f "${INFO_PLIST}" ]]; then
-  /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "${INFO_PLIST}" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "${INFO_PLIST}" >/dev/null
+  /usr/libexec/PlistBuddy -c "Delete :LSUIElement" "${INFO_PLIST}" >/dev/null 2>&1 || true
   codesign --force --deep --sign - "${APP_BUNDLE}" >/dev/null
 fi

@@ -21,6 +21,10 @@ librosa = "*"
 imageio-ffmpeg = "*"
 certifi = "*"
 mutagen = "*"
+pywebview = "*"
+pyobjc-core = "*"
+pyobjc-framework-Cocoa = "*"
+pyobjc-framework-WebKit = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"

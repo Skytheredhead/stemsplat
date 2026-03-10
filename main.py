@@ -7,6 +7,7 @@ import gc
 import json
 import logging
 import os
+import platform
 import queue
 import re
 import shutil
@@ -27,6 +28,7 @@ import numpy as np
 import soundfile as sf
 import torch
 import yaml
+from downloader import SSL_CONTEXT, download_to
 from app_paths import (
     CONFIG_DIR,
     LOG_DIR,
@@ -110,10 +112,27 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
+APP_VERSION = "0.1.0"
+GITHUB_REPO = "Skytheredhead/stemsplat"
+GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
+MODEL_PROMPT_PENDING = "pending"
+MODEL_PROMPT_DISMISSED = "dismissed"
+MODEL_PROMPT_ACCEPTED = "accepted"
+MODEL_PROMPT_COMPLETE = "complete"
 COMPAT_SETTINGS_DEFAULTS = {
     "output_format": "same_as_input",
     "output_root": str(OUTPUT_ROOT),
+    "output_same_as_input": False,
     "structure_mode": "flat",
+    "model_prompt_state": MODEL_PROMPT_PENDING,
+    "update_last_checked_at": 0.0,
+    "update_latest_version": "",
+    "update_latest_name": "",
+    "update_latest_url": "",
+    "update_latest_notes": "",
+    "update_last_notified_version": "",
+    "update_skipped_version": "",
 }
 
 MODEL_SPECS: dict[str, ModelSpec] = {
@@ -218,44 +237,133 @@ def _locate_case_insensitive(path: Path) -> Path | None:
 compat_settings_lock = threading.RLock()
 
 
-def _load_compat_settings() -> dict[str, str]:
+def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(COMPAT_SETTINGS_DEFAULTS)
+    normalized.update(settings)
+    output_root = Path(str(normalized.get("output_root") or OUTPUT_ROOT)).expanduser()
+    normalized["output_root"] = str(output_root)
+    normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
+    normalized["structure_mode"] = "flat"
+    return normalized
+
+
+def _load_compat_settings() -> dict[str, Any]:
     settings = dict(COMPAT_SETTINGS_DEFAULTS)
     if not SETTINGS_PATH.exists():
-        return settings
+        return _normalize_settings_payload(settings)
     try:
         data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             for key, value in data.items():
-                if key in settings and isinstance(value, str):
+                if key in settings:
                     settings[key] = value
     except Exception:
         logging.getLogger("stemsplat").debug("failed to load settings from %s", SETTINGS_PATH, exc_info=True)
-    settings["output_root"] = str(OUTPUT_ROOT)
-    settings["structure_mode"] = "flat"
-    return settings
+    return _normalize_settings_payload(settings)
 
 
-def _save_compat_settings(settings: dict[str, str]) -> None:
-    payload = dict(COMPAT_SETTINGS_DEFAULTS)
-    payload.update(settings)
-    payload["output_root"] = str(OUTPUT_ROOT)
-    payload["structure_mode"] = "flat"
+def _save_compat_settings(settings: dict[str, Any]) -> None:
+    payload = _normalize_settings_payload(settings)
     SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _compat_settings_payload() -> dict[str, str]:
+def _compat_settings_payload() -> dict[str, Any]:
     with compat_settings_lock:
         return dict(_compat_settings)
 
 
-def _set_compat_settings(patch: dict[str, str]) -> dict[str, str]:
+def _set_compat_settings(patch: dict[str, Any]) -> dict[str, Any]:
     with compat_settings_lock:
-        updated = dict(_compat_settings)
+        updated = _normalize_settings_payload(dict(_compat_settings))
         updated.update(patch)
+        updated = _normalize_settings_payload(updated)
         _save_compat_settings(updated)
         _compat_settings.clear()
         _compat_settings.update(updated)
         return dict(_compat_settings)
+
+
+def _current_output_root() -> Path:
+    with compat_settings_lock:
+        raw = str(_compat_settings.get("output_root") or OUTPUT_ROOT)
+    return _ensure_dir(Path(raw).expanduser())
+
+
+def _normalize_version_parts(raw: str) -> tuple[int, ...]:
+    matches = [int(part) for part in re.findall(r"\d+", raw or "")]
+    return tuple(matches or [0])
+
+
+def _is_newer_version(candidate: str, current: str) -> bool:
+    left = list(_normalize_version_parts(candidate))
+    right = list(_normalize_version_parts(current))
+    width = max(len(left), len(right))
+    left.extend([0] * (width - len(left)))
+    right.extend([0] * (width - len(right)))
+    return tuple(left) > tuple(right)
+
+
+def _fetch_latest_release() -> dict[str, Any]:
+    req = urllib.request.Request(
+        GITHUB_LATEST_RELEASE_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"stemsplat/{APP_VERSION} ({platform.system()})",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return {
+        "version": str(payload.get("tag_name") or "").strip(),
+        "name": str(payload.get("name") or "").strip(),
+        "url": str(payload.get("html_url") or "").strip(),
+        "notes": str(payload.get("body") or "").strip(),
+    }
+
+
+def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
+    now = time.time()
+    settings = _compat_settings_payload()
+    last_checked = float(settings.get("update_last_checked_at") or 0.0)
+    cached = {
+        "current_version": APP_VERSION,
+        "latest_version": str(settings.get("update_latest_version") or ""),
+        "latest_name": str(settings.get("update_latest_name") or ""),
+        "latest_url": str(settings.get("update_latest_url") or ""),
+        "notes": str(settings.get("update_latest_notes") or ""),
+        "last_checked_at": last_checked,
+        "last_notified_version": str(settings.get("update_last_notified_version") or ""),
+        "skipped_version": str(settings.get("update_skipped_version") or ""),
+    }
+    should_refresh = refresh or (now - last_checked >= UPDATE_CHECK_INTERVAL_SEC) or not cached["latest_version"]
+    if should_refresh:
+        try:
+            latest = _fetch_latest_release()
+        except Exception:
+            logger.debug("release check failed", exc_info=True)
+        else:
+            cached.update(
+                {
+                    "latest_version": latest["version"],
+                    "latest_name": latest["name"],
+                    "latest_url": latest["url"],
+                    "notes": latest["notes"],
+                    "last_checked_at": now,
+                }
+            )
+            _set_compat_settings(
+                {
+                    "update_last_checked_at": now,
+                    "update_latest_version": latest["version"],
+                    "update_latest_name": latest["name"],
+                    "update_latest_url": latest["url"],
+                    "update_latest_notes": latest["notes"],
+                }
+            )
+    cached["update_available"] = bool(cached["latest_version"]) and _is_newer_version(
+        cached["latest_version"], cached["current_version"]
+    )
+    return cached
 
 
 def _mode_to_stems(mode: str) -> list[str]:
@@ -841,9 +949,173 @@ def _run_model_chunks(
 
 
 app = FastAPI()
+app.state.runtime_status_provider = None
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
 task_queue: queue.Queue[str] = queue.Queue()
+model_download_lock = threading.RLock()
+model_download_state: dict[str, Any] = {
+    "status": "idle",
+    "pct": 0,
+    "step": "",
+    "current_model": "",
+    "downloaded_bytes": 0,
+    "total_bytes": 0,
+    "eta_seconds": None,
+    "started_at": None,
+    "error": "",
+}
+model_download_thread: threading.Thread | None = None
+
+
+def set_runtime_status_provider(provider: Callable[[], dict[str, Any]] | None) -> None:
+    app.state.runtime_status_provider = provider
+
+
+def _runtime_status_payload() -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "windowed": False,
+        "preferred_port": 8000,
+        "current_port": 8000,
+        "client_url": "http://127.0.0.1:8000/",
+        "lan_url": "",
+        "lan_display": "",
+        "port_conflict": False,
+        "show_port_notice": False,
+        "kill_command": "",
+    }
+    provider = getattr(app.state, "runtime_status_provider", None)
+    if callable(provider):
+        try:
+            raw = provider()
+        except Exception:
+            logger.debug("runtime status provider failed", exc_info=True)
+        else:
+            if isinstance(raw, dict):
+                payload.update(raw)
+    return payload
+
+
+def _settings_response_payload() -> dict[str, Any]:
+    payload = _compat_settings_payload()
+    payload["runtime"] = _runtime_status_payload()
+    return payload
+
+
+def _set_model_download_state(**patch: Any) -> None:
+    with model_download_lock:
+        model_download_state.update(patch)
+
+
+def _selected_missing_models(selection: list[str] | None = None) -> list[str]:
+    available = {key for key in MODEL_SPECS}
+    if selection:
+        requested = [item for item in selection if item in available]
+    else:
+        requested = list(MODEL_SPECS)
+    return [item for item in requested if not _model_file_exists(MODEL_SPECS[item].filename)]
+
+
+def _public_model_download_status() -> dict[str, Any]:
+    with model_download_lock:
+        payload = dict(model_download_state)
+    missing = sorted(_selected_missing_models())
+    prompt_state = str(_compat_settings_payload().get("model_prompt_state") or MODEL_PROMPT_PENDING)
+    payload.update(
+        {
+            "missing": missing,
+            "models_dir": str(MODEL_DIR),
+            "prompt_state": MODEL_PROMPT_COMPLETE if not missing else prompt_state,
+        }
+    )
+    return payload
+
+
+def _run_model_download(selection: list[str] | None = None) -> None:
+    missing = _selected_missing_models(selection)
+    if not missing:
+        _set_model_download_state(
+            status="done",
+            pct=100,
+            step="models ready",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=0,
+            error="",
+        )
+        _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
+        return
+
+    _set_model_download_state(
+        status="downloading",
+        pct=1,
+        step="preparing downloads",
+        current_model="",
+        downloaded_bytes=0,
+        total_bytes=0,
+        eta_seconds=None,
+        started_at=time.time(),
+        error="",
+    )
+    _set_compat_settings({"model_prompt_state": MODEL_PROMPT_ACCEPTED})
+
+    def _progress(update: dict[str, Any]) -> None:
+        tag = str(update.get("tag") or "")
+        filename = str(update.get("filename") or "")
+        pretty = tag or filename
+        downloaded_bytes = int(update.get("downloaded_bytes") or 0)
+        total_bytes = int(update.get("total_bytes") or 0)
+        with model_download_lock:
+            started_at = model_download_state.get("started_at")
+        eta_seconds: int | None = None
+        if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
+            elapsed = max(1.0, time.time() - float(started_at))
+            remaining = max(0, total_bytes - downloaded_bytes)
+            eta_seconds = int(round(remaining / max(downloaded_bytes / elapsed, 1)))
+        _set_model_download_state(
+            status="downloading",
+            pct=int(update.get("pct") or 0),
+            step=pretty,
+            current_model=pretty,
+            downloaded_bytes=downloaded_bytes,
+            total_bytes=total_bytes,
+            eta_seconds=eta_seconds,
+            error="",
+        )
+
+    try:
+        download_to(MODEL_DIR.parent, missing, progress_cb=_progress)
+    except Exception as exc:
+        logger.exception("model download failed")
+        _set_model_download_state(
+            status="error",
+            pct=-1,
+            step="download failed",
+            current_model="",
+            eta_seconds=None,
+            error=str(exc),
+        )
+        return
+
+    _set_model_download_state(
+        status="done",
+        pct=100,
+        step="models ready",
+        current_model="",
+        eta_seconds=0,
+        error="",
+    )
+    _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
+
+
+def _start_model_download(selection: list[str] | None = None) -> dict[str, Any]:
+    global model_download_thread
+    with model_download_lock:
+        if model_download_thread is not None and model_download_thread.is_alive():
+            return _public_model_download_status()
+        model_download_thread = threading.Thread(target=_run_model_download, args=(selection,), daemon=True)
+        model_download_thread.start()
+    return _public_model_download_status()
 
 
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -957,6 +1229,7 @@ def _build_task_payload(
     task_id: str,
     original_name: str,
     source_path: Path,
+    source_dir: str | None,
     mode: str,
     output_format: str,
     auto_start: bool = True,
@@ -965,6 +1238,7 @@ def _build_task_payload(
         "id": task_id,
         "original_name": original_name,
         "source_path": str(source_path),
+        "source_dir": source_dir,
         "mode": mode,
         "output_format": output_format,
         "status": "queued" if auto_start else "ready",
@@ -982,9 +1256,15 @@ def _build_task_payload(
     }
 
 
-def _create_output_dir(filename: str) -> Path:
-    _ = filename
-    return _ensure_dir(OUTPUT_ROOT)
+def _create_output_dir(task: dict[str, Any]) -> Path:
+    settings = _compat_settings_payload()
+    if bool(settings.get("output_same_as_input")):
+        source_dir = task.get("source_dir")
+        if isinstance(source_dir, str) and source_dir:
+            candidate = Path(source_dir).expanduser()
+            if candidate.exists() and candidate.is_dir():
+                return _ensure_dir(candidate)
+    return _current_output_root()
 
 
 def _validate_mode_and_output_format(mode: str, output_format: str) -> None:
@@ -1033,6 +1313,7 @@ def _register_task(
     *,
     original_name: str,
     source_path: Path,
+    source_dir: str | None,
     mode: str,
     output_format: str,
     auto_start: bool,
@@ -1042,6 +1323,7 @@ def _register_task(
         task_id=task_id,
         original_name=original_name,
         source_path=source_path,
+        source_dir=source_dir,
         mode=mode,
         output_format=output_format,
         auto_start=auto_start,
@@ -1119,7 +1401,7 @@ def _process_task(task_id: str) -> None:
         _set_task_progress(task_id, "Loading models", 1)
         manager = ModelManager()
         source_info = _probe_source(source_path)
-        output_dir = _create_output_dir(task["original_name"])
+        output_dir = _create_output_dir(task)
         with tasks_lock:
             tasks[task_id]["out_dir"] = str(output_dir)
             tasks[task_id]["version"] += 1
@@ -1244,6 +1526,31 @@ async def _startup_cleanup() -> None:
     _close_installer_ui()
     _cleanup_old_runtime_entries(WORK_DIR)
     _cleanup_old_runtime_entries(UPLOAD_DIR)
+    if _selected_missing_models():
+        _set_model_download_state(
+            status="idle",
+            pct=0,
+            step="",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=0,
+            eta_seconds=None,
+            started_at=None,
+            error="",
+        )
+    else:
+        _set_model_download_state(
+            status="done",
+            pct=100,
+            step="models ready",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=0,
+            eta_seconds=0,
+            started_at=None,
+            error="",
+        )
+        _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
 
 
 @app.exception_handler(AppError)
@@ -1261,6 +1568,37 @@ async def _log_requests(request: Request, call_next):
     return response
 
 
+def _pick_directory_dialog() -> Path | None:
+    if sys.platform != "darwin":
+        raise AppError(ErrorCode.INVALID_REQUEST, "Folder picking is only supported on macOS in this build.")
+    script = 'POSIX path of (choose folder with prompt "choose output folder")'
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").lower()
+        if "user canceled" in stderr or exc.returncode == 1:
+            return None
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not choose folder: {exc.stderr or exc}") from exc
+    chosen = (result.stdout or "").strip()
+    return Path(chosen).expanduser() if chosen else None
+
+
+def _open_path_in_finder(path: Path) -> None:
+    target = _ensure_dir(path.expanduser())
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+        return
+    if os.name == "nt":
+        subprocess.Popen(["explorer", str(target)])
+        return
+    subprocess.Popen(["xdg-open", str(target)])
+
+
 @app.get("/api/models_status")
 async def models_status() -> dict[str, Any]:
     missing = sorted({item for mode in MODE_CHOICES for item in _find_missing_models_for_mode(mode)})
@@ -1271,15 +1609,84 @@ async def models_status() -> dict[str, Any]:
 async def open_models_folder() -> dict[str, str]:
     _ensure_dir(MODEL_DIR)
     try:
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", str(MODEL_DIR)])
-        elif os.name == "nt":
-            subprocess.Popen(["explorer", str(MODEL_DIR)])
-        else:
-            subprocess.Popen(["xdg-open", str(MODEL_DIR)])
+        _open_path_in_finder(MODEL_DIR)
     except Exception as exc:
         raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open models folder: {exc}").to_http(500) from exc
     return {"status": "opened", "path": str(MODEL_DIR)}
+
+
+@app.get("/api/release_status")
+async def release_status() -> dict[str, Any]:
+    return _release_status_payload()
+
+
+@app.get("/api/runtime_status")
+async def runtime_status() -> dict[str, Any]:
+    return _runtime_status_payload()
+
+
+@app.post("/api/release_status/ack")
+async def ack_release_status() -> dict[str, Any]:
+    status = _release_status_payload()
+    latest = str(status.get("latest_version") or "")
+    if latest:
+        _set_compat_settings({"update_last_notified_version": latest})
+    return _release_status_payload()
+
+
+@app.post("/api/release_status/skip")
+async def skip_release_status() -> dict[str, Any]:
+    status = _release_status_payload()
+    latest = str(status.get("latest_version") or "")
+    if latest:
+        _set_compat_settings(
+            {
+                "update_last_notified_version": latest,
+                "update_skipped_version": latest,
+            }
+        )
+    return _release_status_payload()
+
+
+@app.get("/api/model_download_status")
+async def model_download_status() -> dict[str, Any]:
+    return _public_model_download_status()
+
+
+@app.post("/api/model_downloads/start")
+async def start_model_download(request: Request) -> dict[str, Any]:
+    selection: list[str] | None = None
+    with contextlib.suppress(Exception):
+        body = await request.json()
+        if isinstance(body, dict) and isinstance(body.get("models"), list):
+            selection = [str(item) for item in body["models"]]
+    return _start_model_download(selection)
+
+
+@app.post("/api/model_download_prompt/dismiss")
+async def dismiss_model_download_prompt() -> dict[str, Any]:
+    _set_compat_settings({"model_prompt_state": MODEL_PROMPT_DISMISSED})
+    return _public_model_download_status()
+
+
+@app.post("/api/settings/output_root/pick")
+async def pick_output_root() -> dict[str, Any]:
+    chosen = _pick_directory_dialog()
+    if chosen is None:
+        return {"cancelled": True, "output_root": str(_current_output_root())}
+    chosen = _ensure_dir(chosen)
+    _set_compat_settings({"output_root": str(chosen)})
+    return {"cancelled": False, "output_root": str(chosen)}
+
+
+@app.post("/api/settings/output_root/open")
+async def open_output_root() -> dict[str, str]:
+    path = _current_output_root()
+    try:
+        _open_path_in_finder(path)
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open output folder: {exc}").to_http(500) from exc
+    return {"status": "opened", "path": str(path)}
 
 
 @app.post("/api/tasks")
@@ -1287,6 +1694,7 @@ async def create_task(
     file: UploadFile = File(...),
     mode: str = Form("vocals"),
     output_format: str = Form("same_as_input"),
+    source_dir: str | None = Form(None),
 ):
     try:
         _validate_mode_and_output_format(mode, output_format)
@@ -1294,6 +1702,7 @@ async def create_task(
         payload = _register_task(
             original_name=original_name,
             source_path=source_path,
+            source_dir=source_dir,
             mode=mode,
             output_format=output_format,
             auto_start=True,
@@ -1346,12 +1755,13 @@ async def retry_task(task_id: str):
     old_task = _require_task(task_id)
     source_path = Path(old_task["source_path"])
     if not source_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "Original upload is missing; re-add the file.").to_http()
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
     _validate_models_for_mode(old_task["mode"])
 
     payload = _register_task(
         original_name=old_task["original_name"],
         source_path=source_path,
+        source_dir=old_task.get("source_dir"),
         mode=old_task["mode"],
         output_format=old_task["output_format"],
         auto_start=True,
@@ -1367,11 +1777,11 @@ async def reveal_output(task_id: str):
         raise AppError(ErrorCode.INVALID_REQUEST, "Output is not ready.").to_http(409)
     out_path = Path(out_dir)
     if not out_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "Output location is missing.").to_http(404)
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
     outputs = [out_path / str(name) for name in (task.get("outputs") or [])]
     existing_outputs = [path for path in outputs if path.exists()]
     if outputs and not existing_outputs:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Output files are missing.").to_http(404)
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
     single_output = existing_outputs[0] if len(existing_outputs) == 1 else None
 
     try:
@@ -1394,22 +1804,32 @@ async def reveal_output(task_id: str):
 
 
 @app.get("/settings")
-async def get_settings() -> dict[str, str]:
-    return _compat_settings_payload()
+async def get_settings() -> dict[str, Any]:
+    return _settings_response_payload()
 
 
 @app.post("/settings")
-async def update_settings(request: Request) -> dict[str, str]:
+async def update_settings(request: Request) -> dict[str, Any]:
     body = await request.json()
     if not isinstance(body, dict):
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid settings payload.").to_http()
-    patch: dict[str, str] = {}
+    patch: dict[str, Any] = {}
     output_format = body.get("output_format")
     if isinstance(output_format, str):
         if output_format not in OUTPUT_FORMAT_CHOICES:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
         patch["output_format"] = output_format
-    return _set_compat_settings(patch)
+    output_root = body.get("output_root")
+    if isinstance(output_root, str):
+        try:
+            resolved = _ensure_dir(Path(output_root).expanduser())
+        except Exception as exc:
+            raise AppError(ErrorCode.INVALID_REQUEST, f"Invalid output folder: {exc}").to_http() from exc
+        patch["output_root"] = str(resolved)
+    if "output_same_as_input" in body:
+        patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
+    _set_compat_settings(patch)
+    return _settings_response_payload()
 
 
 @app.post("/upload")
@@ -1417,6 +1837,7 @@ async def compat_upload(
     file: UploadFile = File(...),
     stems: str = Form("vocals"),
     output_format: str | None = Form(None),
+    source_dir: str | None = Form(None),
 ):
     try:
         mode = _stems_to_mode(stems)
@@ -1426,6 +1847,7 @@ async def compat_upload(
         payload = _register_task(
             original_name=original_name,
             source_path=source_path,
+            source_dir=source_dir,
             mode=mode,
             output_format=resolved_output_format,
             auto_start=False,
@@ -1489,11 +1911,12 @@ async def compat_rerun(task_id: str) -> dict[str, Any]:
     old_task = _require_task(task_id)
     source_path = Path(old_task["source_path"])
     if not source_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "Original upload is missing; re-add the file.").to_http()
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
     _validate_models_for_mode(old_task["mode"])
     payload = _register_task(
         original_name=old_task["original_name"],
         source_path=source_path,
+        source_dir=old_task.get("source_dir"),
         mode=old_task["mode"],
         output_format=old_task["output_format"],
         auto_start=True,

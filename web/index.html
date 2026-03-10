@@ -53,11 +53,50 @@
     .settings-card-in  { animation: settingsCardIn  .28s cubic-bezier(.2,.7,.2,1) both; }
     .settings-card-out { animation: settingsCardOut .18s ease both; }
 
-    body { background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%); padding-top:48px; padding-bottom:48px; }
+    html, body { min-height: 100%; }
+    html {
+      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
+    }
+    body { padding: 0; overscroll-behavior-y: auto; background: transparent; overflow-x: hidden; }
+    .bg-gradient-shell {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: -22vh;
+      bottom: -22vh;
+      pointer-events: none;
+      z-index: -3;
+      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
+    }
 
-    .noise::before { content: ""; position: fixed; inset: 0; pointer-events: none;
+    .noise::before { content: ""; position: fixed; inset: -22vh 0; pointer-events: none;
       background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
-    .shade { position: fixed; inset: 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; }
+    .shade { position: fixed; inset: -22vh 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; }
+    .app-shell {
+      min-height: 100vh;
+      width: 100%;
+      padding: clamp(72px, 9vh, 108px) 0 clamp(72px, 9vh, 108px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 40px;
+      transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .28s cubic-bezier(.22,.61,.36,1), padding .28s ease;
+      will-change: transform, opacity;
+    }
+    .app-shell.compact {
+      justify-content: center;
+    }
+    .app-shell.expanded {
+      justify-content: flex-start;
+    }
+    .app-shell.resetting-out {
+      opacity: 0;
+      transform: translateY(-18px);
+    }
+    .app-shell.resetting-in {
+      opacity: 0;
+      transform: translateY(18px);
+    }
 
     .glass { background: var(--card); backdrop-filter: blur(12px) saturate(110%); -webkit-backdrop-filter: blur(12px) saturate(110%); border: 1px solid var(--border); box-shadow: 0 8px 26px rgba(0,0,0,.28); }
     .glass-light { background: rgba(255,255,255,0.12); backdrop-filter: blur(10px) saturate(110%); -webkit-backdrop-filter: blur(10px) saturate(110%); border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 8px 26px rgba(0,0,0,.28); }
@@ -74,6 +113,17 @@
     .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:12px; padding:6px 10px; font-size:12px; font-weight:600; transition: transform .15s ease, box-shadow .15s ease; }
     .btn:focus { outline: 2px solid rgba(255,255,255,.25); outline-offset: 2px; }
     .btn:hover { transform: translateY(-1px); }
+    .btn[hidden] { display:none !important; }
+    .btn[disabled] { opacity:.55; cursor:default; transform:none !important; }
+
+    @keyframes pulseGlow {
+      0% { box-shadow: 0 0 0 0 rgba(255,255,255,.18); }
+      70% { box-shadow: 0 0 0 12px rgba(255,255,255,0); }
+      100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    }
+    .attention-pulse { animation: pulseGlow 1.8s ease-out infinite; }
+    .attention-ring { box-shadow: 0 0 0 2px rgba(255,255,255,.45), 0 0 24px rgba(255,255,255,.18); }
+    .dimmed-control { opacity:.45; pointer-events:none; }
 
     .close-btn { position: fixed; top: 14px; left: 14px; width: 40px; height: 40px; border-radius: 12px; background: rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.12); color: #E7ECEF; backdrop-filter: blur(10px) saturate(120%); -webkit-backdrop-filter: blur(10px) saturate(120%); box-shadow: 0 10px 30px rgba(0,0,0,.25); display: grid; place-items: center; font-size: 18px; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; z-index: 20; }
     .close-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0,0,0,.35); background: rgba(255,255,255,0.22); }
@@ -135,14 +185,14 @@
   </script>
 </head>
 
-<body class="min-h-screen flex flex-col items-center justify-center gap-10" style="font-family: 'Nunito Sans', sans-serif;">
-
+<body style="font-family: 'Nunito Sans', sans-serif;">
+  <div class="bg-gradient-shell"></div>
   <div class="noise fixed inset-0 -z-10"></div>
   <div class="shade"></div>
   <button id="close-app" class="close-btn" title="close stemsplat" aria-label="close">
     ×
   </button>
-
+  <main id="app-shell" class="app-shell compact">
   <!-- header -->
   <h1 id="title" class="text-5xl md:text-6xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
   <!-- controls -->
@@ -181,6 +231,7 @@
   <div id="queue-spacer" class="w-11/12 max-w-2xl"></div>
   <button id="clear-btn" class="pre-hide mt-4 text-white underline">clear all</button>
   <div id="queue-bottom-pad" class="w-11/12 max-w-2xl"></div>
+  </main>
   <div id="top-vig"></div>
   <div id="bot-vig"></div>
 
@@ -237,27 +288,44 @@
     const template  = document.getElementById('item-template');
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
+    const appShell  = document.getElementById('app-shell');
     const closeBtn  = document.getElementById('close-app');
     const startBtn  = document.getElementById('start-btn');
     let outputFormatSelect = null;
+    let outputFolderInput = null;
+    let outputSameAsInput = null;
+    let outputFolderChoose = null;
+    let outputFolderOpen = null;
+    let lanAccessText = null;
+    let portStatusText = null;
+    let modelsStatusText = null;
+    let modelsDownloadBtn = null;
+    let modelsFolderBtn = null;
+    let modelsProgressWrap = null;
+    let modelsProgressBar = null;
+    let modelsProgressMeta = null;
     const structureCheck = null;
     const structurelessCheck = null;
     let storageBlocked = false;
     let memoryBlocked = false;
+    let modelsBlocked = false;
     let lastStorageWarning = 0;
     let lastMemoryWarning = 0;
+    let modelStatusPoll = null;
+    let activeReleaseOverlay = null;
+    let activePortOverlay = null;
 
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
-    let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input' };
+    let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input', runtime: null };
     let defaultOutputPath = '';
     let dirPickerInput = null;
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
       const hasItems = queue.children.length > 0;
-      if(!hasItems || startLock || storageBlocked || memoryBlocked){
+      if(!hasItems || startLock || storageBlocked || memoryBlocked || modelsBlocked){
         startBtn.disabled = true;
         const icon = startBtn.querySelector('svg');
         if(icon){ icon.style.animation = 'none'; }
@@ -311,6 +379,20 @@
       if(outputFormatSelect){
         outputFormatSelect.value = settingsState.output_format || 'same_as_input';
       }
+      if(outputSameAsInput){
+        outputSameAsInput.checked = !!settingsState.output_same_as_input;
+      }
+      if(outputFolderInput){
+        outputFolderInput.value = settingsState.output_root || '';
+        outputFolderInput.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
+      }
+      if(outputFolderChoose){
+        outputFolderChoose.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
+      }
+      if(outputFolderOpen){
+        outputFolderOpen.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
+      }
+      applyRuntimeUI(settingsState.runtime || null);
     }
 
     function guardClick(el, handler, cooldown = 600){
@@ -616,11 +698,18 @@
       } else {
         hasClearable = tasks && tasks.some(t => t && (t.stage === 'stopped' || (typeof t.pct === 'number' && t.pct >= 100)));
       }
-      const manyItems = queue.children.length > 6;
-      // Reserve fixed vertical space to avoid layout jump whether visible or not
-      spacer.style.height = hasClearable ? '18px' : '12px';
+      const itemCount = queue.children.length;
+      const manyItems = itemCount > 6;
+      const compact = itemCount <= 2;
+      spacer.style.height = hasClearable ? (compact ? '14px' : '22px') : '0px';
       if (bottomPad) {
-        bottomPad.style.height = manyItems ? '110px' : '52px';
+        if(itemCount === 0){
+          bottomPad.style.height = '0px';
+        }else if(compact){
+          bottomPad.style.height = '28px';
+        }else{
+          bottomPad.style.height = manyItems ? '132px' : '84px';
+        }
       }
       if (hasClearable) {
         clearBtn.classList.add('show');
@@ -629,6 +718,13 @@
         clearBtn.classList.remove('show');
         clearBtn.style.pointerEvents = 'none';
       }
+    }
+
+    function updateShellLayout(){
+      if(!appShell) return;
+      const compact = queue.children.length <= 2;
+      appShell.classList.toggle('compact', compact);
+      appShell.classList.toggle('expanded', !compact);
     }
     function updateVigs(){
       const rect = queue.getBoundingClientRect();
@@ -656,10 +752,15 @@
     }
 
     function updateUI(){
+      updateShellLayout();
       updateClear();
       updateVigs();
+      const full = enforceCapacity();
+      const blocked = full;
+      dropzone.classList.toggle('pointer-events-none', blocked);
+      dropzone.classList.toggle('opacity-60', blocked);
+      if(fileInput) fileInput.disabled = blocked;
       updateStartButton();
-      enforceCapacity();
     }
 
 
@@ -725,11 +826,15 @@
         try{
           const res = await fetch('/reveal/' + taskRef.id, { method: 'POST' });
           if(!res.ok){
-            const msg = taskRef.out_dir ? `folder missing: ${taskRef.out_dir}` : 'output not ready';
+            let msg = "file doesn't exist";
+            try{
+              const data = await res.json();
+              msg = (data && data.detail && data.detail.message) || msg;
+            }catch(_){}
             showPopup(msg);
           }
         }catch(err){
-          showPopup('output not ready');
+          showPopup("file doesn't exist");
         }
         setTimeout(() => { btn.dataset.busy = ''; }, 250);
       });
@@ -963,9 +1068,7 @@
       });
       // Apply any stem labels if present
       applyLabels(inserted.querySelector('.labels'), task.stems);
-      updateClear();
-      updateVigs();
-      updateStartButton();
+      updateUI();
       return {bar, st, dl, stopPad, smooth};
     }
 
@@ -982,6 +1085,14 @@
           }
         }, 280);
       });
+    }
+
+    function wait(ms){
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function nextFrame(){
+      return new Promise((resolve) => requestAnimationFrame(() => resolve()));
     }
 
     function closeActiveStreams(){
@@ -1011,6 +1122,11 @@
           }
         });
       }
+      if(appShell){
+        appShell.classList.remove('resetting-in');
+        appShell.classList.add('resetting-out');
+        await wait(180);
+      }
       for (const el of Array.from(queue.children)) { el.remove(); }
       tasks = [];
       pendingItems.length = 0;
@@ -1018,6 +1134,13 @@
       startPressed = false;
       saveTasks();
       updateUI();
+      if(appShell){
+        appShell.classList.remove('resetting-out');
+        appShell.classList.add('resetting-in');
+        await nextFrame();
+        await nextFrame();
+        appShell.classList.remove('resetting-in');
+      }
       try { await fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
       isClearing = false;
       if(showToast) showPopup('all tasks cleared');
@@ -1029,7 +1152,7 @@
         const ok = await showConfirm('a process is still running. clear all anyway?');
         if(!ok) return;
       }
-      clearAllTasks();
+      await clearAllTasks();
     });
 
     rehydrateTasks().finally(() => {
@@ -1054,9 +1177,21 @@
     if(settingsBtn){ settingsBtn.addEventListener('click', openSettings); }
 
     // initialize overlay controls on load
-    window.addEventListener('load', () => {
+    window.addEventListener('load', async () => {
       settingsOverlay = document.getElementById('settings-overlay');
       outputFormatSelect = document.getElementById('output-format');
+      outputFolderInput = document.getElementById('output-folder-path');
+      outputSameAsInput = document.getElementById('output-same-as-input');
+      outputFolderChoose = document.getElementById('output-folder-choose');
+      outputFolderOpen = document.getElementById('output-folder-open');
+      lanAccessText = document.getElementById('lan-access-text');
+      portStatusText = document.getElementById('port-status-text');
+      modelsStatusText = document.getElementById('models-status-text');
+      modelsDownloadBtn = document.getElementById('models-download');
+      modelsFolderBtn = document.getElementById('models-folder-open');
+      modelsProgressWrap = document.getElementById('models-progress-wrap');
+      modelsProgressBar = document.getElementById('models-progress-bar');
+      modelsProgressMeta = document.getElementById('models-progress-meta');
       const closeBtn = document.getElementById('settings-close');
       const forceBtn = document.getElementById('force-clear');
       if(closeBtn) closeBtn.addEventListener('click', closeSettings);
@@ -1071,11 +1206,55 @@
       checkMemory();
       setInterval(checkStorage, 15000);
       setInterval(checkMemory, 12000);
-      loadSettings();
+      await loadSettings();
+      await refreshRuntimeStatus({ showPortNotice: true });
+      await refreshModelStatus();
+      await checkForReleaseUpdate();
+      setInterval(checkForReleaseUpdate, 12 * 60 * 60 * 1000);
       if(outputFormatSelect){
         outputFormatSelect.addEventListener('change', () => {
           persistSettings({ output_format: outputFormatSelect.value }, { showMissingPopup:false });
         });
+      }
+      if(outputSameAsInput){
+        outputSameAsInput.addEventListener('change', () => {
+          persistSettings({ output_same_as_input: outputSameAsInput.checked }, { showMissingPopup:false });
+        });
+      }
+      if(outputFolderChoose){
+        outputFolderChoose.addEventListener('click', async () => {
+          if(settingsState.output_same_as_input) return;
+          try{
+            const res = await fetch('/api/settings/output_root/pick', { method: 'POST' });
+            if(!res.ok) return;
+            const data = await res.json();
+            if(!data.cancelled && data.output_root){
+              settingsState = { ...settingsState, output_root: data.output_root };
+              applySettingsUI();
+            }
+          }catch(err){
+            showPopup('could not choose folder');
+          }
+        });
+      }
+      if(outputFolderOpen){
+        outputFolderOpen.addEventListener('click', async () => {
+          if(settingsState.output_same_as_input) return;
+          try{
+            await fetch('/api/settings/output_root/open', { method: 'POST' });
+          }catch(err){
+            showPopup('could not open folder');
+          }
+        });
+      }
+      if(modelsDownloadBtn){
+        modelsDownloadBtn.addEventListener('click', async () => {
+          await dismissModelPrompt();
+          startModelDownload();
+        });
+      }
+      if(modelsFolderBtn){
+        modelsFolderBtn.addEventListener('click', () => openModelsFolderAction());
       }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
@@ -1175,6 +1354,402 @@
       });
     }
 
+    function closeOverlay(overlay){
+      if(overlay && overlay.parentNode){
+        overlay.parentNode.removeChild(overlay);
+      }
+    }
+
+    async function copyText(text){
+      try{
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      }catch(_){}
+      try{
+        const input = document.createElement('textarea');
+        input.value = text;
+        input.setAttribute('readonly', '');
+        input.style.position = 'absolute';
+        input.style.left = '-9999px';
+        document.body.appendChild(input);
+        input.select();
+        const ok = document.execCommand('copy');
+        input.remove();
+        return ok;
+      }catch(_){
+        return false;
+      }
+    }
+
+    function createOverlayCard(titleText){
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 z-[80] flex items-center justify-center backdrop-blur-sm px-4';
+      const card = document.createElement('div');
+      card.className = 'glass w-full max-w-md rounded-2xl p-6 text-[var(--txt-main)] flex flex-col gap-4';
+      const titleEl = document.createElement('h3');
+      titleEl.className = 'text-xl font-light';
+      titleEl.textContent = titleText;
+      card.appendChild(titleEl);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      overlay.tabIndex = 0;
+      overlay.focus();
+      return { overlay, card };
+    }
+
+    function makeActionButton(label, extraClass = ''){
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `btn px-3 py-2 text-xs ${extraClass}`.trim();
+      btn.textContent = label;
+      return btn;
+    }
+
+    function applyRuntimeUI(runtime){
+      const data = runtime && typeof runtime === 'object' ? runtime : {};
+      const lanDisplay = data.lan_display || '';
+      if(lanAccessText){
+        lanAccessText.textContent = lanDisplay ? `access via lan: ${lanDisplay}` : 'access via lan: unavailable';
+      }
+      if(portStatusText){
+        if(data.port_conflict){
+          portStatusText.hidden = false;
+          portStatusText.textContent = `port ${data.preferred_port || 8000} is in use. currently running on ${data.current_port || data.preferred_port || 8000}.`;
+        }else{
+          portStatusText.hidden = true;
+          portStatusText.textContent = '';
+        }
+      }
+    }
+
+    async function refreshRuntimeStatus({ showPortNotice = false } = {}){
+      try{
+        const res = await fetch('/api/runtime_status');
+        if(!res.ok) return null;
+        const data = await res.json();
+        settingsState.runtime = data;
+        applyRuntimeUI(data);
+        if(showPortNotice && data.show_port_notice){
+          showPortConflictOverlay(data);
+        }
+        return data;
+      }catch(err){
+        console.warn('runtime status failed', err);
+        return null;
+      }
+    }
+
+    function showPortConflictOverlay(status){
+      closeOverlay(activePortOverlay);
+      const preferredPort = status.preferred_port || 8000;
+      const currentPort = status.current_port || preferredPort;
+      const { overlay, card } = createOverlayCard(`port ${preferredPort} is busy`);
+      activePortOverlay = overlay;
+
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90 whitespace-pre-line';
+      info.textContent = `stemsplat started on port ${currentPort} because port ${preferredPort} is already in use. you can stay on this port or free ${preferredPort} and retry.`;
+      card.appendChild(info);
+
+      const commandWrap = document.createElement('div');
+      commandWrap.className = 'flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2';
+      const commandCode = document.createElement('code');
+      commandCode.className = 'flex-1 text-xs break-all opacity-80';
+      commandCode.textContent = status.kill_command || `kill -9 $(lsof -ti tcp:${preferredPort})`;
+      const copyBtn = makeActionButton('copy', 'bg-white/10 text-white');
+      copyBtn.onclick = async () => {
+        const ok = await copyText(commandCode.textContent || '');
+        showPopup(ok ? 'command copied' : 'could not copy command');
+      };
+      commandWrap.append(commandCode, copyBtn);
+      card.appendChild(commandWrap);
+
+      const row = document.createElement('div');
+      row.className = 'flex gap-3 justify-end flex-wrap';
+      const stayBtn = makeActionButton(`stay on ${currentPort}`, 'bg-white/10 text-white');
+      const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'bg-white text-black');
+
+      stayBtn.onclick = async () => {
+        try{
+          if(window.pywebview && window.pywebview.api && window.pywebview.api.acknowledge_port_conflict){
+            const next = await window.pywebview.api.acknowledge_port_conflict();
+            if(next){
+              settingsState.runtime = next;
+              applyRuntimeUI(next);
+            }
+          }
+        }catch(err){
+          console.warn('port conflict acknowledge failed', err);
+        }
+        closeOverlay(activePortOverlay);
+        activePortOverlay = null;
+      };
+
+      retryBtn.onclick = async () => {
+        retryBtn.disabled = true;
+        stayBtn.disabled = true;
+        try{
+          if(!(window.pywebview && window.pywebview.api && window.pywebview.api.retry_preferred_port)){
+            showPopup('retry is only available inside the packaged app');
+            return;
+          }
+          const next = await window.pywebview.api.retry_preferred_port();
+          if(next){
+            settingsState.runtime = next;
+            applyRuntimeUI(next);
+          }
+          if(next && next.switched && next.client_url){
+            closeOverlay(activePortOverlay);
+            activePortOverlay = null;
+            window.location.replace(next.client_url);
+            return;
+          }
+          showPopup((next && next.error) || `port ${preferredPort} is still in use`);
+        }catch(err){
+          console.warn('port retry failed', err);
+          showPopup(`could not switch to port ${preferredPort}`);
+        }finally{
+          retryBtn.disabled = false;
+          stayBtn.disabled = false;
+        }
+      };
+
+      row.append(stayBtn, retryBtn);
+      card.appendChild(row);
+    }
+
+    function formatBytes(bytes){
+      const value = Number(bytes || 0);
+      if(!value || value < 1024) return '0 b';
+      const units = ['kb', 'mb', 'gb', 'tb'];
+      let size = value / 1024;
+      let unit = units[0];
+      for(let i = 1; i < units.length && size >= 1024; i += 1){
+        size /= 1024;
+        unit = units[i];
+      }
+      return `${size.toFixed(size >= 100 ? 0 : 1)} ${unit}`;
+    }
+
+    function formatDuration(seconds){
+      const value = Number(seconds);
+      if(!Number.isFinite(value) || value < 0) return '';
+      if(value < 60) return `${Math.round(value)}s left`;
+      const mins = Math.floor(value / 60);
+      const secs = Math.round(value % 60);
+      if(mins < 60) return `${mins}m ${secs}s left`;
+      const hours = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return `${hours}h ${remMins}m left`;
+    }
+
+    function flashModelDownloadCTA(){
+      if(!modelsDownloadBtn || modelsDownloadBtn.hidden) return;
+      openSettings();
+      modelsDownloadBtn.classList.add('attention-ring');
+      setTimeout(() => {
+        if(modelsDownloadBtn) modelsDownloadBtn.classList.remove('attention-ring');
+      }, 2200);
+    }
+
+    function stopModelStatusPolling(){
+      if(modelStatusPoll){
+        clearInterval(modelStatusPoll);
+        modelStatusPoll = null;
+      }
+    }
+
+    function startModelStatusPolling(){
+      if(modelStatusPoll) return;
+      modelStatusPoll = setInterval(() => {
+        refreshModelStatus({ allowPrompt: false });
+      }, 1200);
+    }
+
+    function updateModelSettings(status){
+      const missing = Array.isArray(status && status.missing) ? status.missing : [];
+      const isDownloading = !!(status && status.status === 'downloading');
+      const isError = !!(status && status.status === 'error');
+      modelsBlocked = missing.length > 0 || isDownloading;
+      if(modelsStatusText){
+        if(isError){
+          modelsStatusText.textContent = status.error || 'model download failed';
+        }else if(missing.length){
+          modelsStatusText.textContent = `missing models: ${missing.join(', ')}`;
+        }else{
+          modelsStatusText.textContent = 'models ready';
+        }
+      }
+      if(modelsProgressWrap){
+        modelsProgressWrap.hidden = !isDownloading && !isError;
+      }
+      if(modelsProgressBar){
+        modelsProgressBar.style.width = `${Math.max(0, status && status.pct ? status.pct : 0)}%`;
+      }
+      if(modelsProgressMeta){
+        if(isDownloading){
+          const bits = [
+            `${Math.max(0, status.pct || 0)}%`,
+            `${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`,
+          ];
+          const eta = formatDuration(status.eta_seconds);
+          if(eta) bits.push(eta);
+          modelsProgressMeta.textContent = bits.join(' · ');
+        }else if(isError){
+          modelsProgressMeta.textContent = status.error || 'download failed';
+        }else{
+          modelsProgressMeta.textContent = '';
+        }
+      }
+      if(modelsDownloadBtn){
+        const showDownloadButton = missing.length > 0 && !isDownloading;
+        modelsDownloadBtn.hidden = !showDownloadButton;
+        modelsDownloadBtn.disabled = false;
+        modelsDownloadBtn.classList.toggle('attention-pulse', showDownloadButton);
+        modelsDownloadBtn.textContent = isError ? 'retry download' : 'download models';
+      }
+      if(modelsFolderBtn){
+        modelsFolderBtn.hidden = missing.length === 0 && !isError;
+      }
+      updateUI();
+    }
+
+    async function openModelsFolderAction(){
+      try{
+        await fetch('/api/open_models_folder', { method: 'POST' });
+      }catch(err){
+        console.warn('open models folder failed', err);
+      }
+    }
+
+    async function dismissModelPrompt(){
+      try{
+        const res = await fetch('/api/model_download_prompt/dismiss', { method: 'POST' });
+        if(res.ok){
+          const data = await res.json();
+          updateModelSettings(data);
+        }
+      }catch(err){
+        console.warn('dismiss model prompt failed', err);
+      }
+    }
+
+    async function startModelDownload(models = null){
+      try{
+        const res = await fetch('/api/model_downloads/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(models ? { models } : {}),
+        });
+        if(!res.ok){
+          showPopup('could not start model download');
+          return;
+        }
+        const data = await res.json();
+        updateModelSettings(data);
+        startModelStatusPolling();
+      }catch(err){
+        console.warn('start model download failed', err);
+        showPopup('could not start model download');
+      }
+    }
+
+    async function refreshModelStatus({ allowPrompt = true } = {}){
+      try{
+        const res = await fetch('/api/model_download_status');
+        if(!res.ok) return null;
+        const data = await res.json();
+        updateModelSettings(data);
+        if(data.status === 'downloading'){
+          startModelStatusPolling();
+        }else if(data.status === 'error'){
+          stopModelStatusPolling();
+        }else{
+          stopModelStatusPolling();
+          if(data.status === 'done' && (!data.missing || data.missing.length === 0)){
+            if(modelsProgressWrap) modelsProgressWrap.hidden = true;
+          }else if(allowPrompt && data.missing && data.missing.length && data.prompt_state === 'pending'){
+            flashModelDownloadCTA();
+          }
+        }
+        return data;
+      }catch(err){
+        console.warn('model status failed', err);
+        return null;
+      }
+    }
+
+    async function acknowledgeRelease(){
+      try{
+        await fetch('/api/release_status/ack', { method: 'POST' });
+      }catch(err){
+        console.warn('release ack failed', err);
+      }
+    }
+
+    async function skipRelease(){
+      try{
+        await fetch('/api/release_status/skip', { method: 'POST' });
+      }catch(err){
+        console.warn('release skip failed', err);
+      }
+    }
+
+    function showReleaseOverlay(status){
+      closeOverlay(activeReleaseOverlay);
+      const { overlay, card } = createOverlayCard('new release available');
+      activeReleaseOverlay = overlay;
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90 whitespace-pre-line';
+      const headline = status.latest_name || status.latest_version || 'new release';
+      const notes = (status.notes || '').trim();
+      info.textContent = notes
+        ? `${headline}\n\n${notes.slice(0, 700)}${notes.length > 700 ? '…' : ''}`
+        : `${headline}\n\na newer version of stemsplat is available.`;
+      card.appendChild(info);
+      const row = document.createElement('div');
+      row.className = 'flex gap-3 justify-end flex-wrap';
+      const laterBtn = makeActionButton('later', 'bg-white/10 text-white');
+      const skipBtn = makeActionButton('skip this version', 'bg-white/10 text-white');
+      const downloadBtn = makeActionButton('download update', 'bg-white text-black');
+      laterBtn.onclick = async () => {
+        await acknowledgeRelease();
+        closeOverlay(activeReleaseOverlay);
+        activeReleaseOverlay = null;
+      };
+      skipBtn.onclick = async () => {
+        await skipRelease();
+        closeOverlay(activeReleaseOverlay);
+        activeReleaseOverlay = null;
+      };
+      downloadBtn.onclick = async () => {
+        await acknowledgeRelease();
+        if(status.latest_url){
+          window.open(status.latest_url, '_blank', 'noopener');
+        }
+        closeOverlay(activeReleaseOverlay);
+        activeReleaseOverlay = null;
+      };
+      row.append(laterBtn, skipBtn, downloadBtn);
+      card.appendChild(row);
+    }
+
+    async function checkForReleaseUpdate(){
+      try{
+        const res = await fetch('/api/release_status');
+        if(!res.ok) return;
+        const data = await res.json();
+        const latest = data.latest_version || '';
+        if(!data.update_available || !latest) return;
+        if(latest === (data.last_notified_version || '') || latest === (data.skipped_version || '')) return;
+        showReleaseOverlay(data);
+      }catch(err){
+        console.warn('release check failed', err);
+      }
+    }
+
     /* === upload & progress logic === */
     // queue of files added by user but not yet uploaded
     const pendingItems = [];
@@ -1249,7 +1824,21 @@
       return [];
     }
 
+    function sourceDirForFile(file){
+      if(!file || typeof file.path !== 'string' || !file.path) return '';
+      const normalized = file.path.replace(/\\/g, '/');
+      const index = normalized.lastIndexOf('/');
+      return index > 0 ? normalized.slice(0, index) : '';
+    }
+
     async function handleFiles(fileList){
+      if(modelsBlocked){
+        showPopup('download the models before splitting');
+        await refreshModelStatus({ allowPrompt: true });
+        flashModelDownloadCTA();
+        if (fileInput) fileInput.value = '';
+        return;
+      }
       const storageOk = await checkStorage();
       const memoryOk = checkMemory();
       if(!storageOk || !memoryOk){
@@ -1352,6 +1941,10 @@
         data.append('file', file);
         data.append('stems', stems.join(','));
         data.append('output_format', settingsState.output_format || 'same_as_input');
+        const sourceDir = sourceDirForFile(file);
+        if(sourceDir){
+          data.append('source_dir', sourceDir);
+        }
         const xhr = new XMLHttpRequest();
         pending.xhr = xhr;
         xhr.open('POST', '/upload');
@@ -1446,6 +2039,12 @@
 
     async function startSequentialProcessing(){
       if(startLock || (startBtn && startBtn.disabled)) return;
+      if(modelsBlocked){
+        showPopup('download the models before splitting');
+        await refreshModelStatus({ allowPrompt: true });
+        flashModelDownloadCTA();
+        return;
+      }
       const storageOk = await checkStorage();
       const memoryOk = checkMemory();
       if(!storageOk || !memoryOk){
@@ -1745,6 +2344,18 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
+          <label for="output-folder-path" class="text-sm opacity-80 block">output folder</label>
+          <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="output-same-as-input" type="checkbox" class="pretty">same as input</label>
+          <div class="flex gap-2">
+            <input id="output-folder-path" type="text" readonly class="flex-1 rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none" />
+            <button id="output-folder-choose" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">choose</button>
+            <button id="output-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open</button>
+          </div>
+        </div>
+
+        <div class="border-t border-white/10 my-4"></div>
+
+        <div class="space-y-2">
           <label for="output-format" class="text-sm opacity-80 block">output format</label>
           <select id="output-format" class="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20">
             <option value="same_as_input">same as input</option>
@@ -1754,7 +2365,29 @@
             <option value="m4a">m4a</option>
             <option value="flac">flac</option>
           </select>
-          <div class="text-xs opacity-60">outputs are saved to your downloads folder</div>
+        </div>
+
+        <div class="border-t border-white/10 my-4"></div>
+
+        <div class="space-y-2">
+          <div class="text-sm opacity-80">network</div>
+          <div id="lan-access-text" class="text-xs opacity-70">access via lan: checking…</div>
+          <div id="port-status-text" class="text-xs opacity-60" hidden></div>
+        </div>
+
+        <div class="border-t border-white/10 my-4"></div>
+
+        <div class="space-y-2">
+          <div class="text-sm opacity-80">models</div>
+          <div id="models-status-text" class="text-xs opacity-70">checking models…</div>
+          <div id="models-progress-wrap" class="space-y-2" hidden>
+            <div class="bar"><div id="models-progress-bar" class="bar-fill"></div></div>
+            <div id="models-progress-meta" class="text-xs opacity-70"></div>
+          </div>
+          <div class="flex gap-2">
+            <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
+            <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
+          </div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>
@@ -1772,6 +2405,6 @@
         <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.1</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.1.0</div>
     </div>
   </div>
