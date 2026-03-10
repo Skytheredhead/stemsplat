@@ -23,6 +23,20 @@ them for this project.
 4. Put those models into the Models folder which is inside the stemsplat folder you unzipped in step 2.
 5. Open the app "Stemsplat" (will get blocked by Apple, just go through the steps to allow it) which will open a terminal and a page in your web browser. The UI is in your browser, ignore the terminal. To close the app, hit the x in the top left corner, everything else should be self explanatory.
 
+## Standalone macOS app
+
+To build a self-contained `Stemsplat.app` bundle locally:
+
+1. Install the Python dependencies in your build environment.
+2. Install PyInstaller: `python3 -m pip install pyinstaller`
+3. Run `./build_app.sh`
+4. Open `dist/Stemsplat.app`
+
+If `models/` already contains your `.ckpt` files when you build, they are bundled into the app automatically.
+Otherwise, bundled runs look for model files in `~/Library/Application Support/stemsplat/models/`.
+
+When running as a bundled app, writable data is stored in `~/Library/Application Support/stemsplat/`.
+
 
 ## Current Models (Thank you Becruily)
 

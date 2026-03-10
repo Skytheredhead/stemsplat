@@ -1,0 +1,36 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "${SCRIPT_DIR}"
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+ARGS=(
+  --noconfirm
+  --clean
+  --windowed
+  --name "Stemsplat"
+  --icon "${SCRIPT_DIR}/.stemsplat_icon.icns"
+  --osx-bundle-identifier "com.stemsplat.app"
+  --collect-submodules uvicorn
+  --collect-submodules split
+  --add-data "${SCRIPT_DIR}/configs:configs"
+  --add-data "${SCRIPT_DIR}/web:web"
+)
+
+if find "${SCRIPT_DIR}/models" -maxdepth 1 -type f ! -name ".gitkeep" | grep -q .; then
+  echo "Including local model files in app bundle..."
+  ARGS+=(--add-data "${SCRIPT_DIR}/models:models")
+fi
+
+"${PYTHON_BIN}" -m PyInstaller "${ARGS[@]}" "${SCRIPT_DIR}/launcher.py"
+
+APP_BUNDLE="${SCRIPT_DIR}/dist/Stemsplat.app"
+INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
+
+if [[ -f "${INFO_PLIST}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "${INFO_PLIST}" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "${INFO_PLIST}" >/dev/null
+  codesign --force --deep --sign - "${APP_BUNDLE}" >/dev/null
+fi

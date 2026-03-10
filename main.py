@@ -27,6 +27,20 @@ import numpy as np
 import soundfile as sf
 import torch
 import yaml
+from app_paths import (
+    CONFIG_DIR,
+    LOG_DIR,
+    MODEL_DIR,
+    OUTPUT_ROOT,
+    RESOURCE_DIR,
+    RUNTIME_DIR,
+    SETTINGS_PATH,
+    UPLOAD_DIR,
+    WEB_DIR,
+    WORK_DIR,
+    ensure_app_dirs,
+    model_search_dirs,
+)
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
@@ -35,13 +49,10 @@ try:
 except Exception:  # pragma: no cover - optional cleanup dependency
     MutagenFile = None
 
-BASE_DIR = Path(__file__).resolve().parent
-SPLIT_DIR = BASE_DIR / "split"
-if str(SPLIT_DIR) not in sys.path:
-    sys.path.append(str(SPLIT_DIR))
+BASE_DIR = RESOURCE_DIR
 
 try:  # pragma: no cover - import failure is surfaced at runtime
-    from mel_band_roformer import MelBandRoformer
+    from split.mel_band_roformer import MelBandRoformer
 except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
     MelBandRoformer = None  # type: ignore[assignment]
     _model_import_error = exc
@@ -97,13 +108,13 @@ class ExportPlan:
     supports_cover: bool
 
 
-MODEL_DIR = BASE_DIR / "models"
-CONFIG_DIR = BASE_DIR / "configs"
-RUNTIME_DIR = BASE_DIR / ".runtime"
-UPLOAD_DIR = RUNTIME_DIR / "uploads"
-WORK_DIR = RUNTIME_DIR / "work"
-OUTPUT_ROOT = (Path.home() / "Downloads").expanduser()
-LOG_PATH = BASE_DIR / "main_stemsplat.log"
+LOG_PATH = LOG_DIR / "main_stemsplat.log"
+MODEL_SEARCH_DIRS = model_search_dirs()
+COMPAT_SETTINGS_DEFAULTS = {
+    "output_format": "same_as_input",
+    "output_root": str(OUTPUT_ROOT),
+    "structure_mode": "flat",
+}
 
 MODEL_SPECS: dict[str, ModelSpec] = {
     "vocals": ModelSpec(
@@ -204,6 +215,78 @@ def _locate_case_insensitive(path: Path) -> Path | None:
     return None
 
 
+compat_settings_lock = threading.RLock()
+
+
+def _load_compat_settings() -> dict[str, str]:
+    settings = dict(COMPAT_SETTINGS_DEFAULTS)
+    if not SETTINGS_PATH.exists():
+        return settings
+    try:
+        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key in settings and isinstance(value, str):
+                    settings[key] = value
+    except Exception:
+        logging.getLogger("stemsplat").debug("failed to load settings from %s", SETTINGS_PATH, exc_info=True)
+    settings["output_root"] = str(OUTPUT_ROOT)
+    settings["structure_mode"] = "flat"
+    return settings
+
+
+def _save_compat_settings(settings: dict[str, str]) -> None:
+    payload = dict(COMPAT_SETTINGS_DEFAULTS)
+    payload.update(settings)
+    payload["output_root"] = str(OUTPUT_ROOT)
+    payload["structure_mode"] = "flat"
+    SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _compat_settings_payload() -> dict[str, str]:
+    with compat_settings_lock:
+        return dict(_compat_settings)
+
+
+def _set_compat_settings(patch: dict[str, str]) -> dict[str, str]:
+    with compat_settings_lock:
+        updated = dict(_compat_settings)
+        updated.update(patch)
+        _save_compat_settings(updated)
+        _compat_settings.clear()
+        _compat_settings.update(updated)
+        return dict(_compat_settings)
+
+
+def _mode_to_stems(mode: str) -> list[str]:
+    if mode == "vocals":
+        return ["vocals"]
+    if mode == "instrumental":
+        return ["instrumental"]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode == "both_separate":
+        return ["vocals", "instrumental"]
+    return []
+
+
+def _stems_to_mode(stems_raw: str) -> str:
+    stems = [item.strip().lower() for item in stems_raw.split(",") if item.strip()]
+    if stems == ["vocals"]:
+        return "vocals"
+    if stems == ["instrumental"]:
+        return "instrumental"
+    if stems == ["deux"]:
+        return "both_deux"
+    if stems == ["vocals", "instrumental"] or stems == ["instrumental", "vocals"]:
+        return "both_separate"
+    raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.")
+
+
+_compat_settings = _load_compat_settings()
+
+
+ensure_app_dirs()
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 stream_handler = logging.StreamHandler()
 logging.basicConfig(
@@ -257,8 +340,7 @@ def _required_models_for_mode(mode: str) -> list[str]:
 
 def _model_file_exists(filename: str) -> bool:
     search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
-    search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
-    for base_dir in search_dirs:
+    for base_dir in MODEL_SEARCH_DIRS:
         for search_name in search_names:
             if _locate_case_insensitive(base_dir / search_name):
                 return True
@@ -331,29 +413,64 @@ def _ffprobe_path() -> str:
     raise AppError(ErrorCode.FFMPEG_MISSING, "ffprobe not found; install ffmpeg.")
 
 
+def _fallback_source_info(path: Path) -> SourceInfo:
+    channels = 2
+    bit_rate: int | None = None
+    has_cover = False
+    codec: str | None = None
+
+    if MutagenFile is not None:
+        try:
+            audio = MutagenFile(path)
+            if audio is not None:
+                info = getattr(audio, "info", None)
+                if info is not None:
+                    raw_channels = getattr(info, "channels", None)
+                    raw_bit_rate = getattr(info, "bitrate", None)
+                    raw_codec = getattr(info, "codec", None) or getattr(info, "codec_description", None)
+                    if raw_channels:
+                        channels = max(1, min(2, int(raw_channels)))
+                    if raw_bit_rate:
+                        bit_rate = int(raw_bit_rate)
+                    if raw_codec:
+                        codec = str(raw_codec).lower()
+
+                tags = getattr(audio, "tags", None)
+                if tags is not None:
+                    has_cover = any(
+                        str(key).lower() in {"apic", "covr", "metadata_block_picture"}
+                        for key in tags.keys()
+                    )
+        except Exception:
+            logger.debug("mutagen probe failed for %s", path, exc_info=True)
+
+    return SourceInfo(
+        suffix=path.suffix.lower(),
+        codec=codec,
+        bit_rate=bit_rate,
+        channels=channels,
+        has_cover=has_cover,
+    )
+
+
 def _probe_source(path: Path) -> SourceInfo:
-    cmd = [
-        _ffprobe_path(),
-        "-v",
-        "error",
-        "-show_entries",
-        "stream=codec_type,codec_name,bit_rate,channels:format=bit_rate",
-        "-of",
-        "json",
-        str(path),
-    ]
+    fallback = _fallback_source_info(path)
     try:
+        cmd = [
+            _ffprobe_path(),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,bit_rate,channels:format=bit_rate",
+            "-of",
+            "json",
+            str(path),
+        ]
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         data = json.loads(result.stdout or "{}")
     except Exception as exc:
         logger.warning("ffprobe failed for %s: %s", path, exc)
-        return SourceInfo(
-            suffix=path.suffix.lower(),
-            codec=None,
-            bit_rate=None,
-            channels=2,
-            has_cover=False,
-        )
+        return fallback
 
     streams = data.get("streams") or []
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
@@ -363,10 +480,10 @@ def _probe_source(path: Path) -> SourceInfo:
         bit_rate = int(bit_rate) if bit_rate else None
     return SourceInfo(
         suffix=path.suffix.lower(),
-        codec=audio_stream.get("codec_name"),
-        bit_rate=bit_rate if isinstance(bit_rate, int) else None,
-        channels=max(1, min(2, int(audio_stream.get("channels") or 2))),
-        has_cover=has_cover,
+        codec=audio_stream.get("codec_name") or fallback.codec,
+        bit_rate=bit_rate if isinstance(bit_rate, int) else fallback.bit_rate,
+        channels=max(1, min(2, int(audio_stream.get("channels") or fallback.channels or 2))),
+        has_cover=has_cover or fallback.has_cover,
     )
 
 
@@ -637,8 +754,7 @@ class ModelManager:
 
     def _resolve_model_path(self, filename: str) -> Path:
         search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
-        search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
-        for base_dir in search_dirs:
+        for base_dir in MODEL_SEARCH_DIRS:
             for search_name in search_names:
                 match = _locate_case_insensitive(base_dir / search_name)
                 if match:
@@ -843,6 +959,7 @@ def _build_task_payload(
     source_path: Path,
     mode: str,
     output_format: str,
+    auto_start: bool = True,
 ) -> dict[str, Any]:
     return {
         "id": task_id,
@@ -850,8 +967,8 @@ def _build_task_payload(
         "source_path": str(source_path),
         "mode": mode,
         "output_format": output_format,
-        "status": "queued",
-        "stage": "Waiting in queue",
+        "status": "queued" if auto_start else "ready",
+        "stage": "Waiting in queue" if auto_start else "Ready",
         "pct": 0,
         "eta_seconds": None,
         "out_dir": None,
@@ -868,6 +985,121 @@ def _build_task_payload(
 def _create_output_dir(filename: str) -> Path:
     _ = filename
     return _ensure_dir(OUTPUT_ROOT)
+
+
+def _validate_mode_and_output_format(mode: str, output_format: str) -> None:
+    if mode not in MODE_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
+    if output_format not in OUTPUT_FORMAT_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.")
+    _validate_models_for_mode(mode)
+
+
+async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
+    original_name = Path(file.filename or "upload").name
+    suffix = Path(original_name).suffix.lower()
+    content_type = (file.content_type or "").lower()
+    if suffix and suffix not in SUPPORTED_AUDIO_SUFFIXES:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
+    if not suffix and not content_type.startswith("audio/"):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio file.")
+
+    task_id = str(uuid.uuid4())
+    stored_name = f"{task_id}_{original_name}"
+    source_path = UPLOAD_DIR / stored_name
+    bytes_written = 0
+    try:
+        with source_path.open("wb") as handle:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                bytes_written += len(chunk)
+    except Exception as exc:
+        _cleanup_path(source_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}") from exc
+    finally:
+        with contextlib.suppress(Exception):
+            await file.close()
+
+    if bytes_written <= 0:
+        _cleanup_path(source_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is empty.")
+    return original_name, source_path
+
+
+def _register_task(
+    *,
+    original_name: str,
+    source_path: Path,
+    mode: str,
+    output_format: str,
+    auto_start: bool,
+) -> dict[str, Any]:
+    task_id = str(uuid.uuid4())
+    payload = _build_task_payload(
+        task_id=task_id,
+        original_name=original_name,
+        source_path=source_path,
+        mode=mode,
+        output_format=output_format,
+        auto_start=auto_start,
+    )
+    with tasks_lock:
+        tasks[task_id] = payload
+    if auto_start:
+        task_queue.put(task_id)
+    return payload
+
+
+def _enqueue_task(task_id: str) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if task["status"] in {"queued", "running"}:
+            return task
+        if task["status"] in TERMINAL_STATUSES:
+            return task
+        task["status"] = "queued"
+        task["stage"] = "Waiting in queue"
+        task["eta_seconds"] = None
+        task["version"] += 1
+    task_queue.put(task_id)
+    return task
+
+
+def _compat_stage(task: dict[str, Any]) -> str:
+    status = str(task.get("status") or "").lower()
+    if status == "ready":
+        return "ready"
+    if status == "queued":
+        return "queued"
+    if status == "done":
+        return "done"
+    if status == "stopped":
+        return "stopped"
+    if status == "error":
+        return "error"
+    return str(task.get("stage") or "queued")
+
+
+def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
+    public = _public_task(task)
+    stage = _compat_stage(public)
+    pct = -1 if public["status"] == "error" else public["pct"]
+    return {
+        "task_id": public["id"],
+        "id": public["id"],
+        "name": public["name"],
+        "stage": stage,
+        "pct": pct,
+        "stems": _mode_to_stems(public["mode"]),
+        "out_dir": public["out_dir"],
+        "error": public["error"],
+        "outputs": public["outputs"],
+    }
 
 
 def _process_task(task_id: str) -> None:
@@ -1030,9 +1262,24 @@ async def _log_requests(request: Request, call_next):
 
 
 @app.get("/api/models_status")
-async def models_status() -> dict[str, list[str]]:
+async def models_status() -> dict[str, Any]:
     missing = sorted({item for mode in MODE_CHOICES for item in _find_missing_models_for_mode(mode)})
-    return {"missing": missing}
+    return {"missing": missing, "models_dir": str(MODEL_DIR)}
+
+
+@app.post("/api/open_models_folder")
+async def open_models_folder() -> dict[str, str]:
+    _ensure_dir(MODEL_DIR)
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(MODEL_DIR)])
+        elif os.name == "nt":
+            subprocess.Popen(["explorer", str(MODEL_DIR)])
+        else:
+            subprocess.Popen(["xdg-open", str(MODEL_DIR)])
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open models folder: {exc}").to_http(500) from exc
+    return {"status": "opened", "path": str(MODEL_DIR)}
 
 
 @app.post("/api/tasks")
@@ -1041,53 +1288,19 @@ async def create_task(
     mode: str = Form("vocals"),
     output_format: str = Form("same_as_input"),
 ):
-    if mode not in MODE_CHOICES:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.").to_http()
-    if output_format not in OUTPUT_FORMAT_CHOICES:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
-    _validate_models_for_mode(mode)
-
-    original_name = Path(file.filename or "upload").name
-    suffix = Path(original_name).suffix.lower()
-    content_type = (file.content_type or "").lower()
-    if suffix and suffix not in SUPPORTED_AUDIO_SUFFIXES:
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}").to_http()
-    if not suffix and not content_type.startswith("audio/"):
-        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio file.").to_http()
-
-    task_id = str(uuid.uuid4())
-    stored_name = f"{task_id}_{original_name}"
-    source_path = UPLOAD_DIR / stored_name
-    bytes_written = 0
     try:
-        with source_path.open("wb") as handle:
-            while True:
-                chunk = await file.read(UPLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                bytes_written += len(chunk)
-    except Exception as exc:
-        _cleanup_path(source_path)
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}").to_http() from exc
-    finally:
-        with contextlib.suppress(Exception):
-            await file.close()
-    if bytes_written <= 0:
-        _cleanup_path(source_path)
-        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is empty.").to_http()
-
-    payload = _build_task_payload(
-        task_id=task_id,
-        original_name=original_name,
-        source_path=source_path,
-        mode=mode,
-        output_format=output_format,
-    )
-    with tasks_lock:
-        tasks[task_id] = payload
-    task_queue.put(task_id)
-    return _public_task(payload)
+        _validate_mode_and_output_format(mode, output_format)
+        original_name, source_path = await _store_uploaded_file(file)
+        payload = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            mode=mode,
+            output_format=output_format,
+            auto_start=True,
+        )
+        return _public_task(payload)
+    except AppError as exc:
+        raise exc.to_http()
 
 
 @app.get("/api/tasks/{task_id}/events")
@@ -1136,17 +1349,13 @@ async def retry_task(task_id: str):
         raise AppError(ErrorCode.INVALID_REQUEST, "Original upload is missing; re-add the file.").to_http()
     _validate_models_for_mode(old_task["mode"])
 
-    new_id = str(uuid.uuid4())
-    payload = _build_task_payload(
-        task_id=new_id,
+    payload = _register_task(
         original_name=old_task["original_name"],
         source_path=source_path,
         mode=old_task["mode"],
         output_format=old_task["output_format"],
+        auto_start=True,
     )
-    with tasks_lock:
-        tasks[new_id] = payload
-    task_queue.put(new_id)
     return _public_task(payload)
 
 
@@ -1184,14 +1393,160 @@ async def reveal_output(task_id: str):
     return {"status": "opened", "path": str(single_output or out_path)}
 
 
+@app.get("/settings")
+async def get_settings() -> dict[str, str]:
+    return _compat_settings_payload()
+
+
+@app.post("/settings")
+async def update_settings(request: Request) -> dict[str, str]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid settings payload.").to_http()
+    patch: dict[str, str] = {}
+    output_format = body.get("output_format")
+    if isinstance(output_format, str):
+        if output_format not in OUTPUT_FORMAT_CHOICES:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
+        patch["output_format"] = output_format
+    return _set_compat_settings(patch)
+
+
+@app.post("/upload")
+async def compat_upload(
+    file: UploadFile = File(...),
+    stems: str = Form("vocals"),
+    output_format: str | None = Form(None),
+):
+    try:
+        mode = _stems_to_mode(stems)
+        resolved_output_format = output_format or _compat_settings_payload()["output_format"]
+        _validate_mode_and_output_format(mode, resolved_output_format)
+        original_name, source_path = await _store_uploaded_file(file)
+        payload = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            mode=mode,
+            output_format=resolved_output_format,
+            auto_start=False,
+        )
+        return {"task_id": payload["id"], "stems": _mode_to_stems(mode)}
+    except AppError as exc:
+        raise exc.to_http()
+
+
+@app.post("/start/{task_id}")
+async def compat_start(task_id: str) -> dict[str, Any]:
+    try:
+        task = _enqueue_task(task_id)
+        return _compat_public_task(task)
+    except AppError as exc:
+        raise exc.to_http(404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400)
+
+
+@app.get("/progress/{task_id}")
+async def compat_progress(task_id: str):
+    _require_task(task_id)
+
+    async def _event_stream():
+        last_version = -1
+        last_ping_at = time.time()
+        while True:
+            with tasks_lock:
+                task = tasks.get(task_id)
+                if task is None:
+                    break
+                snapshot = _compat_public_task(task)
+            if snapshot["pct"] != -1 and snapshot["stage"] == "error":
+                snapshot["pct"] = -1
+            if task["version"] != last_version:
+                yield f"data: {json.dumps(snapshot)}\n\n"
+                last_version = task["version"]
+                last_ping_at = time.time()
+                if task["status"] in TERMINAL_STATUSES:
+                    break
+            elif time.time() - last_ping_at >= 10:
+                yield ": ping\n\n"
+                last_ping_at = time.time()
+            await asyncio.sleep(0.35)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/stop/{task_id}")
+async def compat_stop(task_id: str) -> dict[str, Any]:
+    _require_task(task_id)
+    _request_task_stop(task_id)
+    return _compat_public_task(_require_task(task_id))
+
+
+@app.post("/rerun/{task_id}")
+async def compat_rerun(task_id: str) -> dict[str, Any]:
+    old_task = _require_task(task_id)
+    source_path = Path(old_task["source_path"])
+    if not source_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Original upload is missing; re-add the file.").to_http()
+    _validate_models_for_mode(old_task["mode"])
+    payload = _register_task(
+        original_name=old_task["original_name"],
+        source_path=source_path,
+        mode=old_task["mode"],
+        output_format=old_task["output_format"],
+        auto_start=True,
+    )
+    return {"task_id": payload["id"], "stems": _mode_to_stems(payload["mode"])}
+
+
+@app.post("/reveal/{task_id}")
+async def compat_reveal(task_id: str):
+    return await reveal_output(task_id)
+
+
+@app.post("/clear_all_uploads")
+async def compat_clear_all_uploads() -> dict[str, str]:
+    for root in (UPLOAD_DIR, WORK_DIR):
+        for candidate in root.iterdir():
+            _cleanup_path(candidate)
+    return {"status": "cleared"}
+
+
+@app.post("/rehydrate_tasks")
+async def compat_rehydrate_tasks(request: Request) -> dict[str, list[dict[str, Any]]]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        return {"tasks": []}
+    requested = body.get("tasks")
+    if not isinstance(requested, list):
+        return {"tasks": []}
+    hydrated: list[dict[str, Any]] = []
+    with tasks_lock:
+        for item in requested:
+            if not isinstance(item, dict):
+                continue
+            task_id = item.get("id")
+            if not isinstance(task_id, str):
+                continue
+            task = tasks.get(task_id)
+            if task is not None:
+                hydrated.append(_compat_public_task(task))
+    return {"tasks": hydrated}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
+    index_path = WEB_DIR / "index.html"
+    if index_path.exists():
+        return HTMLResponse(index_path.read_text(encoding="utf-8"))
     return HTMLResponse(INDEX_HTML)
 
 
 @app.get("/favicon.ico")
 async def favicon():
-    icon_path = BASE_DIR / "web" / "favicon.ico"
+    icon_path = WEB_DIR / "favicon.ico"
     if icon_path.exists():
         return FileResponse(icon_path, media_type="image/x-icon")
     raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
@@ -1258,6 +1613,7 @@ INDEX_HTML = """<!DOCTYPE html>
       flex-direction: column;
       font-family: "Nunito Sans", sans-serif;
       color: var(--text);
+      text-transform: lowercase;
       background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
       padding: 56px 0;
     }
@@ -1584,6 +1940,10 @@ INDEX_HTML = """<!DOCTYPE html>
       margin-top: 12px;
       padding: 10px 12px;
       border-radius: 14px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
       background: rgba(245,122,109,0.12);
       border: 1px solid rgba(245,122,109,0.16);
       color: #ffd7d2;
@@ -1592,7 +1952,25 @@ INDEX_HTML = """<!DOCTYPE html>
     }
 
     .warning.show {
-      display: block;
+      display: flex;
+    }
+
+    .warning-text {
+      flex: 1 1 280px;
+    }
+
+    .warning-action {
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.08);
+      color: inherit;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .warning-action:hover {
+      background: rgba(255,255,255,0.14);
     }
 
     .start-button {
@@ -1732,6 +2110,10 @@ INDEX_HTML = """<!DOCTYPE html>
       line-height: 1.4;
     }
 
+    .queue-stage.progress-only {
+      justify-content: flex-end;
+    }
+
     .queue-stage strong {
       color: var(--text);
       font-weight: 700;
@@ -1748,8 +2130,11 @@ INDEX_HTML = """<!DOCTYPE html>
     .progress-fill {
       height: 100%;
       border-radius: inherit;
-      width: 0%;
-      transition: width 0.28s ease;
+      width: 100%;
+      transform: scaleX(0);
+      transform-origin: left center;
+      transition: transform 0.52s cubic-bezier(.22,.61,.36,1);
+      will-change: transform;
       background: linear-gradient(90deg, #76cfba 0%, #baf7d8 55%, #e0fff3 100%);
       box-shadow: inset 0 0 16px rgba(255,255,255,0.22);
     }
@@ -1858,7 +2243,7 @@ INDEX_HTML = """<!DOCTYPE html>
     .field label {
       font-size: 0.88rem;
       color: var(--muted);
-      text-transform: uppercase;
+      text-transform: lowercase;
       letter-spacing: 0.08em;
     }
 
@@ -1972,7 +2357,10 @@ INDEX_HTML = """<!DOCTYPE html>
         </section>
 
         <button id="start-button" class="start-button glass-light fade-in delay-4" type="button" disabled>start</button>
-        <div id="models-warning" class="warning"></div>
+        <div id="models-warning" class="warning">
+          <span id="models-warning-text" class="warning-text"></span>
+          <button id="models-folder-button" class="warning-action" type="button" hidden>open models folder</button>
+        </div>
       </div>
     </section>
 
@@ -2034,6 +2422,8 @@ INDEX_HTML = """<!DOCTYPE html>
     const outputFormatSelect = document.getElementById('output-format');
     const closeButton = document.getElementById('close-button');
     const modelsWarning = document.getElementById('models-warning');
+    const modelsWarningText = document.getElementById('models-warning-text');
+    const modelsFolderButton = document.getElementById('models-folder-button');
     const settingsCard = settingsModal.querySelector('.modal');
 
     const settings = {
@@ -2045,6 +2435,7 @@ INDEX_HTML = """<!DOCTYPE html>
     let startBusy = false;
     let settingsCloseTimer = null;
     let missingModels = [];
+    let modelsDir = '';
 
     function missingForMode(mode) {
       if (mode === 'vocals') return missingModels.includes('vocals') ? ['vocals'] : [];
@@ -2170,7 +2561,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
         const pct = Math.max(0, Math.min(100, task.pct || 0));
         const eta = humanEta(task.eta_seconds);
-        const stageText = task.error ? task.error : task.stage || 'waiting';
+        const stageText = task.error ? task.error : '';
         const modeLabel = MODE_LABELS[task.mode] || task.mode;
         const outputLabel = task.output_format === 'same_as_input'
           ? ''
@@ -2183,6 +2574,18 @@ INDEX_HTML = """<!DOCTYPE html>
         const statusBadgeHtml = showStatusBadge
           ? `<div class="status-badge status-${task.status}">${badgeText}</div>`
           : '';
+        const stageHtml = stageText
+          ? `
+              <div class="queue-stage">
+                <strong>${escapeHtml(stageText)}</strong>
+                <span>${escapeHtml(progressSide)}</span>
+              </div>
+            `
+          : `
+              <div class="queue-stage progress-only">
+                <span>${escapeHtml(progressSide)}</span>
+              </div>
+            `;
 
         item.innerHTML = `
           <div class="queue-row">
@@ -2190,12 +2593,9 @@ INDEX_HTML = """<!DOCTYPE html>
               <p class="queue-name">${escapeHtml(task.name)}</p>
               <div class="queue-subline">${escapeHtml(queueMeta)}</div>
               ${statusBadgeHtml}
-              <div class="queue-stage">
-                <strong>${escapeHtml(stageText)}</strong>
-                <span>${escapeHtml(progressSide)}</span>
-              </div>
+              ${stageHtml}
               <div class="progress-shell">
-                <div class="progress-fill" style="width:${pct}%"></div>
+                <div class="progress-fill" style="transform:scaleX(${pct / 100})"></div>
               </div>
             </div>
             <div class="queue-actions" data-actions="${task.localId}">
@@ -2438,17 +2838,22 @@ INDEX_HTML = """<!DOCTYPE html>
       }, 180);
     }
 
-    function showModelsWarning(missing) {
+    function showModelsWarning(missing, nextModelsDir = modelsDir) {
       missingModels = Array.isArray(missing) ? [...missing] : [];
+      modelsDir = nextModelsDir || modelsDir || '';
       const relevantMissing = pendingMissingModels().length > 0 ? pendingMissingModels() : missingForMode(selectedMode);
       if (relevantMissing.length === 0) {
         modelsWarning.classList.remove('show');
-        modelsWarning.textContent = '';
+        modelsWarningText.textContent = '';
+        modelsFolderButton.hidden = true;
         updateStartButton();
         return;
       }
       modelsWarning.classList.add('show');
-      modelsWarning.textContent = `missing models: ${relevantMissing.join(', ')}. add them to the models folder before starting.`;
+      modelsWarningText.textContent = modelsDir
+        ? `missing models: ${relevantMissing.join(', ')}. add them to ${modelsDir} before starting.`
+        : `missing models: ${relevantMissing.join(', ')}. add them to the models folder before starting.`;
+      modelsFolderButton.hidden = !modelsDir;
       updateStartButton();
     }
 
@@ -2457,7 +2862,7 @@ INDEX_HTML = """<!DOCTYPE html>
         const res = await fetch('/api/models_status');
         if (!res.ok) return;
         const data = await res.json();
-        showModelsWarning(data.missing || []);
+        showModelsWarning(data.missing || [], data.models_dir || '');
       } catch (error) {
         console.error(error);
       }
@@ -2483,6 +2888,14 @@ INDEX_HTML = """<!DOCTYPE html>
 
     document.querySelectorAll('.mode-card').forEach((card) => {
       card.addEventListener('click', () => setMode(card.dataset.mode));
+    });
+
+    modelsFolderButton.addEventListener('click', async () => {
+      try {
+        await fetch('/api/open_models_folder', { method: 'POST' });
+      } catch (error) {
+        console.error(error);
+      }
     });
     document.querySelectorAll('.mode-card input').forEach((input) => {
       input.addEventListener('change', (event) => setMode(event.target.value));

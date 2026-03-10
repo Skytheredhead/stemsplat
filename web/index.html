@@ -239,8 +239,7 @@
     const spacer    = document.getElementById('queue-spacer');
     const closeBtn  = document.getElementById('close-app');
     const startBtn  = document.getElementById('start-btn');
-    const outputInput = null;
-    const outputChoose = null;
+    let outputFormatSelect = null;
     const structureCheck = null;
     const structurelessCheck = null;
     let storageBlocked = false;
@@ -251,7 +250,7 @@
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
-    let settingsState = { output_root: '', structure_mode: 'flat' };
+    let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input' };
     let defaultOutputPath = '';
     let dirPickerInput = null;
     updateStartButton();
@@ -292,7 +291,7 @@
         try {
           const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
           if(hasRunning){
-            const ok = await showConfirm('A process is still running. Close anyway?');
+            const ok = await showConfirm('a process is still running. close anyway?');
             if(!ok){
               closeBtn.disabled = false;
               closeBtn.style.opacity = '';
@@ -309,7 +308,9 @@
     }
 
     function applySettingsUI(){
-      // settings UI disabled; outputs always go to default zip
+      if(outputFormatSelect){
+        outputFormatSelect.value = settingsState.output_format || 'same_as_input';
+      }
     }
 
     function guardClick(el, handler, cooldown = 600){
@@ -802,22 +803,9 @@
     function bindDownloadButton(btn, taskRef){
       if(!btn || !taskRef || !taskRef.id) return;
       btn.classList.add('show');
-      setDownloadIcon(btn);
-      btn.title = 'download';
-      guardClick(btn, (e) => {
-        e.preventDefault();
-        const a = document.createElement('a');
-        a.href = '/download/' + taskRef.id;
-        a.rel = 'noopener';
-        a.download = '';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => { try{ a.remove(); }catch(_){}} , 250);
-        taskRef.downloaded = true;
-        saveTasks();
-        setFolderIcon(btn);
-        bindFolderButton(btn, taskRef);
-      });
+      setFolderIcon(btn);
+      btn.title = 'open folder';
+      bindFolderButton(btn, taskRef);
     }
 // --- Helper to rerun a task server-side ---
     async function rerunTask(task, ui){
@@ -1038,7 +1026,7 @@
     guardClick(clearBtn, async () => {
       const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
       if(hasRunning){
-        const ok = await showConfirm('A process is still running. Clear all anyway?');
+        const ok = await showConfirm('a process is still running. clear all anyway?');
         if(!ok) return;
       }
       clearAllTasks();
@@ -1068,6 +1056,7 @@
     // initialize overlay controls on load
     window.addEventListener('load', () => {
       settingsOverlay = document.getElementById('settings-overlay');
+      outputFormatSelect = document.getElementById('output-format');
       const closeBtn = document.getElementById('settings-close');
       const forceBtn = document.getElementById('force-clear');
       if(closeBtn) closeBtn.addEventListener('click', closeSettings);
@@ -1083,12 +1072,10 @@
       setInterval(checkStorage, 15000);
       setInterval(checkMemory, 12000);
       loadSettings();
-      persistSettings({ structure_mode: 'flat' }, { showMissingPopup:false });
-      if(outputInput){
-        // output selection disabled
-      }
-      if(outputChoose){
-        // output chooser disabled
+      if(outputFormatSelect){
+        outputFormatSelect.addEventListener('change', () => {
+          persistSettings({ output_format: outputFormatSelect.value }, { showMissingPopup:false });
+        });
       }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
@@ -1364,6 +1351,7 @@
         const data = new FormData();
         data.append('file', file);
         data.append('stems', stems.join(','));
+        data.append('output_format', settingsState.output_format || 'same_as_input');
         const xhr = new XMLHttpRequest();
         pending.xhr = xhr;
         xhr.open('POST', '/upload');
@@ -1597,6 +1585,35 @@
             applyLabels(parentRow ? parentRow.querySelector('.labels') : null, data.stems);
           }
           if(st){ showStatus(st); }
+          if(stage === 'error'){
+            if(taskRef){
+              taskRef.stage = 'error';
+              taskRef.pct = -1;
+              saveTasks();
+            }
+            st.textContent = 'error';
+            st.classList.remove('hidden');
+            if(dl){
+              dl.classList.remove('show');
+            }
+            setStatusVisibility(st, 'error');
+            const parent = st.closest('.card'); if(parent) parent.classList.add('done');
+            if (stopPad) {
+              stopPad.style.display = '';
+              stopPad.classList.add('show');
+              stopPad.title = 'rerun';
+              stopPad.innerHTML = '';
+              setRetryIcon(stopPad);
+              guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
+            }
+            dropPendingById(taskId);
+            es.close();
+            activeStreams.delete(taskId);
+            if(data.error){
+              showPopup(data.error);
+            }
+            updateUI(); return;
+          }
           if(stage === 'done'){
             smooth.setTarget(100);
             hideStatus(st);
@@ -1728,14 +1745,23 @@
 
       <div class="flex flex-col gap-3">
         <div class="space-y-2">
-          <div class="text-sm opacity-80">outputs will be saved as a zip to your Downloads folder</div>
+          <label for="output-format" class="text-sm opacity-80 block">output format</label>
+          <select id="output-format" class="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20">
+            <option value="same_as_input">same as input</option>
+            <option value="mp3_320">320kb mp3</option>
+            <option value="mp3_128">128kb mp3</option>
+            <option value="wav">wav</option>
+            <option value="m4a">m4a</option>
+            <option value="flac">flac</option>
+          </select>
+          <div class="text-xs opacity-60">outputs are saved to your downloads folder</div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>
 
         <div class="flex flex-col gap-3">
           <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs" style="border-radius:12px;">force clear</button>
-          <div class="text-xs opacity-60">Stops all processing, removes all items, and clears uploaded files.</div>
+          <div class="text-xs opacity-60">stops all processing, removes all items, and clears uploaded files.</div>
         </div>
         <div class="border-t border-white/10 my-4"></div>
 

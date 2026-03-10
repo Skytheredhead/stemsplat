@@ -5,7 +5,10 @@ from torch import nn, einsum, Tensor
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 
-from attend import Attend
+try:
+    from .attend import Attend
+except ImportError:
+    from attend import Attend
 
 from beartype.typing import Tuple, Optional, List, Callable
 from beartype import beartype
