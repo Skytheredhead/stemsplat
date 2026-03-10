@@ -124,9 +124,13 @@
     .attention-pulse { animation: pulseGlow 1.8s ease-out infinite; }
     .attention-ring { box-shadow: 0 0 0 2px rgba(255,255,255,.45), 0 0 24px rgba(255,255,255,.18); }
     .dimmed-control { opacity:.45; pointer-events:none; }
-
-    .close-btn { position: fixed; top: 14px; left: 14px; width: 40px; height: 40px; border-radius: 12px; background: rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.12); color: #E7ECEF; backdrop-filter: blur(10px) saturate(120%); -webkit-backdrop-filter: blur(10px) saturate(120%); box-shadow: 0 10px 30px rgba(0,0,0,.25); display: grid; place-items: center; font-size: 18px; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; z-index: 20; }
-    .close-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0,0,0,.35); background: rgba(255,255,255,0.22); }
+    .copy-button { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.10); display: inline-flex; align-items: center; justify-content: center; color: var(--txt-main); transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
+    .copy-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.16); box-shadow: 0 8px 18px rgba(0,0,0,.2); }
+    .settings-row { display:flex; align-items:center; gap:10px; }
+    .model-list { display:flex; flex-direction:column; gap:10px; }
+    .model-item { display:flex; align-items:center; gap:10px; font-size:13px; color: var(--txt-main); }
+    .model-item input.pretty { pointer-events:none; }
+    .model-note { font-size:12px; opacity:.65; min-height:16px; }
 
     .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); }
     .chip-dim { background: rgba(0,0,0,.38); border:1px solid rgba(255,255,255,.10); color:#E7ECEF; }
@@ -189,9 +193,6 @@
   <div class="bg-gradient-shell"></div>
   <div class="noise fixed inset-0 -z-10"></div>
   <div class="shade"></div>
-  <button id="close-app" class="close-btn" title="close stemsplat" aria-label="close">
-    ×
-  </button>
   <main id="app-shell" class="app-shell compact">
   <!-- header -->
   <h1 id="title" class="text-5xl md:text-6xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
@@ -202,7 +203,7 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
       </svg>
       <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
-      <input id="file-input" type="file" accept="audio/*" multiple aria-label="choose audio files" class="sr-only" />
+      <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,audio/*" multiple aria-label="choose audio files" class="sr-only" />
     </label>
     <div class="flex flex-col gap-4 w-64">
       <div id="stems-card" class="glass pre-hide w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
@@ -289,7 +290,6 @@
     const title     = document.getElementById('title');
     const spacer    = document.getElementById('queue-spacer');
     const appShell  = document.getElementById('app-shell');
-    const closeBtn  = document.getElementById('close-app');
     const startBtn  = document.getElementById('start-btn');
     let outputFormatSelect = null;
     let outputFolderInput = null;
@@ -297,8 +297,10 @@
     let outputFolderChoose = null;
     let outputFolderOpen = null;
     let lanAccessText = null;
+    let lanCopyBtn = null;
     let portStatusText = null;
-    let modelsStatusText = null;
+    let modelsList = null;
+    let modelsNote = null;
     let modelsDownloadBtn = null;
     let modelsFolderBtn = null;
     let modelsProgressWrap = null;
@@ -314,6 +316,12 @@
     let modelStatusPoll = null;
     let activeReleaseOverlay = null;
     let activePortOverlay = null;
+    let lastModelStatus = null;
+    const MODEL_LABELS = {
+      vocals: 'vocals',
+      instrumental: 'instrumental',
+      deux: 'both (highest quality)',
+    };
 
     let startPressed = false;
     let startGeneration = 0;
@@ -334,45 +342,6 @@
         const icon = startBtn.querySelector('svg');
         if(icon){ icon.style.animation = ''; }
       }
-    }
-
-    if (closeBtn) {
-      const shutdownEndpoints = [
-        { url: '/shutdown', options: { method: 'POST', keepalive: true } },
-        { url: 'http://localhost:6060/installer_shutdown', options: { method: 'POST', mode: 'no-cors', keepalive: true } },
-      ];
-      const sendShutdown = async () => {
-        const tasks = shutdownEndpoints.map(({ url, options }) => (
-          fetch(url, options).catch(() => {
-            try { navigator.sendBeacon(url, new Blob()); } catch(_) {}
-          })
-        ));
-        await Promise.allSettled(tasks);
-      };
-      const closeWindow = () => {
-        try { window.close(); } catch(_) {}
-        window.location.replace('about:blank');
-      };
-      closeBtn.addEventListener('click', async () => {
-        closeBtn.disabled = true;
-        closeBtn.style.opacity = '0.7';
-        try {
-          const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
-          if(hasRunning){
-            const ok = await showConfirm('a process is still running. close anyway?');
-            if(!ok){
-              closeBtn.disabled = false;
-              closeBtn.style.opacity = '';
-              return;
-            }
-          }
-          await clearAllTasks();
-          await sendShutdown();
-        } catch (err) {
-          console.error('shutdown failed', err);
-        }
-        setTimeout(closeWindow, 220);
-      });
     }
 
     function applySettingsUI(){
@@ -1185,8 +1154,10 @@
       outputFolderChoose = document.getElementById('output-folder-choose');
       outputFolderOpen = document.getElementById('output-folder-open');
       lanAccessText = document.getElementById('lan-access-text');
+      lanCopyBtn = document.getElementById('lan-copy-btn');
       portStatusText = document.getElementById('port-status-text');
-      modelsStatusText = document.getElementById('models-status-text');
+      modelsList = document.getElementById('models-list');
+      modelsNote = document.getElementById('models-note');
       modelsDownloadBtn = document.getElementById('models-download');
       modelsFolderBtn = document.getElementById('models-folder-open');
       modelsProgressWrap = document.getElementById('models-progress-wrap');
@@ -1247,10 +1218,20 @@
           }
         });
       }
+      if(lanCopyBtn){
+        lanCopyBtn.addEventListener('click', async () => {
+          const runtime = settingsState.runtime || {};
+          const target = runtime.lan_display || '';
+          if(!target) return;
+          const ok = await copyText(target);
+          showPopup(ok ? 'lan address copied' : 'could not copy address');
+        });
+      }
       if(modelsDownloadBtn){
         modelsDownloadBtn.addEventListener('click', async () => {
           await dismissModelPrompt();
-          startModelDownload();
+          const missing = Array.isArray(lastModelStatus && lastModelStatus.missing) ? lastModelStatus.missing : null;
+          startModelDownload(missing && missing.length ? missing : null);
         });
       }
       if(modelsFolderBtn){
@@ -1411,7 +1392,11 @@
       const data = runtime && typeof runtime === 'object' ? runtime : {};
       const lanDisplay = data.lan_display || '';
       if(lanAccessText){
-        lanAccessText.textContent = lanDisplay ? `access via lan: ${lanDisplay}` : 'access via lan: unavailable';
+        lanAccessText.textContent = lanDisplay || 'unavailable';
+      }
+      if(lanCopyBtn){
+        lanCopyBtn.disabled = !lanDisplay;
+        lanCopyBtn.classList.toggle('dimmed-control', !lanDisplay);
       }
       if(portStatusText){
         if(data.port_conflict){
@@ -1422,6 +1407,25 @@
           portStatusText.textContent = '';
         }
       }
+    }
+
+    function renderModelChecklist(status){
+      if(!modelsList) return;
+      const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
+      modelsList.innerHTML = '';
+      ['vocals', 'instrumental', 'deux'].forEach((key) => {
+        const row = document.createElement('label');
+        row.className = 'model-item';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.className = 'pretty';
+        box.checked = !missing.has(key);
+        box.disabled = true;
+        const label = document.createElement('span');
+        label.textContent = MODEL_LABELS[key] || key;
+        row.append(box, label);
+        modelsList.appendChild(row);
+      });
     }
 
     async function refreshRuntimeStatus({ showPortNotice = false } = {}){
@@ -1569,17 +1573,21 @@
     }
 
     function updateModelSettings(status){
+      lastModelStatus = status;
       const missing = Array.isArray(status && status.missing) ? status.missing : [];
       const isDownloading = !!(status && status.status === 'downloading');
       const isError = !!(status && status.status === 'error');
       modelsBlocked = missing.length > 0 || isDownloading;
-      if(modelsStatusText){
+      renderModelChecklist(status);
+      if(modelsNote){
         if(isError){
-          modelsStatusText.textContent = status.error || 'model download failed';
+          modelsNote.textContent = status.error || 'model download failed';
+        }else if(isDownloading){
+          modelsNote.textContent = `downloading ${status.current_model || 'models'}`;
         }else if(missing.length){
-          modelsStatusText.textContent = `missing models: ${missing.join(', ')}`;
+          modelsNote.textContent = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
         }else{
-          modelsStatusText.textContent = 'models ready';
+          modelsNote.textContent = '';
         }
       }
       if(modelsProgressWrap){
@@ -2343,7 +2351,7 @@
       <h2 class="text-2xl font-light mb-3 select-none">settings</h2>
 
       <div class="flex flex-col gap-3">
-        <div class="space-y-2">
+        <div class="space-y-4">
           <label for="output-folder-path" class="text-sm opacity-80 block">output folder</label>
           <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="output-same-as-input" type="checkbox" class="pretty">same as input</label>
           <div class="flex gap-2">
@@ -2351,11 +2359,6 @@
             <button id="output-folder-choose" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">choose</button>
             <button id="output-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open</button>
           </div>
-        </div>
-
-        <div class="border-t border-white/10 my-4"></div>
-
-        <div class="space-y-2">
           <label for="output-format" class="text-sm opacity-80 block">output format</label>
           <select id="output-format" class="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20">
             <option value="same_as_input">same as input</option>
@@ -2369,17 +2372,24 @@
 
         <div class="border-t border-white/10 my-4"></div>
 
-        <div class="space-y-2">
-          <div class="text-sm opacity-80">network</div>
-          <div id="lan-access-text" class="text-xs opacity-70">access via lan: checking…</div>
+        <div class="space-y-4">
+          <div class="space-y-2">
+          <div class="text-sm opacity-80">lan access</div>
+          <div class="settings-row">
+            <button id="lan-copy-btn" class="copy-button" type="button" title="copy lan address" aria-label="copy lan address">
+              <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+              </svg>
+            </button>
+            <div id="lan-access-text" class="text-xs opacity-70">checking…</div>
+          </div>
           <div id="port-status-text" class="text-xs opacity-60" hidden></div>
-        </div>
-
-        <div class="border-t border-white/10 my-4"></div>
-
-        <div class="space-y-2">
+          </div>
+          <div class="space-y-2">
           <div class="text-sm opacity-80">models</div>
-          <div id="models-status-text" class="text-xs opacity-70">checking models…</div>
+          <div id="models-list" class="model-list"></div>
+          <div id="models-note" class="model-note"></div>
           <div id="models-progress-wrap" class="space-y-2" hidden>
             <div class="bar"><div id="models-progress-bar" class="bar-fill"></div></div>
             <div id="models-progress-meta" class="text-xs opacity-70"></div>
@@ -2388,23 +2398,19 @@
             <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
             <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
           </div>
+          </div>
         </div>
 
-        <div class="border-t border-white/10 my-4"></div>
-
-        <div class="flex flex-col gap-3">
-          <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs" style="border-radius:12px;">force clear</button>
-          <div class="text-xs opacity-60">stops all processing, removes all items, and clears uploaded files.</div>
-        </div>
         <div class="border-t border-white/10 my-4"></div>
 
         <div class="flex gap-3 mt-3">
+          <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs flex-1" type="button" style="border-radius:12px;">force clear</button>
           <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
           <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
         </div>
         <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.1.0</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.3</div>
     </div>
   </div>

@@ -112,7 +112,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.3"
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
@@ -2732,7 +2732,7 @@ INDEX_HTML = """<!DOCTYPE html>
           <h3>drop songs here</h3>
           <p>or click to choose files</p>
         </div>
-        <input id="file-input" class="hidden-input" type="file" accept="audio/*" multiple>
+        <input id="file-input" class="hidden-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,audio/*" multiple>
       </label>
 
       <div class="controls-side">

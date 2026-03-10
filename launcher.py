@@ -314,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_browser:
         try:
             controller.wait()
+        except KeyboardInterrupt:
+            logger.info("interrupt received; shutting down")
         finally:
             controller.stop()
         return 0
@@ -324,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
     threading.Thread(target=_open_browser_when_ready, args=(controller.client_url(),), daemon=True).start()
     try:
         controller.wait()
+    except KeyboardInterrupt:
+        logger.info("interrupt received; shutting down")
     finally:
         controller.stop()
     return 0
