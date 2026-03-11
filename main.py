@@ -1809,6 +1809,7 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "name": public["name"],
         "stage": stage,
         "pct": pct,
+        "eta_seconds": public["eta_seconds"],
         "stems": _mode_to_stems(public["mode"]),
         "video_handling": public["video_handling"],
         "out_dir": public["out_dir"],
@@ -1826,6 +1827,13 @@ def _extract_task_artwork(task_id: str) -> Path | None:
         return None
     cached_path = ARTWORK_DIR / f"{task_id}.jpg"
     if cached_path.exists() and cached_path.stat().st_size > 0:
+        return cached_path
+
+    embedded = _extract_embedded_artwork(source_path)
+    if embedded is not None:
+        payload, suffix = embedded
+        cached_path = ARTWORK_DIR / f"{task_id}{suffix}"
+        cached_path.write_bytes(payload)
         return cached_path
 
     temp_path = ARTWORK_DIR / f"{task_id}.tmp.jpg"
@@ -1847,7 +1855,7 @@ def _extract_task_artwork(task_id: str) -> Path | None:
                 "-frames:v",
                 "1",
                 "-vf",
-                "scale='min(320,iw)':-1",
+                "scale=320:-1:force_original_aspect_ratio=decrease",
                 str(temp_path),
             ],
             check=True,
@@ -1866,6 +1874,50 @@ def _extract_task_artwork(task_id: str) -> Path | None:
 
     temp_path.replace(cached_path)
     return cached_path
+
+
+def _extract_embedded_artwork(source_path: Path) -> tuple[bytes, str] | None:
+    if MutagenFile is None:
+        return None
+    try:
+        tagged = MutagenFile(source_path)
+    except Exception:
+        return None
+    if tagged is None:
+        return None
+    tags = getattr(tagged, "tags", None)
+    if not tags:
+        return None
+
+    def _resolve_suffix(data: bytes, mime: str | None = None) -> str:
+        mime_text = (mime or "").lower()
+        if "png" in mime_text:
+            return ".png"
+        if "jpeg" in mime_text or "jpg" in mime_text:
+            return ".jpg"
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ".png"
+        return ".jpg"
+
+    with contextlib.suppress(Exception):
+        covers = tags.get("covr")
+        if covers:
+            raw = bytes(covers[0])
+            if raw:
+                return raw, _resolve_suffix(raw)
+
+    values: list[Any]
+    if hasattr(tags, "values"):
+        values = list(tags.values())
+    else:
+        values = []
+    for value in values:
+        frames = value if isinstance(value, list) else [value]
+        for frame in frames:
+            data = getattr(frame, "data", None)
+            if isinstance(data, (bytes, bytearray)) and data:
+                return bytes(data), _resolve_suffix(bytes(data), getattr(frame, "mime", None))
+    return None
 
 
 def _process_task(task_id: str) -> None:
@@ -2280,12 +2332,16 @@ async def task_events(task_id: str):
 @app.get("/api/tasks/{task_id}/artwork")
 async def task_artwork(task_id: str):
     _require_task(task_id)
-    artwork_path = _extract_task_artwork(task_id)
+    try:
+        artwork_path = _extract_task_artwork(task_id)
+    except AppError:
+        artwork_path = None
     if artwork_path is None:
         raise HTTPException(status_code=404, detail="artwork not found")
+    media_type = "image/png" if artwork_path.suffix.lower() == ".png" else "image/jpeg"
     return FileResponse(
         artwork_path,
-        media_type="image/jpeg",
+        media_type=media_type,
         headers={"Cache-Control": "public, max-age=3600"},
     )
 

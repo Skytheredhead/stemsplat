@@ -899,6 +899,13 @@
         img.hidden = true;
         img.removeAttribute('src');
         img.dataset.taskId = '';
+        img.dataset.failedFor = '';
+        shell.classList.remove('has-image');
+        return;
+      }
+      if(img.dataset.failedFor === taskId){
+        img.hidden = true;
+        img.removeAttribute('src');
         shell.classList.remove('has-image');
         return;
       }
@@ -906,23 +913,43 @@
         return;
       }
       img.dataset.taskId = taskId;
-      img.hidden = false;
+      img.hidden = true;
       img.onload = () => {
         if(img.dataset.taskId !== taskId) return;
+        img.hidden = false;
         shell.classList.add('has-image');
       };
       img.onerror = () => {
         if(img.dataset.taskId !== taskId) return;
         img.hidden = true;
         img.removeAttribute('src');
+        img.dataset.failedFor = taskId;
         shell.classList.remove('has-image');
       };
+      img.dataset.failedFor = '';
       img.src = `${artworkUrl(taskId)}?v=${encodeURIComponent(taskId)}`;
     }
 
     function applyRowState(row, task){
       if(!row || !task) return;
       applyArtwork(row, task);
+    }
+
+    function formatEta(seconds){
+      const value = Number(seconds);
+      if(!Number.isFinite(value) || value <= 0) return '';
+      if(value < 90) return '1m';
+      const minutes = Math.round(value / 60);
+      if(minutes < 60) return `${minutes}m`;
+      const hours = Math.floor(minutes / 60);
+      const remain = minutes % 60;
+      return remain ? `${hours}h ${remain}m` : `${hours}h`;
+    }
+
+    function formatProgressChip(pct, etaSeconds){
+      const clamped = Math.round(Math.max(0, Math.min(100, Number(pct) || 0)));
+      const eta = formatEta(etaSeconds);
+      return eta ? `${clamped}% • ${eta}` : `${clamped}%`;
     }
 
     async function rehydrateTasks(){
@@ -956,7 +983,7 @@
     function isProcessing(t){
       if(!t) return false;
       const stage = (t.stage || '').toLowerCase();
-      const inactive = ['ready','done','stopped','error'];
+      const inactive = ['ready','queued','done','stopped','error'];
       if(inactive.includes(stage)) return false;
       return typeof t.pct === 'number' ? (t.pct >= 0 && t.pct < 100) : true;
     }
@@ -976,9 +1003,9 @@
         if(itemCount === 0){
           bottomPad.style.height = '0px';
         }else if(compact){
-          bottomPad.style.height = '14px';
+          bottomPad.style.height = '10px';
         }else{
-          bottomPad.style.height = manyItems ? '66px' : '42px';
+          bottomPad.style.height = manyItems ? '34px' : '22px';
         }
       }
       if (hasClearable) {
@@ -1356,11 +1383,12 @@
       else {
         const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
         showStatus(st);
-        if(task.stage === 'ready' || task.stage === 'queued'){
+        const normalizedStage = String(task.stage || '').toLowerCase();
+        if(normalizedStage === 'ready' || normalizedStage === 'queued'){
           st.textContent = displayStage(task.stage) || 'queued';
           smooth.setImmediate(0);
         }else{
-          st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
+          st.textContent = formatProgressChip(sp, task.eta_seconds);
           smooth.setImmediate(sp);
         }
         setStopVisibility(stopPad, task.stage);
@@ -1398,6 +1426,7 @@
       // Apply any stem labels if present
       applyLabels(inserted.querySelector('.labels'), task.stems);
       applyRowState(inserted, task);
+      ensureTaskProgressTracking(task);
       updateUI();
       return {bar, st, dl, stopPad, smooth};
     }
@@ -1497,7 +1526,7 @@
             last.classList.add('enter-active');
           });
         }
-        if(t.id && t.pct < 100 && t.pct >= 0){
+        if(t.id && t.pct < 100 && t.pct >= 0 && !activeStreams.has(t.id)){
           trackProgress(t.id, bar, st, dl, null, null, t, null, smooth, stopPad);
         }
       });
@@ -2446,6 +2475,16 @@
       const smooth = makeProgressSmoother(bar);
       return { item, bar, st, dl, card, stopPad, smooth };
     }
+    function ensureTaskProgressTracking(task){
+      if(!task || !task.id) return;
+      const stage = String(task.stage || '').toLowerCase();
+      if(['ready', 'done', 'error', 'stopped'].includes(stage)) return;
+      if(activeStreams.has(task.id)) return;
+      const row = findRowForTask(task);
+      const ui = taskUiForRow(row);
+      if(!ui) return;
+      trackProgress(task.id, ui.bar, ui.st, ui.dl, null, null, task, null, ui.smooth, ui.stopPad);
+    }
     async function restartTaskWithSelection(task, stems){
       if(!task || !task.id) return false;
       const row = findRowForTask(task);
@@ -2804,6 +2843,9 @@
               chip.textContent = 'queued';
               chip.classList.remove('hidden');
             }
+            applyRowState(row, task);
+            const stopPad = row.querySelector('.stop-pad');
+            setStopVisibility(stopPad, 'queued');
             return;
           }
           if(chip && (chip.textContent || '').toLowerCase() === 'ready'){
@@ -2811,6 +2853,10 @@
             chip.textContent = 'queued';
             chip.classList.remove('hidden');
           }
+          const fallbackTask = task || { stage: 'queued', pct: 0, id: id || null };
+          applyRowState(row, fallbackTask);
+          const stopPad = row.querySelector('.stop-pad');
+          setStopVisibility(stopPad, 'queued');
         });
         if(changed){
           saveTasks();
@@ -2834,6 +2880,7 @@
               t.downloaded = false;
               t.autoDownloaded = false;
               t.out_dir = null;
+              ensureTaskProgressTracking(t);
             }catch(_){}
           }
         }
@@ -2985,6 +3032,9 @@
           if(taskRef){
             taskRef.stage = stage;
             taskRef.pct = pct;
+            if(typeof data.eta_seconds === 'number' || data.eta_seconds === null){
+              taskRef.eta_seconds = data.eta_seconds;
+            }
             if(data.stems) taskRef.stems = data.stems;
             if(data.out_dir) taskRef.out_dir = data.out_dir;
             if(data.zip) taskRef.zip = data.zip;
@@ -2992,6 +3042,10 @@
             if(typeof taskRef.downloaded === 'undefined'){ taskRef.downloaded = false; }
             if(typeof taskRef.autoDownloaded === 'undefined'){ taskRef.autoDownloaded = false; }
             saveTasks();
+          }
+          const currentRow = st && st.closest ? st.closest('.item-row') : null;
+          if(currentRow){
+            applyRowState(currentRow, taskRef || { id: taskId, stage, pct });
           }
           if(data.stems && st){
             const parentRow = st.closest('.item-row');
@@ -3025,6 +3079,9 @@
             if(data.error){
               showPopup(data.error);
             }
+            if(currentRow){
+              applyRowState(currentRow, taskRef || { id: taskId, stage: 'error', pct: -1 });
+            }
             updateUI(); return;
           }
           if(stage === 'done'){
@@ -3046,6 +3103,9 @@
             dropPendingById(taskId);
             es.close();
             activeStreams.delete(taskId);
+            if(currentRow){
+              applyRowState(currentRow, taskRef || { id: taskId, stage: 'done', pct: 100 });
+            }
             updateUI(); return;
           }
           if (stage === 'stopped') {
@@ -3065,16 +3125,20 @@
             dropPendingById(taskId);
             es.close();
             activeStreams.delete(taskId);
+            if(currentRow){
+              applyRowState(currentRow, taskRef || { id: taskId, stage: 'stopped', pct: 0 });
+            }
             updateUI(); return;
           }
           if (typeof pct === 'number' && pct >= 0) {
             const sp = Math.round(Math.max(0, Math.min(100, pct)));
-            const friendlyStage = displayStage(stage);
-            if (stage === 'queued' || stage === 'ready') {
+            const normalizedStage = String(stage || '').toLowerCase();
+            if (normalizedStage === 'queued' || normalizedStage === 'ready') {
+              const friendlyStage = displayStage(stage);
               st.textContent = friendlyStage || 'queued';
               smooth.setImmediate(0);
             } else {
-              st.textContent = friendlyStage ? `${friendlyStage} (${sp}%)` : `${sp}%`;
+              st.textContent = formatProgressChip(sp, data.eta_seconds);
               smooth.setTarget(sp);
             }
             if(stage !== 'done' && dl){
@@ -3108,6 +3172,7 @@
             taskRef.pct = -1;
             saveTasks();
           }
+          const currentRow = st && st.closest ? st.closest('.item-row') : null;
           if (st) {
             showStatus(st);
             st.textContent = 'error';
@@ -3131,6 +3196,9 @@
           dropPendingById(taskId);
           es.close();
           activeStreams.delete(taskId);
+          if(currentRow){
+            applyRowState(currentRow, taskRef || { id: taskId, stage: 'error', pct: -1 });
+          }
           if(errMsg){
             showPopup(errMsg);
           }
