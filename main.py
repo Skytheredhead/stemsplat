@@ -10,6 +10,7 @@ import os
 import platform
 import queue
 import re
+import resource
 import shutil
 import socket
 import subprocess
@@ -19,6 +20,7 @@ import threading
 import time
 import urllib.request
 import uuid
+import zipfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -30,6 +32,7 @@ import torch
 import yaml
 from downloader import SSL_CONTEXT, download_to
 from app_paths import (
+    ARTWORK_DIR,
     CONFIG_DIR,
     LOG_DIR,
     MODEL_DIR,
@@ -45,6 +48,7 @@ from app_paths import (
 )
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 try:
     from mutagen import File as MutagenFile
@@ -101,6 +105,7 @@ class SourceInfo:
     bit_rate: int | None
     channels: int
     has_cover: bool
+    has_video: bool
 
 
 @dataclass(frozen=True)
@@ -115,6 +120,13 @@ MODEL_SEARCH_DIRS = model_search_dirs()
 APP_VERSION = "0.3"
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+WATCHDOG_INTERVAL_SECONDS = 5.0
+WATCHDOG_CONFIRM_SAMPLES = 3
+TASK_STALL_TIMEOUT_SECONDS = 300.0
+TASK_HARD_TIMEOUT_SECONDS = 7200.0
+PROCESS_RSS_HEADROOM_RATIO = 0.82
+PROCESS_RSS_LIMIT_FALLBACK_BYTES = 8 * 1024 * 1024 * 1024
+MPS_MEMORY_HEADROOM_RATIO = 0.88
 UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
 MODEL_PROMPT_PENDING = "pending"
 MODEL_PROMPT_DISMISSED = "dismissed"
@@ -124,6 +136,7 @@ COMPAT_SETTINGS_DEFAULTS = {
     "output_format": "same_as_input",
     "output_root": str(OUTPUT_ROOT),
     "output_same_as_input": False,
+    "video_handling": "audio_only",
     "structure_mode": "flat",
     "model_prompt_state": MODEL_PROMPT_PENDING,
     "update_last_checked_at": 0.0,
@@ -167,8 +180,9 @@ MODEL_URLS = {
 
 MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
+VIDEO_HANDLING_CHOICES = {"audio_only", "video_and_stems"}
 TERMINAL_STATUSES = {"done", "error", "stopped"}
-SUPPORTED_AUDIO_SUFFIXES = {
+SUPPORTED_MEDIA_SUFFIXES = {
     ".wav",
     ".wave",
     ".mp3",
@@ -180,6 +194,12 @@ SUPPORTED_AUDIO_SUFFIXES = {
     ".alac",
     ".ogg",
     ".opus",
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
 }
 OVERLAP_RATIO = 0.12
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -243,6 +263,8 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     output_root = Path(str(normalized.get("output_root") or OUTPUT_ROOT)).expanduser()
     normalized["output_root"] = str(output_root)
     normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
+    if str(normalized.get("video_handling") or "") not in VIDEO_HANDLING_CHOICES:
+        normalized["video_handling"] = "audio_only"
     normalized["structure_mode"] = "flat"
     return normalized
 
@@ -287,6 +309,13 @@ def _current_output_root() -> Path:
     with compat_settings_lock:
         raw = str(_compat_settings.get("output_root") or OUTPUT_ROOT)
     return _ensure_dir(Path(raw).expanduser())
+
+
+def _is_remote_client(request: Request | None) -> bool:
+    if request is None or request.client is None:
+        return False
+    host = str(request.client.host or "").strip().lower()
+    return host not in {"127.0.0.1", "::1", "localhost"}
 
 
 def _normalize_version_parts(raw: str) -> tuple[int, ...]:
@@ -558,6 +587,7 @@ def _fallback_source_info(path: Path) -> SourceInfo:
         bit_rate=bit_rate,
         channels=channels,
         has_cover=has_cover,
+        has_video=False,
     )
 
 
@@ -569,7 +599,7 @@ def _probe_source(path: Path) -> SourceInfo:
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,bit_rate,channels:format=bit_rate",
+            "stream=codec_type,codec_name,bit_rate,channels,disposition:format=bit_rate",
             "-of",
             "json",
             str(path),
@@ -582,7 +612,9 @@ def _probe_source(path: Path) -> SourceInfo:
 
     streams = data.get("streams") or []
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
-    has_cover = any(stream.get("codec_type") == "video" for stream in streams)
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    has_cover = any(bool((stream.get("disposition") or {}).get("attached_pic")) for stream in video_streams)
+    has_video = any(not bool((stream.get("disposition") or {}).get("attached_pic")) for stream in video_streams)
     bit_rate = audio_stream.get("bit_rate") or (data.get("format") or {}).get("bit_rate")
     with contextlib.suppress(Exception):
         bit_rate = int(bit_rate) if bit_rate else None
@@ -592,6 +624,7 @@ def _probe_source(path: Path) -> SourceInfo:
         bit_rate=bit_rate if isinstance(bit_rate, int) else fallback.bit_rate,
         channels=max(1, min(2, int(audio_stream.get("channels") or fallback.channels or 2))),
         has_cover=has_cover or fallback.has_cover,
+        has_video=has_video,
     )
 
 
@@ -731,6 +764,70 @@ def _export_stem(
     raise AppError(ErrorCode.SEPARATION_FAILED, f"Export failed: {last_error}") from last_error
 
 
+def _resolve_video_output(source_info: SourceInfo) -> tuple[str, list[str]]:
+    suffix = source_info.suffix.lower()
+    if suffix in {".mp4", ".m4v", ".mov"}:
+        return suffix, ["-c:a", "aac", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 256)}k"]
+    if suffix == ".webm":
+        return ".webm", ["-c:a", "libopus", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 192)}k"]
+    if suffix == ".avi":
+        return ".avi", ["-c:a", "libmp3lame", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 192)}k"]
+    return ".mkv", ["-c:a", "aac", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 256)}k"]
+
+
+def _export_video_stem(
+    stem_wav: Path,
+    source_path: Path,
+    dest_path: Path,
+    source_info: SourceInfo,
+) -> Path:
+    ffmpeg_path = _ensure_ffmpeg()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate = ensure_unique_path(dest_path)
+    suffix, audio_args = _resolve_video_output(source_info)
+    if candidate.suffix.lower() != suffix:
+        candidate = ensure_unique_path(candidate.with_suffix(suffix))
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
+        "-i",
+        str(stem_wav),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-map_metadata",
+        "0",
+        "-c:v",
+        "copy",
+        *audio_args,
+        "-shortest",
+        "-metadata",
+        "title=",
+        str(candidate),
+    ]
+    if suffix in {".mp4", ".m4v", ".mov"}:
+        cmd.extend(["-movflags", "+faststart"])
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _strip_title_metadata(candidate)
+        return candidate
+    except Exception as exc:
+        _cleanup_path(candidate)
+        raise AppError(ErrorCode.SEPARATION_FAILED, f"Video export failed: {exc}") from exc
+
+
 def _decode_audio_to_wav(source_path: Path, work_dir: Path, channels: int) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     decoded_path = work_dir / "input.wav"
@@ -835,6 +932,73 @@ def _safe_mps_empty_cache() -> None:
     if getattr(torch, "mps", None) and hasattr(torch.mps, "empty_cache"):
         with contextlib.suppress(Exception):
             torch.mps.empty_cache()
+
+
+def _physical_memory_bytes() -> int:
+    if sys.platform == "darwin":
+        with contextlib.suppress(Exception):
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return max(0, int((result.stdout or "").strip() or "0"))
+    for key in ("SC_PHYS_PAGES", "SC_PAGE_SIZE"):
+        if not hasattr(os, "sysconf") or key not in os.sysconf_names:
+            break
+    else:
+        with contextlib.suppress(Exception):
+            return int(os.sysconf("SC_PHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+    return 0
+
+
+def _process_rss_bytes() -> int:
+    with contextlib.suppress(Exception):
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return int((result.stdout or "0").strip() or "0") * 1024
+    with contextlib.suppress(Exception):
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if value > 0:
+            if sys.platform == "darwin":
+                return int(value)
+            return int(value) * 1024
+    return 0
+
+
+def _process_rss_limit_bytes() -> int:
+    physical = _physical_memory_bytes()
+    if physical > 0:
+        return max(2 * 1024 * 1024 * 1024, int(physical * PROCESS_RSS_HEADROOM_RATIO))
+    return PROCESS_RSS_LIMIT_FALLBACK_BYTES
+
+
+def _mps_memory_limit_bytes() -> int | None:
+    if not getattr(torch, "mps", None):
+        return None
+    with contextlib.suppress(Exception):
+        if hasattr(torch.mps, "recommended_max_memory"):
+            recommended = int(torch.mps.recommended_max_memory())
+            if recommended > 0:
+                return int(recommended * MPS_MEMORY_HEADROOM_RATIO)
+    return None
+
+
+def _mps_allocated_bytes() -> int:
+    if not getattr(torch, "mps", None):
+        return 0
+    with contextlib.suppress(Exception):
+        if hasattr(torch.mps, "current_allocated_memory"):
+            return int(torch.mps.current_allocated_memory())
+    with contextlib.suppress(Exception):
+        if hasattr(torch.mps, "driver_allocated_memory"):
+            return int(torch.mps.driver_allocated_memory())
+    return 0
 
 
 def _load_roformer_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
@@ -980,6 +1144,7 @@ def _runtime_status_payload() -> dict[str, Any]:
         "client_url": "http://127.0.0.1:8000/",
         "lan_url": "",
         "lan_display": "",
+        "network_name": "",
         "port_conflict": False,
         "show_port_notice": False,
         "kill_command": "",
@@ -1124,6 +1289,8 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "name": task["original_name"],
         "mode": task["mode"],
         "output_format": task["output_format"],
+        "video_handling": task["video_handling"],
+        "delivery": str(task.get("delivery") or "folder"),
         "status": task["status"],
         "stage": task["stage"],
         "pct": task["pct"],
@@ -1158,13 +1325,20 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
 def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
     with tasks_lock:
         task = tasks[task_id]
+        previous_pct = int(task.get("pct") or 0)
+        previous_stage = str(task.get("stage") or "")
+        now = time.time()
         if task["started_at"] is None:
-            task["started_at"] = time.time()
+            task["started_at"] = now
         if task["status"] not in TERMINAL_STATUSES:
             task["status"] = "running"
         task["stage"] = stage
         task["pct"] = max(0, min(100, int(pct)))
         task["eta_seconds"] = _estimate_eta(task, task["pct"])
+        if task["pct"] != previous_pct or stage != previous_stage:
+            task["last_progress_at"] = now
+            task["last_progress_pct"] = task["pct"]
+            task["last_progress_stage"] = stage
         task["version"] += 1
 
 
@@ -1178,6 +1352,7 @@ def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
         task["out_dir"] = str(out_dir)
         task["outputs"] = list(outputs)
         task["error"] = None
+        task["guard_error"] = None
         task["finished_at"] = time.time()
         task["version"] += 1
 
@@ -1190,13 +1365,42 @@ def _mark_task_error(task_id: str, message: str) -> None:
         task["pct"] = max(0, int(task.get("pct", 0)))
         task["eta_seconds"] = None
         task["error"] = message
+        task["guard_error"] = None
         task["finished_at"] = time.time()
         task["version"] += 1
+
+
+def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
+    out_dir = task.get("out_dir")
+    if not out_dir:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output is not ready.")
+    out_path = Path(out_dir)
+    if not out_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    outputs = [out_path / str(name) for name in (task.get("outputs") or [])]
+    existing_outputs = [path for path in outputs if path.exists()]
+    if outputs and not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    return out_path, existing_outputs
+
+
+def _download_label(task: dict[str, Any]) -> str:
+    return _safe_stem(str(task.get("original_name") or "stems"))
 
 
 def _mark_task_stopped(task_id: str) -> None:
     with tasks_lock:
         task = tasks[task_id]
+        guard_error = str(task.get("guard_error") or "").strip()
+        if guard_error:
+            task["status"] = "error"
+            task["stage"] = "Error"
+            task["eta_seconds"] = None
+            task["error"] = guard_error
+            task["guard_error"] = None
+            task["finished_at"] = time.time()
+            task["version"] += 1
+            return
         task["status"] = "stopped"
         task["stage"] = "Stopped"
         task["eta_seconds"] = None
@@ -1218,6 +1422,187 @@ def _request_task_stop(task_id: str) -> None:
         task["version"] += 1
 
 
+def _trip_task_guard(task_id: str, message: str) -> None:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None or task["status"] in TERMINAL_STATUSES:
+            return
+        if task["stop_event"].is_set() and str(task.get("guard_error") or "").strip():
+            return
+        task["guard_error"] = message
+        task["stop_event"].set()
+        task["eta_seconds"] = None
+        if task["status"] == "queued":
+            task["status"] = "error"
+            task["stage"] = "Error"
+            task["error"] = message
+            task["finished_at"] = time.time()
+            task["guard_error"] = None
+        else:
+            task["stage"] = "Stopping"
+        task["version"] += 1
+
+
+def _stop_all_tasks() -> None:
+    drained: list[str] = []
+    while True:
+        try:
+            drained.append(task_queue.get_nowait())
+        except queue.Empty:
+            break
+    for _task_id in drained:
+        task_queue.task_done()
+
+    with tasks_lock:
+        for task in tasks.values():
+            task["stop_event"].set()
+            if task["status"] == "queued":
+                task["status"] = "stopped"
+                task["stage"] = "Stopped"
+                task["eta_seconds"] = None
+                task["finished_at"] = time.time()
+            elif task["status"] == "running":
+                task["stage"] = "Stopping"
+                task["eta_seconds"] = None
+            task["version"] += 1
+
+
+def _restart_task_payload(
+    task_id: str,
+    *,
+    stems_raw: str | None = None,
+    output_format: str | None = None,
+    video_handling: str | None = None,
+) -> dict[str, Any]:
+    old_task = _require_task(task_id)
+    source_path = Path(old_task["source_path"])
+    if not source_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+
+    mode = old_task["mode"] if stems_raw is None else _stems_to_mode(stems_raw)
+    resolved_output_format = output_format or str(old_task["output_format"])
+    resolved_video_handling = _validate_video_handling(video_handling or str(old_task["video_handling"]))
+    _validate_mode_and_output_format(mode, resolved_output_format)
+
+    payload = _register_task(
+        original_name=old_task["original_name"],
+        source_path=source_path,
+        source_dir=old_task.get("source_dir"),
+        mode=mode,
+        output_format=resolved_output_format,
+        video_handling=resolved_video_handling,
+        delivery=str(old_task.get("delivery") or "folder"),
+        auto_start=True,
+    )
+    return payload
+
+
+def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]:
+    mode = _stems_to_mode(stems_raw)
+    _validate_models_for_mode(mode)
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if str(task.get("status") or "") != "ready":
+            raise AppError(ErrorCode.INVALID_REQUEST, "Task has already started.")
+        task["mode"] = mode
+        task["version"] += 1
+        return dict(task)
+
+
+def _watchdog_cleanup() -> None:
+    gc.collect()
+    _safe_mps_empty_cache()
+
+
+def _watchdog_loop() -> None:
+    rss_limit = _process_rss_limit_bytes()
+    mps_limit = _mps_memory_limit_bytes()
+    hard_timeout_hits: dict[str, int] = {}
+    stall_hits: dict[str, int] = {}
+    rss_breach_hits = 0
+    mps_breach_hits = 0
+    while True:
+        time.sleep(WATCHDOG_INTERVAL_SECONDS)
+        now = time.time()
+        running_ids: list[str] = []
+        with tasks_lock:
+            snapshot = [
+                (
+                    task_id,
+                    str(task.get("status") or ""),
+                    float(task.get("started_at") or 0.0),
+                    float(task.get("last_progress_at") or task.get("started_at") or 0.0),
+                    str(task.get("original_name") or "song"),
+                )
+                for task_id, task in tasks.items()
+            ]
+        active_set = {task_id for task_id, status, *_rest in snapshot if status == "running"}
+        hard_timeout_hits = {task_id: count for task_id, count in hard_timeout_hits.items() if task_id in active_set}
+        stall_hits = {task_id: count for task_id, count in stall_hits.items() if task_id in active_set}
+        for task_id, status, started_at, last_progress_at, original_name in snapshot:
+            if status != "running":
+                continue
+            running_ids.append(task_id)
+            if started_at and (now - started_at) > TASK_HARD_TIMEOUT_SECONDS:
+                hard_timeout_hits[task_id] = hard_timeout_hits.get(task_id, 0) + 1
+                if hard_timeout_hits[task_id] >= WATCHDOG_CONFIRM_SAMPLES:
+                    logger.error("watchdog stopping task %s after hard timeout", task_id)
+                    _trip_task_guard(
+                        task_id,
+                        f"safety stop: {original_name} exceeded the maximum processing time.",
+                    )
+                continue
+            hard_timeout_hits.pop(task_id, None)
+            if last_progress_at and (now - last_progress_at) > TASK_STALL_TIMEOUT_SECONDS:
+                stall_hits[task_id] = stall_hits.get(task_id, 0) + 1
+                if stall_hits[task_id] >= WATCHDOG_CONFIRM_SAMPLES:
+                    logger.error("watchdog stopping task %s after progress stall", task_id)
+                    _trip_task_guard(
+                        task_id,
+                        f"safety stop: {original_name} stopped making progress.",
+                    )
+                continue
+            stall_hits.pop(task_id, None)
+
+        if not running_ids:
+            rss_breach_hits = 0
+            if mps_limit:
+                mps_allocated = _mps_allocated_bytes()
+                if mps_allocated and mps_allocated > mps_limit:
+                    mps_breach_hits += 1
+                    if mps_breach_hits >= WATCHDOG_CONFIRM_SAMPLES:
+                        logger.warning(
+                            "watchdog clearing idle gpu cache due to mps_allocated=%s over limit=%s",
+                            mps_allocated,
+                            mps_limit,
+                        )
+                        _watchdog_cleanup()
+                        mps_breach_hits = 0
+                else:
+                    mps_breach_hits = 0
+            continue
+
+        rss_bytes = _process_rss_bytes()
+        if rss_bytes and rss_bytes > rss_limit:
+            rss_breach_hits += 1
+            if rss_breach_hits >= WATCHDOG_CONFIRM_SAMPLES:
+                logger.error("watchdog stopping active tasks due to rss=%s over limit=%s", rss_bytes, rss_limit)
+                for task_id in running_ids:
+                    _trip_task_guard(
+                        task_id,
+                        "safety stop: stemsplat hit its memory protection limit.",
+                    )
+                _watchdog_cleanup()
+                rss_breach_hits = 0
+                continue
+        else:
+            rss_breach_hits = 0
+
+        mps_breach_hits = 0
+
+
 def _stop_check(task_id: str) -> None:
     with tasks_lock:
         if tasks[task_id]["stop_event"].is_set():
@@ -1232,6 +1617,8 @@ def _build_task_payload(
     source_dir: str | None,
     mode: str,
     output_format: str,
+    video_handling: str,
+    delivery: str = "folder",
     auto_start: bool = True,
 ) -> dict[str, Any]:
     return {
@@ -1241,6 +1628,8 @@ def _build_task_payload(
         "source_dir": source_dir,
         "mode": mode,
         "output_format": output_format,
+        "video_handling": video_handling,
+        "delivery": delivery,
         "status": "queued" if auto_start else "ready",
         "stage": "Waiting in queue" if auto_start else "Ready",
         "pct": 0,
@@ -1251,12 +1640,18 @@ def _build_task_payload(
         "version": 0,
         "created_at": time.time(),
         "started_at": None,
+        "last_progress_at": time.time(),
+        "last_progress_pct": 0,
+        "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
         "finished_at": None,
+        "guard_error": None,
         "stop_event": threading.Event(),
     }
 
 
 def _create_output_dir(task: dict[str, Any]) -> Path:
+    if str(task.get("delivery") or "") == "browser_download":
+        return _ensure_dir(WORK_DIR / "exports" / str(task["id"]))
     settings = _compat_settings_payload()
     if bool(settings.get("output_same_as_input")):
         source_dir = task.get("source_dir")
@@ -1275,14 +1670,25 @@ def _validate_mode_and_output_format(mode: str, output_format: str) -> None:
     _validate_models_for_mode(mode)
 
 
+def _validate_video_handling(video_handling: str) -> str:
+    if video_handling not in VIDEO_HANDLING_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid video handling option.")
+    return video_handling
+
+
+def _validate_media_type(name: str, content_type: str | None = None) -> str:
+    suffix = Path(name).suffix.lower()
+    kind = (content_type or "").lower()
+    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
+    if not suffix and not (kind.startswith("audio/") or kind.startswith("video/")):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio or video file.")
+    return suffix
+
+
 async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
     original_name = Path(file.filename or "upload").name
-    suffix = Path(original_name).suffix.lower()
-    content_type = (file.content_type or "").lower()
-    if suffix and suffix not in SUPPORTED_AUDIO_SUFFIXES:
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
-    if not suffix and not content_type.startswith("audio/"):
-        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio file.")
+    _validate_media_type(original_name, file.content_type or "")
 
     task_id = str(uuid.uuid4())
     stored_name = f"{task_id}_{original_name}"
@@ -1309,6 +1715,23 @@ async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
     return original_name, source_path
 
 
+def _store_local_media_file(path: Path) -> tuple[str, Path]:
+    source = path.expanduser()
+    if not source.exists() or not source.is_file():
+        raise AppError(ErrorCode.INVALID_REQUEST, f"file doesn't exist: {source}")
+    original_name = source.name
+    _validate_media_type(original_name)
+    task_id = str(uuid.uuid4())
+    stored_name = f"{task_id}_{original_name}"
+    stored_path = UPLOAD_DIR / stored_name
+    try:
+        shutil.copy2(source, stored_path)
+    except Exception as exc:
+        _cleanup_path(stored_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not import file: {exc}") from exc
+    return original_name, stored_path
+
+
 def _register_task(
     *,
     original_name: str,
@@ -1316,6 +1739,8 @@ def _register_task(
     source_dir: str | None,
     mode: str,
     output_format: str,
+    video_handling: str,
+    delivery: str = "folder",
     auto_start: bool,
 ) -> dict[str, Any]:
     task_id = str(uuid.uuid4())
@@ -1326,6 +1751,8 @@ def _register_task(
         source_dir=source_dir,
         mode=mode,
         output_format=output_format,
+        video_handling=video_handling,
+        delivery=delivery,
         auto_start=auto_start,
     )
     with tasks_lock:
@@ -1347,6 +1774,11 @@ def _enqueue_task(task_id: str) -> dict[str, Any]:
         task["status"] = "queued"
         task["stage"] = "Waiting in queue"
         task["eta_seconds"] = None
+        task["started_at"] = None
+        task["last_progress_at"] = time.time()
+        task["last_progress_pct"] = 0
+        task["last_progress_stage"] = task["stage"]
+        task["guard_error"] = None
         task["version"] += 1
     task_queue.put(task_id)
     return task
@@ -1378,10 +1810,62 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "stage": stage,
         "pct": pct,
         "stems": _mode_to_stems(public["mode"]),
+        "video_handling": public["video_handling"],
         "out_dir": public["out_dir"],
+        "delivery": public["delivery"],
         "error": public["error"],
         "outputs": public["outputs"],
+        "artwork_url": f"/api/tasks/{public['id']}/artwork",
     }
+
+
+def _extract_task_artwork(task_id: str) -> Path | None:
+    task = _require_task(task_id)
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    if not source_path.exists():
+        return None
+    cached_path = ARTWORK_DIR / f"{task_id}.jpg"
+    if cached_path.exists() and cached_path.stat().st_size > 0:
+        return cached_path
+
+    temp_path = ARTWORK_DIR / f"{task_id}.tmp.jpg"
+    if temp_path.exists():
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+    try:
+        subprocess.run(
+            [
+                _ffmpeg_path(),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source_path),
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale='min(320,iw)':-1",
+                str(temp_path),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+        return None
+
+    if not temp_path.exists() or temp_path.stat().st_size <= 0:
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+        return None
+
+    temp_path.replace(cached_path)
+    return cached_path
 
 
 def _process_task(task_id: str) -> None:
@@ -1475,14 +1959,21 @@ def _process_task(task_id: str) -> None:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
 
         _stop_check(task_id)
-        export_plan = _resolve_export_plan(source_info, task["output_format"])
+        export_video = source_info.has_video and task["video_handling"] == "video_and_stems"
+        export_plan = None if export_video else _resolve_export_plan(source_info, task["output_format"])
         exported_files: list[str] = []
         total_exports = len(temp_outputs)
         for index, (label, temp_path) in enumerate(temp_outputs, start=1):
             start_pct = _map_fraction(92, 98, (index - 1) / max(1, total_exports))
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
-            final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{export_plan.suffix}"
-            exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
+            if export_video:
+                video_suffix, _audio_args = _resolve_video_output(source_info)
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{video_suffix}"
+                exported = _export_video_stem(temp_path, source_path, final_path, source_info)
+            else:
+                assert export_plan is not None
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{export_plan.suffix}"
+                exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
             written_outputs.append(exported)
             exported_files.append(exported.name)
             _set_task_progress(task_id, f"Exporting {label}", _map_fraction(92, 99, index / max(1, total_exports)))
@@ -1519,6 +2010,7 @@ def _task_worker() -> None:
 
 
 threading.Thread(target=_task_worker, daemon=True).start()
+threading.Thread(target=_watchdog_loop, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -1689,15 +2181,55 @@ async def open_output_root() -> dict[str, str]:
     return {"status": "opened", "path": str(path)}
 
 
+@app.post("/api/import_paths")
+async def import_paths(request: Request) -> dict[str, Any]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid import payload.").to_http()
+    raw_paths = body.get("paths")
+    raw_stems = body.get("stems")
+    output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
+    video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise AppError(ErrorCode.INVALID_REQUEST, "No files selected.").to_http()
+    if not isinstance(raw_stems, str):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
+    mode = _stems_to_mode(raw_stems)
+    _validate_mode_and_output_format(mode, output_format)
+    delivery = "browser_download" if _is_remote_client(request) else "folder"
+    created: list[dict[str, Any]] = []
+    for item in raw_paths:
+        path_text = str(item or "").strip()
+        if not path_text:
+            continue
+        source_original = Path(path_text).expanduser()
+        original_name, source_path = _store_local_media_file(source_original)
+        payload = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            source_dir=str(source_original.parent),
+            mode=mode,
+            output_format=output_format,
+            video_handling=video_handling,
+            delivery=delivery,
+            auto_start=False,
+        )
+        created.append(_compat_public_task(payload))
+    return {"tasks": created}
+
+
 @app.post("/api/tasks")
 async def create_task(
+    request: Request,
     file: UploadFile = File(...),
     mode: str = Form("vocals"),
     output_format: str = Form("same_as_input"),
+    video_handling: str = Form("audio_only"),
     source_dir: str | None = Form(None),
 ):
     try:
         _validate_mode_and_output_format(mode, output_format)
+        video_handling = _validate_video_handling(video_handling)
         original_name, source_path = await _store_uploaded_file(file)
         payload = _register_task(
             original_name=original_name,
@@ -1705,6 +2237,8 @@ async def create_task(
             source_dir=source_dir,
             mode=mode,
             output_format=output_format,
+            video_handling=video_handling,
+            delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=True,
         )
         return _public_task(payload)
@@ -1743,6 +2277,19 @@ async def task_events(task_id: str):
     )
 
 
+@app.get("/api/tasks/{task_id}/artwork")
+async def task_artwork(task_id: str):
+    _require_task(task_id)
+    artwork_path = _extract_task_artwork(task_id)
+    if artwork_path is None:
+        raise HTTPException(status_code=404, detail="artwork not found")
+    return FileResponse(
+        artwork_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @app.post("/api/tasks/{task_id}/stop")
 async def stop_task(task_id: str):
     _require_task(task_id)
@@ -1751,37 +2298,55 @@ async def stop_task(task_id: str):
 
 
 @app.post("/api/tasks/{task_id}/retry")
-async def retry_task(task_id: str):
-    old_task = _require_task(task_id)
-    source_path = Path(old_task["source_path"])
-    if not source_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
-    _validate_models_for_mode(old_task["mode"])
-
-    payload = _register_task(
-        original_name=old_task["original_name"],
-        source_path=source_path,
-        source_dir=old_task.get("source_dir"),
-        mode=old_task["mode"],
-        output_format=old_task["output_format"],
-        auto_start=True,
-    )
+async def retry_task(task_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stems_raw = body.get("stems")
+    output_format = body.get("output_format")
+    video_handling = body.get("video_handling")
+    try:
+        payload = _restart_task_payload(
+            task_id,
+            stems_raw=stems_raw if isinstance(stems_raw, str) and stems_raw.strip() else None,
+            output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
+            video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+        )
+    except AppError as exc:
+        raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
     return _public_task(payload)
+
+
+@app.post("/api/tasks/{task_id}/selection")
+async def update_task_selection(task_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stems_raw = body.get("stems")
+    if not isinstance(stems_raw, str) or not stems_raw.strip():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
+    try:
+        task = _update_ready_task_selection(task_id, stems_raw.strip())
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    return _public_task(task)
 
 
 @app.post("/api/tasks/{task_id}/reveal")
 async def reveal_output(task_id: str):
     task = _require_task(task_id)
-    out_dir = task.get("out_dir")
-    if not out_dir:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Output is not ready.").to_http(409)
-    out_path = Path(out_dir)
-    if not out_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
-    outputs = [out_path / str(name) for name in (task.get("outputs") or [])]
-    existing_outputs = [path for path in outputs if path.exists()]
-    if outputs and not existing_outputs:
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
+    try:
+        out_path, existing_outputs = _task_output_paths(task)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
     single_output = existing_outputs[0] if len(existing_outputs) == 1 else None
 
     try:
@@ -1801,6 +2366,33 @@ async def reveal_output(task_id: str):
         raise AppError(ErrorCode.INVALID_REQUEST, f"Could not reveal output: {exc}").to_http(500) from exc
 
     return {"status": "opened", "path": str(single_output or out_path)}
+
+
+@app.get("/api/tasks/{task_id}/download")
+async def download_output(task_id: str):
+    task = _require_task(task_id)
+    try:
+        _out_path, existing_outputs = _task_output_paths(task)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
+    if not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
+    if len(existing_outputs) == 1:
+        output = existing_outputs[0]
+        return FileResponse(output, filename=output.name)
+
+    archive_dir = _ensure_dir(RUNTIME_DIR / "downloads")
+    archive_name = f"{_download_label(task)}.zip"
+    archive_path = archive_dir / f"{task_id}_{archive_name}"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for output in existing_outputs:
+            zf.write(output, arcname=output.name)
+    return FileResponse(
+        archive_path,
+        filename=archive_name,
+        background=BackgroundTask(lambda: _cleanup_path(archive_path)),
+    )
 
 
 @app.get("/settings")
@@ -1828,20 +2420,25 @@ async def update_settings(request: Request) -> dict[str, Any]:
         patch["output_root"] = str(resolved)
     if "output_same_as_input" in body:
         patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
+    if "video_handling" in body:
+        patch["video_handling"] = _validate_video_handling(str(body.get("video_handling") or "audio_only"))
     _set_compat_settings(patch)
     return _settings_response_payload()
 
 
 @app.post("/upload")
 async def compat_upload(
+    request: Request,
     file: UploadFile = File(...),
     stems: str = Form("vocals"),
     output_format: str | None = Form(None),
+    video_handling: str | None = Form(None),
     source_dir: str | None = Form(None),
 ):
     try:
         mode = _stems_to_mode(stems)
         resolved_output_format = output_format or _compat_settings_payload()["output_format"]
+        resolved_video_handling = _validate_video_handling(video_handling or _compat_settings_payload()["video_handling"])
         _validate_mode_and_output_format(mode, resolved_output_format)
         original_name, source_path = await _store_uploaded_file(file)
         payload = _register_task(
@@ -1850,9 +2447,11 @@ async def compat_upload(
             source_dir=source_dir,
             mode=mode,
             output_format=resolved_output_format,
+            video_handling=resolved_video_handling,
+            delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=False,
         )
-        return {"task_id": payload["id"], "stems": _mode_to_stems(mode)}
+        return {"task_id": payload["id"], "stems": _mode_to_stems(mode), "delivery": payload["delivery"]}
     except AppError as exc:
         raise exc.to_http()
 
@@ -1907,21 +2506,26 @@ async def compat_stop(task_id: str) -> dict[str, Any]:
 
 
 @app.post("/rerun/{task_id}")
-async def compat_rerun(task_id: str) -> dict[str, Any]:
-    old_task = _require_task(task_id)
-    source_path = Path(old_task["source_path"])
-    if not source_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
-    _validate_models_for_mode(old_task["mode"])
-    payload = _register_task(
-        original_name=old_task["original_name"],
-        source_path=source_path,
-        source_dir=old_task.get("source_dir"),
-        mode=old_task["mode"],
-        output_format=old_task["output_format"],
-        auto_start=True,
-    )
-    return {"task_id": payload["id"], "stems": _mode_to_stems(payload["mode"])}
+async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stems_raw = body.get("stems")
+    output_format = body.get("output_format")
+    video_handling = body.get("video_handling")
+    try:
+        payload = _restart_task_payload(
+            task_id,
+            stems_raw=stems_raw if isinstance(stems_raw, str) and stems_raw.strip() else None,
+            output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
+            video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+        )
+    except AppError as exc:
+        raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
+    return {"task_id": payload["id"], "stems": _mode_to_stems(payload["mode"]), "delivery": payload["delivery"]}
 
 
 @app.post("/reveal/{task_id}")
@@ -1929,11 +2533,22 @@ async def compat_reveal(task_id: str):
     return await reveal_output(task_id)
 
 
+@app.get("/download/{task_id}")
+async def compat_download(task_id: str):
+    return await download_output(task_id)
+
+
 @app.post("/clear_all_uploads")
 async def compat_clear_all_uploads() -> dict[str, str]:
-    for root in (UPLOAD_DIR, WORK_DIR):
-        for candidate in root.iterdir():
-            _cleanup_path(candidate)
+    _stop_all_tasks()
+
+    def _cleanup_after_stop() -> None:
+        time.sleep(1.0)
+        for root in (UPLOAD_DIR, WORK_DIR, ARTWORK_DIR):
+            for candidate in root.iterdir():
+                _cleanup_path(candidate)
+
+    threading.Thread(target=_cleanup_after_stop, daemon=True).start()
     return {"status": "cleared"}
 
 

@@ -1,5 +1,6 @@
 from functools import partial
 
+import numpy as np
 import torch
 from torch import nn, einsum, Tensor
 from torch.nn import Module, ModuleList
@@ -16,8 +17,6 @@ from beartype import beartype
 from rotary_embedding_torch import RotaryEmbedding
 
 from einops import rearrange, pack, unpack, reduce, repeat
-
-from librosa import filters
 
 
 # helper functions
@@ -42,6 +41,82 @@ def pad_at_dim(t, pad, dim=-1, value=0.):
     dims_from_right = (- dim - 1) if dim < 0 else (t.ndim - dim - 1)
     zeros = ((0, 0) * dims_from_right)
     return F.pad(t, (*zeros, *pad), value=value)
+
+
+def _hz_to_mel(frequencies: np.ndarray | float, *, htk: bool = False) -> np.ndarray:
+    frequencies = np.asanyarray(frequencies, dtype=np.float32)
+
+    if htk:
+        return 2595.0 * np.log10(1.0 + frequencies / 700.0)
+
+    f_sp = 200.0 / 3
+    mels = frequencies / f_sp
+
+    min_log_hz = 1000.0
+    min_log_mel = min_log_hz / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    if frequencies.ndim:
+        log_t = frequencies >= min_log_hz
+        mels[log_t] = min_log_mel + np.log(frequencies[log_t] / min_log_hz) / logstep
+    elif frequencies >= min_log_hz:
+        mels = min_log_mel + np.log(frequencies / min_log_hz) / logstep
+
+    return mels
+
+
+def _mel_to_hz(mels: np.ndarray | float, *, htk: bool = False) -> np.ndarray:
+    mels = np.asanyarray(mels, dtype=np.float32)
+
+    if htk:
+        return 700.0 * (10.0 ** (mels / 2595.0) - 1.0)
+
+    f_sp = 200.0 / 3
+    freqs = f_sp * mels
+
+    min_log_hz = 1000.0
+    min_log_mel = min_log_hz / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    if mels.ndim:
+        log_t = mels >= min_log_mel
+        freqs[log_t] = min_log_hz * np.exp(logstep * (mels[log_t] - min_log_mel))
+    elif mels >= min_log_mel:
+        freqs = min_log_hz * np.exp(logstep * (mels - min_log_mel))
+
+    return freqs
+
+
+def _mel_frequencies(n_mels: int, *, fmin: float, fmax: float, htk: bool = False) -> np.ndarray:
+    min_mel = _hz_to_mel(fmin, htk=htk)
+    max_mel = _hz_to_mel(fmax, htk=htk)
+    return _mel_to_hz(np.linspace(min_mel, max_mel, n_mels, dtype=np.float32), htk=htk)
+
+
+def _mel_filter_bank(
+    *,
+    sample_rate: int,
+    n_fft: int,
+    n_mels: int,
+    fmin: float = 0.0,
+    fmax: float | None = None,
+) -> np.ndarray:
+    fmax = float(sample_rate) / 2 if fmax is None else fmax
+    weights = np.zeros((n_mels, int(1 + n_fft // 2)), dtype=np.float32)
+
+    fft_freqs = np.fft.rfftfreq(n=n_fft, d=1.0 / sample_rate)
+    mel_freqs = _mel_frequencies(n_mels + 2, fmin=fmin, fmax=fmax, htk=False)
+    fdiff = np.diff(mel_freqs)
+    ramps = np.subtract.outer(mel_freqs, fft_freqs)
+
+    for index in range(n_mels):
+        lower = -ramps[index] / fdiff[index]
+        upper = ramps[index + 2] / fdiff[index + 1]
+        weights[index] = np.maximum(0.0, np.minimum(lower, upper))
+
+    enorm = 2.0 / (mel_freqs[2 : n_mels + 2] - mel_freqs[:n_mels])
+    weights *= enorm[:, np.newaxis]
+    return weights
 
 
 # norm
@@ -277,7 +352,7 @@ class MelBandRoformer(Module):
             ff_dropout=0.1,
             flash_attn=True,
             dim_freqs_in=1025,
-            sample_rate=44100,  # needed for mel filter bank from librosa
+            sample_rate=44100,  # needed for mel filter bank construction
             stft_n_fft=2048,
             stft_hop_length=512,
             # 10ms at 44100Hz, from sections 4.1, 4.4 in the paper - @faroit recommends // 2 or // 4 for better reconstruction
@@ -336,10 +411,12 @@ class MelBandRoformer(Module):
             return_complex=True,
         ).shape[1]
 
-        # create mel filter bank
-        # with librosa.filters.mel as in section 2 of paper
-
-        mel_filter_bank_numpy = filters.mel(sr=sample_rate, n_fft=stft_n_fft, n_mels=num_bands)
+        # create mel filter bank locally so the desktop app does not need librosa
+        mel_filter_bank_numpy = _mel_filter_bank(
+            sample_rate=sample_rate,
+            n_fft=stft_n_fft,
+            n_mels=num_bands,
+        )
 
         mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
 

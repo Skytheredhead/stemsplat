@@ -20,8 +20,12 @@ ARGS=(
   --icon "${SCRIPT_DIR}/.stemsplat_icon.icns"
   --osx-bundle-identifier "com.stemsplat.app"
   --collect-submodules uvicorn
-  --collect-submodules split
   --collect-submodules webview
+  --exclude-module librosa
+  --exclude-module scipy
+  --exclude-module numba
+  --exclude-module llvmlite
+  --exclude-module sklearn
   --add-data "${SCRIPT_DIR}/configs:configs"
   --add-data "${SCRIPT_DIR}/web:web"
 )

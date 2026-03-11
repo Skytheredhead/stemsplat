@@ -56,8 +56,23 @@
     html, body { min-height: 100%; }
     html {
       background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
     }
-    body { padding: 0; overscroll-behavior-y: auto; background: transparent; overflow-x: hidden; }
+    body {
+      padding: 0;
+      overscroll-behavior-y: auto;
+      background: transparent;
+      overflow-x: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
+    }
     body.desktop-shell .window-chrome { display: flex; }
     .bg-gradient-shell {
       position: fixed;
@@ -75,37 +90,36 @@
       top: 0;
       left: 0;
       right: 0;
-      height: 54px;
-      padding: 14px 16px 0;
+      height: 46px;
+      padding: 8px 12px 0;
       z-index: 24;
       align-items: flex-start;
       pointer-events: none;
     }
     .window-dragbar {
       width: 100%;
-      height: 32px;
+      height: 28px;
       display: flex;
       align-items: center;
       pointer-events: auto;
     }
     .window-controls-shell {
+      position: relative;
       display: flex;
       align-items: center;
-      min-width: 86px;
-      height: 28px;
-      padding: 0 10px;
-      border-radius: 0 0 16px 16px;
-      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.07));
-      border: 1px solid rgba(255,255,255,.12);
-      border-top: 0;
-      box-shadow: 0 8px 26px rgba(0,0,0,.18);
-      backdrop-filter: blur(10px) saturate(108%);
-      -webkit-backdrop-filter: blur(10px) saturate(108%);
+      min-width: 56px;
+      height: 18px;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
     }
     .window-controls {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
     }
     .window-control {
       width: 14px;
@@ -148,6 +162,8 @@
     }
     .app-shell.compact {
       justify-content: center;
+      padding-top: clamp(108px, 13vh, 150px);
+      padding-bottom: clamp(86px, 10vh, 122px);
     }
     .app-shell.expanded {
       justify-content: flex-start;
@@ -167,6 +183,48 @@
     .card:hover { box-shadow: 0 8px 26px rgba(0,0,0,.28); }
     .card:has(.dl-pad:hover):hover { box-shadow: 0 12px 40px rgba(0,0,0,.35); }
     .card.done { background: var(--card-done); }
+    .card-body { display:flex; align-items:center; gap:14px; min-width:0; }
+    .card-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:12px; }
+    .filename-wrap { min-width:0; }
+    .artwork-shell {
+      position: relative;
+      flex: 0 0 60px;
+      width: 60px;
+      height: 60px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: linear-gradient(145deg, rgba(255,255,255,.14), rgba(255,255,255,.03));
+      border: 1px solid rgba(255,255,255,.12);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      transition: filter .2s ease, transform .2s ease, opacity .2s ease;
+    }
+    .artwork-img,
+    .artwork-fallback {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .artwork-img {
+      object-fit: cover;
+      display: block;
+      transition: opacity .2s ease, filter .2s ease;
+    }
+    .artwork-fallback {
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size: 24px;
+      color: rgba(255,255,255,.84);
+      background:
+        radial-gradient(circle at 30% 30%, rgba(255,255,255,.18), rgba(255,255,255,0) 55%),
+        linear-gradient(145deg, rgba(19,40,49,.95), rgba(9,23,30,.95));
+      transition: opacity .2s ease, filter .2s ease;
+    }
+    .artwork-shell.has-image .artwork-fallback { opacity: 0; }
+    .artwork-shell.is-dim .artwork-img,
+    .artwork-shell.is-dim .artwork-fallback { filter: brightness(.48) saturate(.78); }
+    .status-wrap { flex: 0 0 auto; display:flex; align-items:center; }
 
     #title { letter-spacing: 0.5px; text-shadow: 0 8px 40px rgba(0,0,0,.45); }
 
@@ -215,7 +273,7 @@
     .models-cta-wrap { position:relative; display:flex; gap:8px; }
     .models-cta-wrap > * { position:relative; z-index:1; }
 
-    .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); }
+    .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); display:inline-flex; align-items:center; white-space:nowrap; flex-shrink:0; line-height:1; }
     .chip-dim { background: rgba(0,0,0,.38); border:1px solid rgba(255,255,255,.10); color:#E7ECEF; }
 
     .bar { height: 10px; background: rgba(255,255,255,.08); border-radius:999px; overflow: hidden; }
@@ -226,6 +284,25 @@
     input.pretty:hover{ border-color: rgba(255,255,255,.6); box-shadow: 0 0 0 3px rgba(255,255,255,.06) inset; }
     input.pretty:checked{ background: linear-gradient(135deg, #96c5d6, #5fa3b5); border-color: transparent; }
     input.pretty:checked::after{ content:""; width:6px; height:10px; border:2px solid #0F2027; border-top:0; border-left:0; transform: rotate(45deg); }
+    .stem-choice {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.03);
+      color: var(--txt-main);
+      text-align: left;
+      padding: 9px 12px;
+      font-size: 15px;
+      line-height: 1.15;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease, box-shadow .16s ease, color .16s ease;
+    }
+    .stem-choice:hover { transform: translateY(-1px); border-color: rgba(255,255,255,.24); background: rgba(255,255,255,.06); }
+    .stem-choice.active {
+      background: linear-gradient(135deg, rgba(150,197,214,.34), rgba(95,163,181,.26));
+      border-color: rgba(150,197,214,.75);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 10px 20px rgba(0,0,0,.18);
+      color: #f5fbff;
+    }
 
     #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:48px; background:linear-gradient(to bottom,rgba(0,0,0,.45),transparent); opacity:0; transition:opacity .25s ease; }
     #top-vig{ top:0; bottom:auto; transform:none; }
@@ -292,13 +369,13 @@
   <h1 id="title" class="text-5xl md:text-6xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
   <!-- controls -->
   <div class="w-11/12 max-w-3xl flex gap-6">
-    <label id="dropzone" for="file-input" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
+    <div id="dropzone" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
       </svg>
       <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
-      <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,audio/*" multiple aria-label="choose audio files" class="sr-only" />
-    </label>
+      <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,.mp4,.m4v,.mov,.webm,.mkv,.avi,audio/*,video/*" multiple aria-label="choose media files" class="sr-only" />
+    </div>
     <div class="flex flex-col gap-4 w-64">
       <div id="stems-card" class="glass pre-hide w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
         <button id="settings-btn" title="settings" class="absolute top-3 right-3 z-10 p-2 rounded-lg hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
@@ -308,10 +385,11 @@
           </svg>
         </button>
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="radio" name="stems" class="pretty" checked>vocals</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="radio" name="stems" class="pretty">instrumental</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="radio" name="stems" class="pretty">both - deux</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="separate-box" type="radio" name="stems" class="pretty">both - separate</label>
+        <div id="stem-choices" class="flex flex-col gap-2">
+          <button id="vocals-box" type="button" class="stem-choice active" data-mode="vocals" aria-pressed="true">vocals</button>
+          <button id="inst-box" type="button" class="stem-choice" data-mode="instrumental" aria-pressed="false">instrumental</button>
+          <button id="deux-box" type="button" class="stem-choice" data-mode="both_deux" aria-pressed="false">both - deux</button>
+        </div>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -334,17 +412,25 @@
   <!-- templates & scripts -->
   <template id="item-template">
     <div class="item-row flex items-center gap-3">
-      <div class="glass card rounded-xl px-6 py-4 flex-1 flex flex-col gap-3">
-        <div class="flex justify-between items-center gap-3">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="truncate text-[var(--txt-main)] text-sm filename"></span>
-            <div class="labels flex items-center gap-1"></div>
+      <div class="glass card rounded-xl px-4 py-4 flex-1">
+        <div class="card-body">
+          <div class="artwork-shell">
+            <img class="artwork-img" alt="" hidden>
+            <div class="artwork-fallback">♪</div>
           </div>
-          <div class="flex items-center gap-3">
-            <span class="chip status">queued</span>
+          <div class="card-copy">
+            <div class="flex justify-between items-center gap-3">
+              <div class="filename-wrap flex items-center gap-2 min-w-0">
+                <span class="truncate text-[var(--txt-main)] text-sm filename"></span>
+                <div class="labels flex items-center gap-1"></div>
+              </div>
+              <div class="status-wrap">
+                <span class="chip status">queued</span>
+              </div>
+            </div>
+            <div class="bar"><div class="bar-fill progress"></div></div>
           </div>
         </div>
-        <div class="bar"><div class="bar-fill progress"></div></div>
       </div>
       <button class="dl-pad self-center" type="button" title="open folder">
         <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -373,6 +459,7 @@
 
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
+    const stemChoices = document.getElementById('stem-choices');
     const vocalsBox = document.getElementById('vocals-box');
     const instBox   = document.getElementById('inst-box');
     const deuxBox   = document.getElementById('deux-box');
@@ -394,6 +481,9 @@
     let outputSameAsInput = null;
     let outputFolderChoose = null;
     let outputFolderOpen = null;
+    let videoAudioOnly = null;
+    let videoPlusStem = null;
+    let lanAccessHeading = null;
     let lanAccessText = null;
     let lanCopyBtn = null;
     let portStatusText = null;
@@ -422,20 +512,31 @@
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
-      deux: 'both (highest quality)',
+      deux: 'both - deux',
     };
     const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
 
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
-    let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input', runtime: null };
+    let queueStarted = false;
+    let selectedStemModes = new Set(['vocals']);
+    let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input', video_handling: 'audio_only', runtime: null };
     let defaultOutputPath = '';
     let dirPickerInput = null;
 
     function applyDesktopShellState(){
       const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
       document.body.classList.toggle('desktop-shell', hasDesktopApi);
+    }
+
+    function updateStemChoiceUI(){
+      [vocalsBox, instBox, deuxBox].forEach((button) => {
+        if(!button) return;
+        const active = selectedStemModes.has(button.dataset.mode || '');
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
     }
 
     async function callDesktopAction(actionName){
@@ -468,6 +569,12 @@
     function applySettingsUI(){
       if(outputFormatSelect){
         outputFormatSelect.value = settingsState.output_format || 'same_as_input';
+      }
+      if(videoAudioOnly){
+        videoAudioOnly.checked = (settingsState.video_handling || 'audio_only') === 'audio_only';
+      }
+      if(videoPlusStem){
+        videoPlusStem.checked = (settingsState.video_handling || 'audio_only') === 'video_and_stems';
       }
       if(outputSameAsInput){
         outputSameAsInput.checked = !!settingsState.output_same_as_input;
@@ -748,6 +855,76 @@
     }
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
 
+    function truncateFilename(name, max = 25){
+      const text = String(name || '');
+      if(text.length <= max) return text;
+      const dotIndex = text.lastIndexOf('.');
+      if(dotIndex > 0 && dotIndex < text.length - 1){
+        const ext = text.slice(dotIndex);
+        const reserve = max - ext.length - 1;
+        if(reserve > 6){
+          return `${text.slice(0, reserve)}…${ext}`;
+        }
+      }
+      return `${text.slice(0, Math.max(1, max - 1))}…`;
+    }
+
+    function applyFilename(el, name){
+      if(!el) return;
+      const full = String(name || '');
+      el.textContent = truncateFilename(full, 25);
+      el.title = full;
+    }
+
+    function artworkUrl(taskId){
+      return taskId ? `/api/tasks/${encodeURIComponent(taskId)}/artwork` : '';
+    }
+
+    function shouldDimArtwork(task){
+      if(!task) return false;
+      const stage = String(task.stage || '').toLowerCase();
+      if(stage === 'ready' || stage === 'done' || stage === 'stopped' || stage === 'error') return false;
+      if(stage === 'queued') return true;
+      return typeof task.pct === 'number' ? (task.pct >= 0 && task.pct < 100) : false;
+    }
+
+    function applyArtwork(row, task){
+      if(!row) return;
+      const shell = row.querySelector('.artwork-shell');
+      const img = row.querySelector('.artwork-img');
+      if(!shell || !img) return;
+      shell.classList.toggle('is-dim', shouldDimArtwork(task));
+      const taskId = task && task.id ? String(task.id) : '';
+      if(!taskId){
+        img.hidden = true;
+        img.removeAttribute('src');
+        img.dataset.taskId = '';
+        shell.classList.remove('has-image');
+        return;
+      }
+      if(img.dataset.taskId === taskId && img.getAttribute('src')){
+        return;
+      }
+      img.dataset.taskId = taskId;
+      img.hidden = false;
+      img.onload = () => {
+        if(img.dataset.taskId !== taskId) return;
+        shell.classList.add('has-image');
+      };
+      img.onerror = () => {
+        if(img.dataset.taskId !== taskId) return;
+        img.hidden = true;
+        img.removeAttribute('src');
+        shell.classList.remove('has-image');
+      };
+      img.src = `${artworkUrl(taskId)}?v=${encodeURIComponent(taskId)}`;
+    }
+
+    function applyRowState(row, task){
+      if(!row || !task) return;
+      applyArtwork(row, task);
+    }
+
     async function rehydrateTasks(){
       if(!Array.isArray(tasks) || tasks.length === 0) return;
       try{
@@ -779,7 +956,7 @@
     function isProcessing(t){
       if(!t) return false;
       const stage = (t.stage || '').toLowerCase();
-      const inactive = ['ready','queued','done','stopped','error'];
+      const inactive = ['ready','done','stopped','error'];
       if(inactive.includes(stage)) return false;
       return typeof t.pct === 'number' ? (t.pct >= 0 && t.pct < 100) : true;
     }
@@ -799,9 +976,9 @@
         if(itemCount === 0){
           bottomPad.style.height = '0px';
         }else if(compact){
-          bottomPad.style.height = '28px';
+          bottomPad.style.height = '14px';
         }else{
-          bottomPad.style.height = manyItems ? '132px' : '84px';
+          bottomPad.style.height = manyItems ? '66px' : '42px';
         }
       }
       if (hasClearable) {
@@ -861,7 +1038,7 @@
     function applyLabels(container, stemsList){
       if(!container || !stemsList) return;
       container.innerHTML='';
-      const pretty = { deux: 'both' };
+      const pretty = { deux: 'both - deux' };
       stemsList.forEach(name => {
         const base = name.split(' - ').pop() || name;
         const stem = base.replace(/\.wav$/i,'');
@@ -870,11 +1047,21 @@
         chip.textContent = pretty[stem] || stem;
         container.appendChild(chip);
       });
+      container.classList.toggle('hidden', !queueStarted);
+    }
+
+    function refreshAllLabelVisibility(){
+      document.querySelectorAll('#queue .labels').forEach((container) => {
+        container.classList.toggle('hidden', !queueStarted);
+      });
     }
 
     function shouldShowStatus(stage){
-      const active = stage && stage !== 'ready' && stage !== 'queued';
-      return startPressed || active;
+      const normalized = String(stage || '').toLowerCase();
+      if(!normalized || normalized === 'done') return false;
+      if(normalized === 'ready') return startPressed;
+      if(normalized === 'queued') return queueStarted || startPressed;
+      return true;
     }
 
     function setStatusVisibility(st, stage){
@@ -897,7 +1084,8 @@
 
     function setStopVisibility(stopPad, stage, forceShow = false){
       if(!stopPad) return;
-      const active = forceShow || (stage && !['ready','queued','done','stopped','error','errored'].includes(stage));
+      const normalized = String(stage || '').toLowerCase();
+      const active = forceShow || (normalized && !['ready','done','stopped','error','errored'].includes(normalized));
       const show = !!active;
       stopPad.style.display = show ? '' : 'none';
       stopPad.classList.toggle('show', show);
@@ -998,20 +1186,58 @@
       btn.insertAdjacentHTML('afterbegin', '<svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 3h11v9H3z"/><path d="M3 7v12"/></svg>');
     }
 
+    function triggerTaskDownload(taskRef){
+      if(!taskRef || !taskRef.id) return;
+      const link = document.createElement('a');
+      link.href = `/download/${taskRef.id}`;
+      link.rel = 'noopener';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
     function bindDownloadButton(btn, taskRef){
       if(!btn || !taskRef || !taskRef.id) return;
       btn.classList.add('show');
+      if(taskRef.delivery === 'browser_download'){
+        setDownloadIcon(btn);
+        btn.title = 'download';
+        guardClick(btn, (e) => {
+          e.preventDefault();
+          triggerTaskDownload(taskRef);
+        });
+        if(!taskRef.autoDownloaded){
+          taskRef.autoDownloaded = true;
+          setTimeout(() => triggerTaskDownload(taskRef), 180);
+        }
+        return;
+      }
       setFolderIcon(btn);
       btn.title = 'open folder';
       bindFolderButton(btn, taskRef);
     }
 // --- Helper to rerun a task server-side ---
-    async function rerunTask(task, ui){
+    async function rerunTask(task, ui, options = {}){
       const {bar, st, dl, stopPad, smooth} = ui;
       if(!task || !task.id) return;
       let ok = false, newId = null, payload = null;
+      const body = {};
+      if(typeof options.stems === 'string' && options.stems){
+        body.stems = options.stems;
+      }
+      if(typeof options.output_format === 'string' && options.output_format){
+        body.output_format = options.output_format;
+      }
+      if(typeof options.video_handling === 'string' && options.video_handling){
+        body.video_handling = options.video_handling;
+      }
       try {
-        const res = await fetch('/rerun/' + task.id, { method: 'POST' });
+        const res = await fetch('/rerun/' + task.id, {
+          method: 'POST',
+          headers: Object.keys(body).length ? { 'Content-Type': 'application/json' } : undefined,
+          body: Object.keys(body).length ? JSON.stringify(body) : undefined,
+        });
         if (res.ok) {
           try { payload = await res.json(); } catch(_) { payload = null; }
           newId = payload && (payload.task_id || payload.id || null);
@@ -1060,7 +1286,12 @@
       }
       task.stage = 'preparing';
       task.pct = 0;
+      if(Array.isArray(payload && payload.stems)){
+        task.stems = payload.stems;
+      }
       task.downloaded = false;
+      task.autoDownloaded = false;
+      task.out_dir = null;
       saveTasks();
       updateUI();
       // resume tracking
@@ -1081,7 +1312,7 @@
       const dl   = node.querySelector('.dl-pad');
       const card = node.querySelector('.card');
       const stopPad = node.querySelector('.stop-pad');
-      li.textContent = task.name;
+      applyFilename(li, task.name);
       const labels = node.querySelector('.labels');
       const smooth = makeProgressSmoother(bar);
       const initOverall = Math.max(0, Math.min(100, task.pct || 0));
@@ -1125,8 +1356,13 @@
       else {
         const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
         showStatus(st);
-        st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
-        smooth.setImmediate(sp);
+        if(task.stage === 'ready' || task.stage === 'queued'){
+          st.textContent = displayStage(task.stage) || 'queued';
+          smooth.setImmediate(0);
+        }else{
+          st.textContent = task.stage ? `${displayStage(task.stage)} (${sp}%)` : 'queued';
+          smooth.setImmediate(sp);
+        }
         setStopVisibility(stopPad, task.stage);
         if(stopPad && task.id && isProcessing(task)){
           setStopSquareIcon(stopPad);
@@ -1142,7 +1378,7 @@
           });
         }
       }
-      if(task.stage !== 'done' && dl && !isProcessing(task)){
+      if(dl && (task.stage === 'stopped' || task.stage === 'error' || task.pct < 0)){
         dl.classList.add('show');
         dl.title = 'retry';
         dl.innerHTML = '';
@@ -1161,6 +1397,7 @@
       });
       // Apply any stem labels if present
       applyLabels(inserted.querySelector('.labels'), task.stems);
+      applyRowState(inserted, task);
       updateUI();
       return {bar, st, dl, stopPad, smooth};
     }
@@ -1225,6 +1462,7 @@
       pendingItems.length = 0;
       startLock = false;
       startPressed = false;
+      queueStarted = false;
       saveTasks();
       updateUI();
       if(appShell){
@@ -1250,6 +1488,7 @@
 
     rehydrateTasks().finally(() => {
       // restore previous tasks
+      queueStarted = tasks.some(t => t && ((t.stage && t.stage !== 'ready') || (typeof t.pct === 'number' && t.pct > 0) || t.out_dir));
       tasks.forEach(t => {
         const {bar, st, dl, stopPad, smooth} = createItem(t);
         const last = queue.lastElementChild;
@@ -1262,6 +1501,7 @@
           trackProgress(t.id, bar, st, dl, null, null, t, null, smooth, stopPad);
         }
       });
+      refreshAllLabelVisibility();
       updateUI();
       window.addEventListener('scroll', updateVigs);
     });
@@ -1278,6 +1518,9 @@
       outputSameAsInput = document.getElementById('output-same-as-input');
       outputFolderChoose = document.getElementById('output-folder-choose');
       outputFolderOpen = document.getElementById('output-folder-open');
+      videoAudioOnly = document.getElementById('video-audio-only');
+      videoPlusStem = document.getElementById('video-plus-stem');
+      lanAccessHeading = document.getElementById('lan-access-heading');
       lanAccessText = document.getElementById('lan-access-text');
       lanCopyBtn = document.getElementById('lan-copy-btn');
       portStatusText = document.getElementById('port-status-text');
@@ -1316,6 +1559,20 @@
       if(outputSameAsInput){
         outputSameAsInput.addEventListener('change', () => {
           persistSettings({ output_same_as_input: outputSameAsInput.checked }, { showMissingPopup:false });
+        });
+      }
+      if(videoAudioOnly){
+        videoAudioOnly.addEventListener('change', () => {
+          if(videoAudioOnly.checked){
+            persistSettings({ video_handling: 'audio_only' }, { showMissingPopup:false });
+          }
+        });
+      }
+      if(videoPlusStem){
+        videoPlusStem.addEventListener('change', () => {
+          if(videoPlusStem.checked){
+            persistSettings({ video_handling: 'video_and_stems' }, { showMissingPopup:false });
+          }
         });
       }
       if(outputFolderChoose){
@@ -1417,23 +1674,57 @@
       }));
 
     // open file picker on click/keyboard
-    const triggerPicker = () => {
+    const triggerPicker = async () => {
+      if(window.pywebview && window.pywebview.api && window.pywebview.api.pick_media_files){
+        const picked = await window.pywebview.api.pick_media_files();
+        await handleDesktopPickedPaths(Array.isArray(picked) ? picked : []);
+        return;
+      }
       try {
         if (fileInput.showPicker) { fileInput.showPicker(); return; }
       } catch(_) {}
       fileInput.click();
     };
-    dropzone.addEventListener('click', triggerPicker);
+    dropzone.addEventListener('click', (e) => {
+      e.preventDefault();
+      triggerPicker();
+    });
     dropzone.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        triggerPicker();
+        void triggerPicker();
       }
     });
 
     // handle both dropped and picked files
     dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
     fileInput.addEventListener('change', e => handleFiles(e.target.files));
+    if(stemChoices){
+      stemChoices.addEventListener('click', (event) => {
+        const button = event.target.closest('.stem-choice');
+        if(!button) return;
+        const nextMode = button.dataset.mode || 'vocals';
+        if(nextMode === 'both_deux'){
+          if(selectedStemModes.has('both_deux')){
+            selectedStemModes.delete('both_deux');
+          }else{
+            selectedStemModes = new Set(['both_deux']);
+          }
+        }else{
+          if(selectedStemModes.has('both_deux')){
+            selectedStemModes.delete('both_deux');
+          }
+          if(selectedStemModes.has(nextMode)){
+            selectedStemModes.delete(nextMode);
+          }else{
+            selectedStemModes.add(nextMode);
+          }
+        }
+        updateStemChoiceUI();
+        Promise.resolve(syncQueuedStemSelection()).catch(() => {});
+      });
+    }
+    updateStemChoiceUI();
 
     function showError(msg){
       const overlay = document.createElement('div');
@@ -1626,6 +1917,12 @@
     function applyRuntimeUI(runtime){
       const data = runtime && typeof runtime === 'object' ? runtime : {};
       const lanDisplay = data.lan_display || '';
+      const networkName = (data.network_name || '').trim();
+      if(lanAccessHeading){
+        lanAccessHeading.textContent = networkName
+          ? `lan access - connect from other devices on the '${networkName}' network`
+          : 'lan access - connect from other devices on the local network';
+      }
       if(lanAccessText){
         lanAccessText.textContent = lanDisplay || 'unavailable';
       }
@@ -2109,6 +2406,9 @@
         setRetryIcon(stopPad);
         guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
       }
+      if(ui.item){
+        applyRowState(ui.item, taskRef);
+      }
       updateUI();
     }
 
@@ -2117,6 +2417,46 @@
       closeTaskStream(taskId);
       markTaskStopped(taskRef, ui);
       try{ await fetch('/stop/' + taskId, { method:'POST' }); }catch(_){ }
+    }
+    function normalizeStemList(stems){
+      return Array.isArray(stems) ? stems.map((item) => String(item || '').toLowerCase()).filter(Boolean) : [];
+    }
+    function stemsMatch(a, b){
+      const left = normalizeStemList(a);
+      const right = normalizeStemList(b);
+      if(left.length !== right.length) return false;
+      return left.every((item, index) => item === right[index]);
+    }
+    function findRowForTask(task){
+      if(!task) return null;
+      return Array.from(queue.children).find((row) => {
+        if(task.id && row.__taskId === task.id) return true;
+        if(task.tempKey && row.__tempKey === task.tempKey) return true;
+        return false;
+      }) || null;
+    }
+    function taskUiForRow(row){
+      if(!row) return null;
+      const item = row;
+      const bar = row.querySelector('.bar-fill');
+      const st = row.querySelector('.chip');
+      const dl = row.querySelector('.dl-pad');
+      const card = row.querySelector('.card');
+      const stopPad = row.querySelector('.stop-pad');
+      const smooth = makeProgressSmoother(bar);
+      return { item, bar, st, dl, card, stopPad, smooth };
+    }
+    async function restartTaskWithSelection(task, stems){
+      if(!task || !task.id) return false;
+      const row = findRowForTask(task);
+      const ui = taskUiForRow(row);
+      if(!ui) return false;
+      await rerunTask(task, ui, {
+        stems: stems.join(','),
+        output_format: settingsState.output_format || 'same_as_input',
+        video_handling: settingsState.video_handling || 'audio_only',
+      });
+      return true;
     }
     function dropPendingById(id){
       if(!id) return;
@@ -2133,7 +2473,9 @@
     }
 
     function revealStatusesAfterStart(){
+      queueStarted = true;
       document.querySelectorAll('#queue .chip').forEach(chip => chip.classList.remove('hidden'));
+      refreshAllLabelVisibility();
       document.querySelectorAll('#queue .stop-pad').forEach(pad => {
         const row = pad.closest('.item-row');
         const id = row ? row.__taskId : null;
@@ -2144,11 +2486,66 @@
       });
     }
 
+    async function updateReadyTaskSelection(taskId, stems){
+      if(!taskId || !Array.isArray(stems) || stems.length === 0) return null;
+      try{
+        const res = await fetch(`/api/tasks/${taskId}/selection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stems: stems.join(',') }),
+        });
+        if(!res.ok) return null;
+        return await res.json();
+      }catch(_){
+        return null;
+      }
+    }
+
+    async function syncQueuedStemSelection(){
+      if(queueStarted) return;
+      const stems = selectedStems();
+      if(stems.length === 0) return;
+      pendingItems.forEach((pending) => {
+        if(pending){
+          pending.stems = stems.slice();
+        }
+      });
+      const updates = [];
+      tasks.forEach((task) => {
+        if(!task || task.stage !== 'ready' || task.pct !== 0) return;
+        task.stems = stems.slice();
+        const row = findRowForTask(task);
+        if(row){
+          const labels = row.querySelector('.labels');
+          applyLabels(labels, task.stems);
+        }
+        if(task.id){
+          updates.push(updateReadyTaskSelection(task.id, stems).then((data) => {
+            if(data && Array.isArray(data.stems)){
+              task.stems = data.stems;
+              if(row){
+                const labels = row.querySelector('.labels');
+                applyLabels(labels, task.stems);
+              }
+            }
+          }));
+        }
+      });
+      saveTasks();
+      if(updates.length){
+        await Promise.all(updates);
+        saveTasks();
+      }
+    }
+
     function selectedStems(){
-      if(vocalsBox.checked) return ['vocals'];
-      if(instBox.checked) return ['instrumental'];
-      if(deuxBox && deuxBox.checked) return ['deux'];
-      return [];
+      if(selectedStemModes.has('both_deux')){
+        return ['deux'];
+      }
+      const stems = [];
+      if(selectedStemModes.has('vocals')) stems.push('vocals');
+      if(selectedStemModes.has('instrumental')) stems.push('instrumental');
+      return stems;
     }
 
     function sourceDirForFile(file){
@@ -2182,7 +2579,7 @@
       const newPending = [];
       const files = [...fileList];
       const audioFiles = files.filter((file) => {
-        return (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
+        return (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
       });
       if(existingCount + audioFiles.length > MAX_TASKS){
         const slots = Math.max(0, MAX_TASKS - existingCount);
@@ -2194,8 +2591,8 @@
       for(const file of files){
         if(availableSlots <= 0) break;
         // accept common audio even when type is empty
-        const looksAudio = (file.type && file.type.startsWith('audio/')) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff)$/i.test(file.name);
-        if(!looksAudio) continue;
+        const looksMedia = (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
+        if(!looksMedia) continue;
 
         const duration = await getAudioDuration(file);
         if(duration > 0){
@@ -2219,7 +2616,7 @@
         const dl   = item.querySelector('.dl-pad');
         const card = item.querySelector('.card');
         const stopPad = item.querySelector('.stop-pad');
-        li.textContent = file.name;
+        applyFilename(li, file.name);
         st.textContent = 'ready';
         st.classList.add('chip-dim');
         st.classList.add('hidden');
@@ -2236,11 +2633,12 @@
         const smooth = makeProgressSmoother(bar);
         smooth.setImmediate(0);
         // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:null, tempKey, autoStart:startPressed, startedProcessing:false };
+        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:stems.slice(), tempKey, autoStart:startPressed, startedProcessing:false };
+        applyRowState(item, { stage: 'ready', pct: 0, id: null });
         pendingItems.push(pending);
         newPending.push(pending);
         // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:[], file:null, tempKey, out_dir:null, downloaded:false });
+        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false });
         saveTasks();
         updateUI();
       }
@@ -2256,6 +2654,7 @@
           await uploadWithStems(p, stems);
         }
       }
+      await syncQueuedStemSelection();
       updateStartButton();
     }
 
@@ -2268,6 +2667,7 @@
         data.append('file', file);
         data.append('stems', stems.join(','));
         data.append('output_format', settingsState.output_format || 'same_as_input');
+        data.append('video_handling', settingsState.video_handling || 'audio_only');
         const sourceDir = sourceDirForFile(file);
         if(sourceDir){
           data.append('source_dir', sourceDir);
@@ -2313,7 +2713,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false };
+          const t = { id:parsed.task_id, name:file.name, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           if(startPressed || pending.autoStart){
             t.stage = 'queued';
@@ -2324,6 +2724,7 @@
               st.classList.remove('hidden');
             }
           }
+          applyRowState(ui.item, t);
           saveTasks(); updateUI();
           // enable stop now that we have an id
           if (stopPad){
@@ -2339,10 +2740,13 @@
               stopPad.dataset.busy = '';
               updateUI();
             });
-            setStopVisibility(stopPad, 'ready');
+            setStopVisibility(stopPad, (startPressed || pending.autoStart) ? 'queued' : 'ready');
           }
           // start polling
           trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
+          if(!queueStarted && !startPressed){
+            Promise.resolve(syncQueuedStemSelection()).catch(() => {});
+          }
           if(pending.autoStart){
             startTaskWhenReady(pending);
           }
@@ -2412,17 +2816,26 @@
           saveTasks();
         }
       };
-      const startReadyTasks = async () => {
-        const ready = Array.isArray(tasks)
-          ? tasks.filter(t => t && t.id && (!t.stage || t.stage === 'ready' || t.stage === 'queued'))
-          : [];
-        for(const t of ready){
-          try{
-            await fetch('/start/' + t.id, { method:'POST' });
-            t.stage = 'queued';
-            t.pct = 0;
-            if(typeof t.downloaded === 'undefined'){ t.downloaded = false; }
-          }catch(_){}
+      const startReadyTasks = async (stems) => {
+        const existing = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+        for(const t of existing){
+          if(!t || !t.id || isProcessing(t)) continue;
+          const stemChanged = !stemsMatch(t.stems, stems);
+          const canRestart = stemChanged || t.stage === 'stopped' || t.stage === 'error' || t.pct < 0;
+          if(canRestart){
+            await restartTaskWithSelection(t, stems);
+            continue;
+          }
+          if(!t.stage || t.stage === 'ready' || t.stage === 'queued'){
+            try{
+              await fetch('/start/' + t.id, { method:'POST' });
+              t.stage = 'queued';
+              t.pct = 0;
+              t.downloaded = false;
+              t.autoDownloaded = false;
+              t.out_dir = null;
+            }catch(_){}
+          }
         }
         saveTasks();
         markReadyQueuedUI();
@@ -2451,7 +2864,7 @@
           }
           startTaskWhenReady(p);
         }
-        await startReadyTasks();
+        await startReadyTasks(stems);
         startPressed = false;
         markedStarted = false;
         pendingItems.forEach(p => { if(p){ p.autoStart = false; } });
@@ -2462,6 +2875,78 @@
         }
         startLock = false;
         updateStartButton();
+      }
+    }
+
+    async function handleDesktopPickedPaths(paths){
+      if(!Array.isArray(paths) || paths.length === 0){
+        return;
+      }
+      if(modelsBlocked){
+        showPopup('download the models before splitting');
+        await refreshModelStatus({ allowPrompt: true });
+        flashModelDownloadCTA();
+        return;
+      }
+      const storageOk = await checkStorage();
+      const memoryOk = checkMemory();
+      if(!storageOk || !memoryOk){
+        showPopup('cannot add songs until resources are available');
+        return;
+      }
+      const existingCount = tasks.filter(Boolean).length;
+      if(existingCount >= MAX_TASKS){
+        showPopup('you already have 50 songs queued; clear some to upload more');
+        return;
+      }
+      const availableSlots = Math.max(0, MAX_TASKS - existingCount);
+      const trimmed = paths.slice(0, availableSlots);
+      if(!trimmed.length){
+        return;
+      }
+      const stems = selectedStems();
+      if(stems.length === 0){
+        showPopup('please select at least one stem before uploading');
+        return;
+      }
+      try{
+        const res = await fetch('/api/import_paths', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paths: trimmed,
+            stems: stems.join(','),
+            output_format: settingsState.output_format || 'same_as_input',
+            video_handling: settingsState.video_handling || 'audio_only',
+          }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if(!res.ok){
+          const msg = payload && payload.message ? payload.message : 'could not import files';
+          showPopup(msg);
+          return;
+        }
+        const importedTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+        importedTasks.forEach((task) => {
+          const item = {
+            id: task.task_id || task.id || null,
+            name: task.name,
+            pct: typeof task.pct === 'number' ? task.pct : 0,
+            stage: task.stage || 'ready',
+            stems: Array.isArray(task.stems) ? task.stems : [],
+            out_dir: task.out_dir || null,
+            downloaded: false,
+            delivery: task.delivery || 'folder',
+            autoDownloaded: false,
+          };
+          tasks.push(item);
+          createItem(item);
+        });
+        saveTasks();
+        updateUI();
+      }catch(err){
+        console.warn('desktop import failed', err);
+        showPopup('could not import files');
       }
     }
     if(startBtn) guardClick(startBtn, startSequentialProcessing);
@@ -2503,7 +2988,9 @@
             if(data.stems) taskRef.stems = data.stems;
             if(data.out_dir) taskRef.out_dir = data.out_dir;
             if(data.zip) taskRef.zip = data.zip;
+            if(data.delivery) taskRef.delivery = data.delivery;
             if(typeof taskRef.downloaded === 'undefined'){ taskRef.downloaded = false; }
+            if(typeof taskRef.autoDownloaded === 'undefined'){ taskRef.autoDownloaded = false; }
             saveTasks();
           }
           if(data.stems && st){
@@ -2544,8 +3031,8 @@
             smooth.setTarget(100);
             hideStatus(st);
             if(dl){
-              const ref = taskRef || { id: taskId, out_dir: data.out_dir, zip: data.zip, downloaded:false };
-              if(ref.downloaded){
+              const ref = taskRef || { id: taskId, out_dir: data.out_dir, zip: data.zip, downloaded:false, delivery: data.delivery || 'folder', autoDownloaded:false };
+              if(ref.delivery !== 'browser_download' && ref.downloaded){
                 setFolderIcon(dl);
                 dl.classList.add('show');
                 dl.title = 'open folder';
@@ -2687,13 +3174,18 @@
             <option value="m4a">m4a</option>
             <option value="flac">flac</option>
           </select>
+          <div class="space-y-2">
+            <label class="text-sm opacity-80 block">video handling</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="video-audio-only" type="radio" name="video-handling" class="pretty">only output the audio</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="video-plus-stem" type="radio" name="video-handling" class="pretty">video + stem (multiple videos if multiple stems)</label>
+          </div>
         </div>
 
         <div class="border-t border-white/10 my-4"></div>
 
         <div class="space-y-4">
           <div class="space-y-2">
-          <div class="text-sm opacity-80">lan access</div>
+          <div id="lan-access-heading" class="text-sm opacity-80">lan access - connect from other devices on the local network</div>
           <div class="settings-row">
             <button id="lan-copy-btn" class="copy-button" type="button" title="copy lan address" aria-label="copy lan address">
               <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2706,7 +3198,7 @@
           <div id="port-status-text" class="text-xs opacity-60" hidden></div>
           </div>
           <div class="space-y-2">
-          <div class="text-sm opacity-80">models - by <a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">becruily</a></div>
+          <div class="text-sm opacity-80">models</div>
           <div id="models-list" class="model-list"></div>
           <div id="models-note" class="model-note" hidden></div>
           <div id="models-progress-wrap" class="space-y-2" hidden>
@@ -2722,11 +3214,14 @@
 
         <div class="border-t border-white/10 my-4"></div>
 
-        <div class="flex gap-3 mt-3">
-          <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs flex-1" type="button" style="border-radius:12px;">force clear</button>
-          <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
-          <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
+        <div class="flex flex-col gap-3 mt-3">
+          <button id="force-clear" class="btn bg-white text-black px-1 py-2 text-xs w-full" type="button" style="border-radius:12px;">force clear</button>
+          <div class="flex gap-3">
+            <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
+            <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
+          </div>
         </div>
+        <div class="text-xs opacity-70 text-right"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
       <div class="mt-6 text-center opacity-70 text-sm">v0.3</div>
