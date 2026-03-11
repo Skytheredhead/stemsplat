@@ -58,6 +58,7 @@
       background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
     }
     body { padding: 0; overscroll-behavior-y: auto; background: transparent; overflow-x: hidden; }
+    body.desktop-shell .window-chrome { display: flex; }
     .bg-gradient-shell {
       position: fixed;
       left: 0;
@@ -68,6 +69,68 @@
       z-index: -3;
       background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
     }
+    .window-chrome {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 54px;
+      padding: 14px 16px 0;
+      z-index: 24;
+      align-items: flex-start;
+      pointer-events: none;
+    }
+    .window-dragbar {
+      width: 100%;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      pointer-events: auto;
+    }
+    .window-controls-shell {
+      display: flex;
+      align-items: center;
+      min-width: 86px;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 0 0 16px 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.07));
+      border: 1px solid rgba(255,255,255,.12);
+      border-top: 0;
+      box-shadow: 0 8px 26px rgba(0,0,0,.18);
+      backdrop-filter: blur(10px) saturate(108%);
+      -webkit-backdrop-filter: blur(10px) saturate(108%);
+    }
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .window-control {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      position: relative;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+    }
+    .window-control:hover::after {
+      content: attr(data-glyph);
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      font-size: 9px;
+      line-height: 1;
+      color: rgba(0,0,0,.55);
+      font-weight: 700;
+    }
+    .window-control.close { background: #ff5f57; }
+    .window-control.minimize { background: #febc2e; }
+    .window-control.fullscreen { background: #28c840; }
 
     .noise::before { content: ""; position: fixed; inset: -22vh 0; pointer-events: none;
       background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
@@ -115,22 +178,42 @@
     .btn:hover { transform: translateY(-1px); }
     .btn[hidden] { display:none !important; }
     .btn[disabled] { opacity:.55; cursor:default; transform:none !important; }
-
-    @keyframes pulseGlow {
-      0% { box-shadow: 0 0 0 0 rgba(255,255,255,.18); }
-      70% { box-shadow: 0 0 0 12px rgba(255,255,255,0); }
-      100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    #start-btn:disabled {
+      pointer-events: none;
+      cursor: default;
+      opacity: .42;
+      filter: grayscale(.2);
     }
-    .attention-pulse { animation: pulseGlow 1.8s ease-out infinite; }
+
+    @keyframes modelAttention {
+      0%, 18%, 100% { transform: translateX(0); box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+      4% { transform: translateX(-1px); }
+      8% { transform: translateX(2px); }
+      12% { transform: translateX(-1.5px); }
+      16% { transform: translateX(1px); }
+      28% { box-shadow: 0 0 0 0 rgba(255,255,255,.2); }
+      50% { box-shadow: 0 0 0 12px rgba(255,255,255,0); }
+      62% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    }
+    .attention-sequence { animation: modelAttention 2.5s ease-in-out infinite; }
     .attention-ring { box-shadow: 0 0 0 2px rgba(255,255,255,.45), 0 0 24px rgba(255,255,255,.18); }
     .dimmed-control { opacity:.45; pointer-events:none; }
     .copy-button { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.10); display: inline-flex; align-items: center; justify-content: center; color: var(--txt-main); transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
     .copy-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.16); box-shadow: 0 8px 18px rgba(0,0,0,.2); }
+    .copy-button svg { position:absolute; inset:0; margin:auto; width:16px; height:16px; transition: opacity .18s ease; }
+    .copy-button .icon-wrap { position:relative; width:16px; height:16px; display:block; }
+    .copy-button .icon-check { opacity:0; }
+    .copy-button[data-copied="1"] .icon-copy { opacity:0; }
+    .copy-button[data-copied="1"] .icon-check { opacity:1; }
     .settings-row { display:flex; align-items:center; gap:10px; }
     .model-list { display:flex; flex-direction:column; gap:10px; }
     .model-item { display:flex; align-items:center; gap:10px; font-size:13px; color: var(--txt-main); }
-    .model-item input.pretty { pointer-events:none; }
-    .model-note { font-size:12px; opacity:.65; min-height:16px; }
+    .model-state { width:18px; height:18px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); display:flex; align-items:center; justify-content:center; color:#b9f4d7; }
+    .model-state svg { width:12px; height:12px; opacity:0; transition: opacity .18s ease; }
+    .model-item.ready .model-state svg { opacity:1; }
+    .model-note { font-size:12px; opacity:.65; }
+    .models-cta-wrap { position:relative; display:flex; gap:8px; }
+    .models-cta-wrap > * { position:relative; z-index:1; }
 
     .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); }
     .chip-dim { background: rgba(0,0,0,.38); border:1px solid rgba(255,255,255,.10); color:#E7ECEF; }
@@ -190,6 +273,17 @@
 </head>
 
 <body style="font-family: 'Nunito Sans', sans-serif;">
+  <div class="window-chrome">
+    <div class="window-dragbar pywebview-drag-region">
+      <div class="window-controls-shell">
+        <div class="window-controls">
+          <button id="window-close-btn" class="window-control close" type="button" data-glyph="×" aria-label="close"></button>
+          <button id="window-minimize-btn" class="window-control minimize" type="button" data-glyph="−" aria-label="minimize"></button>
+          <button id="window-fullscreen-btn" class="window-control fullscreen" type="button" data-glyph="+" aria-label="toggle fullscreen"></button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div class="bg-gradient-shell"></div>
   <div class="noise fixed inset-0 -z-10"></div>
   <div class="shade"></div>
@@ -214,9 +308,10 @@
           </svg>
         </button>
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="radio" name="stems" class="pretty" checked>vocals (fastest)</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="radio" name="stems" class="pretty">instrumental (fastest)</label>
-        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="radio" name="stems" class="pretty">both (highest quality)</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="vocals-box" type="radio" name="stems" class="pretty" checked>vocals</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="inst-box" type="radio" name="stems" class="pretty">instrumental</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="deux-box" type="radio" name="stems" class="pretty">both - deux</label>
+        <label class="flex items-center gap-2 text-[var(--txt-main)]"><input id="separate-box" type="radio" name="stems" class="pretty">both - separate</label>
       </div>
       <button id="start-btn" class="glass-light pre-hide w-64 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 micro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -291,6 +386,9 @@
     const spacer    = document.getElementById('queue-spacer');
     const appShell  = document.getElementById('app-shell');
     const startBtn  = document.getElementById('start-btn');
+    const windowCloseBtn = document.getElementById('window-close-btn');
+    const windowMinimizeBtn = document.getElementById('window-minimize-btn');
+    const windowFullscreenBtn = document.getElementById('window-fullscreen-btn');
     let outputFormatSelect = null;
     let outputFolderInput = null;
     let outputSameAsInput = null;
@@ -302,6 +400,7 @@
     let modelsList = null;
     let modelsNote = null;
     let modelsDownloadBtn = null;
+    let modelsCtaWrap = null;
     let modelsFolderBtn = null;
     let modelsProgressWrap = null;
     let modelsProgressBar = null;
@@ -317,11 +416,15 @@
     let activeReleaseOverlay = null;
     let activePortOverlay = null;
     let lastModelStatus = null;
+    let modelPreviewActive = false;
+    let modelPreviewTimer = null;
+    let copyResetTimers = new WeakMap();
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
       deux: 'both (highest quality)',
     };
+    const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
 
     let startPressed = false;
     let startGeneration = 0;
@@ -329,6 +432,24 @@
     let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input', runtime: null };
     let defaultOutputPath = '';
     let dirPickerInput = null;
+
+    function applyDesktopShellState(){
+      const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
+      document.body.classList.toggle('desktop-shell', hasDesktopApi);
+    }
+
+    async function callDesktopAction(actionName){
+      try{
+        if(window.pywebview && window.pywebview.api && typeof window.pywebview.api[actionName] === 'function'){
+          await window.pywebview.api[actionName]();
+          return true;
+        }
+      }catch(err){
+        console.warn(`${actionName} failed`, err);
+      }
+      return false;
+    }
+
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
@@ -563,6 +684,9 @@
           }
           if(bg){ bg.classList.remove('anim-out'); }
           settingsOverlay.classList.add('hidden');
+          if(modelPreviewActive){
+            restoreModelPreview();
+          }
         }, 180);
       }
     }
@@ -1147,6 +1271,7 @@
 
     // initialize overlay controls on load
     window.addEventListener('load', async () => {
+      applyDesktopShellState();
       settingsOverlay = document.getElementById('settings-overlay');
       outputFormatSelect = document.getElementById('output-format');
       outputFolderInput = document.getElementById('output-folder-path');
@@ -1159,6 +1284,7 @@
       modelsList = document.getElementById('models-list');
       modelsNote = document.getElementById('models-note');
       modelsDownloadBtn = document.getElementById('models-download');
+      modelsCtaWrap = document.getElementById('models-cta-wrap');
       modelsFolderBtn = document.getElementById('models-folder-open');
       modelsProgressWrap = document.getElementById('models-progress-wrap');
       modelsProgressBar = document.getElementById('models-progress-bar');
@@ -1219,16 +1345,24 @@
         });
       }
       if(lanCopyBtn){
+        lanCopyBtn.innerHTML = createCopyIconMarkup();
+        lanCopyBtn.dataset.copied = '0';
         lanCopyBtn.addEventListener('click', async () => {
           const runtime = settingsState.runtime || {};
           const target = runtime.lan_display || '';
           if(!target) return;
           const ok = await copyText(target);
-          showPopup(ok ? 'lan address copied' : 'could not copy address');
+          if(ok){
+            pulseCopiedState(lanCopyBtn);
+          }
         });
       }
       if(modelsDownloadBtn){
         modelsDownloadBtn.addEventListener('click', async () => {
+          if(modelPreviewActive){
+            simulateModelPreviewDownload();
+            return;
+          }
           await dismissModelPrompt();
           const missing = Array.isArray(lastModelStatus && lastModelStatus.missing) ? lastModelStatus.missing : null;
           startModelDownload(missing && missing.length ? missing : null);
@@ -1252,6 +1386,23 @@
         });
       }
     });
+    window.addEventListener('pywebviewready', applyDesktopShellState);
+    if(windowCloseBtn){
+      windowCloseBtn.addEventListener('click', async () => {
+        const handled = await callDesktopAction('close_window');
+        if(!handled) window.close();
+      });
+    }
+    if(windowMinimizeBtn){
+      windowMinimizeBtn.addEventListener('click', () => {
+        callDesktopAction('minimize_window');
+      });
+    }
+    if(windowFullscreenBtn){
+      windowFullscreenBtn.addEventListener('click', () => {
+        callDesktopAction('toggle_fullscreen_window');
+      });
+    }
 
     // drag-and-drop highlights
     ['dragenter','dragover'].forEach(evt =>
@@ -1298,7 +1449,7 @@
     function showPopup(msg){
       const card = document.createElement('div');
       card.textContent = msg;
-      card.className = 'fixed top-4 right-4 glass px-4 py-2 rounded text-[var(--txt-main)]';
+      card.className = 'fixed top-4 right-4 z-[95] glass px-4 py-2 rounded text-[var(--txt-main)]';
       document.body.appendChild(card);
       setTimeout(() => card.remove(), 3000);
     }
@@ -1336,9 +1487,22 @@
     }
 
     function closeOverlay(overlay){
-      if(overlay && overlay.parentNode){
-        overlay.parentNode.removeChild(overlay);
+      if(!overlay || !overlay.parentNode) return;
+      const bg = overlay.querySelector('.overlay-bg');
+      const card = overlay.querySelector('.overlay-card');
+      if(bg){
+        bg.classList.remove('anim');
+        bg.classList.add('anim-out');
       }
+      if(card){
+        card.classList.remove('settings-card-in');
+        card.classList.add('settings-card-out');
+      }
+      setTimeout(() => {
+        if(overlay.parentNode){
+          overlay.parentNode.removeChild(overlay);
+        }
+      }, 190);
     }
 
     async function copyText(text){
@@ -1364,17 +1528,60 @@
       }
     }
 
+    function createCopyIconMarkup(){
+      return `
+        <span class="icon-wrap" aria-hidden="true">
+          <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+            <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+          </svg>
+          <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12l4.2 4.2L19 6.5"></path>
+          </svg>
+        </span>`;
+    }
+
+    function pulseCopiedState(btn){
+      if(!btn) return;
+      const existing = copyResetTimers.get(btn);
+      if(existing){
+        clearTimeout(existing);
+      }
+      btn.dataset.copied = '1';
+      const timer = setTimeout(() => {
+        btn.dataset.copied = '0';
+        copyResetTimers.delete(btn);
+      }, 5000);
+      copyResetTimers.set(btn, timer);
+    }
+
     function createOverlayCard(titleText){
       const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 z-[80] flex items-center justify-center backdrop-blur-sm px-4';
+      overlay.className = 'fixed inset-0 z-[80] grid place-items-center px-4';
+      const bg = document.createElement('div');
+      bg.className = 'overlay-bg anim';
       const card = document.createElement('div');
-      card.className = 'glass w-full max-w-md rounded-2xl p-6 text-[var(--txt-main)] flex flex-col gap-4';
+      card.className = 'overlay-card glass settings-card-in w-full max-w-md rounded-2xl p-6 text-[var(--txt-main)] flex flex-col gap-4 relative';
       const titleEl = document.createElement('h3');
       titleEl.className = 'text-xl font-light';
       titleEl.textContent = titleText;
       card.appendChild(titleEl);
-      overlay.appendChild(card);
+      overlay.append(bg, card);
       document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => {
+        if(e.target === overlay || e.target === bg){
+          closeOverlay(overlay);
+          if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
+          if(activePortOverlay === overlay) activePortOverlay = null;
+        }
+      });
+      overlay.addEventListener('keydown', (e) => {
+        if(e.key === 'Escape'){
+          closeOverlay(overlay);
+          if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
+          if(activePortOverlay === overlay) activePortOverlay = null;
+        }
+      });
       overlay.tabIndex = 0;
       overlay.focus();
       return { overlay, card };
@@ -1386,6 +1593,34 @@
       btn.className = `btn px-3 py-2 text-xs ${extraClass}`.trim();
       btn.textContent = label;
       return btn;
+    }
+
+    function parseReleaseHighlights(notes){
+      const text = String(notes || '').trim();
+      if(!text) return [];
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => !/^summary:/i.test(line))
+        .filter((line) => !/^highlights:/i.test(line));
+      const bulletLines = lines
+        .filter((line) => /^[-*•]/.test(line))
+        .map((line) => line.replace(/^[-*•]\s*/, '').trim())
+        .filter(Boolean);
+      if(bulletLines.length){
+        return bulletLines.slice(0, 5);
+      }
+      const plain = lines
+        .map((line) => line.replace(/^[-*•]\s*/, '').trim())
+        .filter(Boolean)
+        .join(' ');
+      if(!plain) return [];
+      return plain
+        .split(/\s*[;,]\s*/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(0, 5);
     }
 
     function applyRuntimeUI(runtime){
@@ -1415,12 +1650,11 @@
       modelsList.innerHTML = '';
       ['vocals', 'instrumental', 'deux'].forEach((key) => {
         const row = document.createElement('label');
-        row.className = 'model-item';
-        const box = document.createElement('input');
-        box.type = 'checkbox';
-        box.className = 'pretty';
-        box.checked = !missing.has(key);
-        box.disabled = true;
+        const ready = !missing.has(key);
+        row.className = `model-item${ready ? ' ready' : ''}`;
+        const box = document.createElement('span');
+        box.className = 'model-state';
+        box.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4.2 4.2L19 6.5"></path></svg>`;
         const label = document.createElement('span');
         label.textContent = MODEL_LABELS[key] || key;
         row.append(box, label);
@@ -1462,31 +1696,50 @@
       const commandCode = document.createElement('code');
       commandCode.className = 'flex-1 text-xs break-all opacity-80';
       commandCode.textContent = status.kill_command || `kill -9 $(lsof -ti tcp:${preferredPort})`;
-      const copyBtn = makeActionButton('copy', 'bg-white/10 text-white');
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'copy-button';
+      copyBtn.title = 'copy command';
+      copyBtn.setAttribute('aria-label', 'copy command');
+      copyBtn.dataset.copied = '0';
+      copyBtn.innerHTML = createCopyIconMarkup();
       copyBtn.onclick = async () => {
         const ok = await copyText(commandCode.textContent || '');
-        showPopup(ok ? 'command copied' : 'could not copy command');
+        if(ok){
+          pulseCopiedState(copyBtn);
+        }
       };
       commandWrap.append(commandCode, copyBtn);
       card.appendChild(commandWrap);
 
       const row = document.createElement('div');
       row.className = 'flex gap-3 justify-end flex-wrap';
-      const stayBtn = makeActionButton(`stay on ${currentPort}`, 'bg-white/10 text-white');
+      const stayBtn = makeActionButton('i just want to use the app', 'bg-white/10 text-white');
       const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'bg-white text-black');
 
       stayBtn.onclick = async () => {
+        let next = null;
         try{
           if(window.pywebview && window.pywebview.api && window.pywebview.api.acknowledge_port_conflict){
-            const next = await window.pywebview.api.acknowledge_port_conflict();
-            if(next){
-              settingsState.runtime = next;
-              applyRuntimeUI(next);
-            }
+            next = await window.pywebview.api.acknowledge_port_conflict();
           }
         }catch(err){
           console.warn('port conflict acknowledge failed', err);
         }
+        if(!next){
+          const baseRuntime = settingsState.runtime || {};
+          const lanBase = String(baseRuntime.lan_display || '').split(':')[0];
+          next = {
+            ...baseRuntime,
+            preferred_port: preferredPort,
+            current_port: currentPort,
+            port_conflict: false,
+            show_port_notice: false,
+            lan_display: lanBase ? `${lanBase}:${currentPort}` : (status.lan_display || ''),
+          };
+        }
+        settingsState.runtime = next;
+        applyRuntimeUI(next);
         closeOverlay(activePortOverlay);
         activePortOverlay = null;
       };
@@ -1565,6 +1818,75 @@
       }
     }
 
+    function clearModelPreviewTimer(){
+      if(modelPreviewTimer){
+        clearTimeout(modelPreviewTimer);
+        modelPreviewTimer = null;
+      }
+    }
+
+    function restoreModelPreview({ immediate = false } = {}){
+      clearModelPreviewTimer();
+      if(!modelPreviewActive && !immediate) return;
+      modelPreviewActive = false;
+      const doRestore = () => refreshModelStatus({ allowPrompt: false });
+      if(immediate){
+        doRestore();
+        return;
+      }
+      modelPreviewTimer = setTimeout(() => {
+        modelPreviewTimer = null;
+        doRestore();
+      }, 300);
+    }
+
+    function beginModelPreview(){
+      clearModelPreviewTimer();
+      modelPreviewActive = true;
+      openSettings();
+      updateModelSettings({
+        status: 'idle',
+        pct: 0,
+        current_model: '',
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        eta_seconds: null,
+        error: '',
+        missing: ['vocals', 'instrumental', 'deux'],
+      });
+      flashModelDownloadCTA();
+    }
+
+    function simulateModelPreviewDownload(){
+      clearModelPreviewTimer();
+      modelPreviewActive = true;
+      openSettings();
+      const totalBytes = 2.1 * 1024 * 1024 * 1024;
+      let pct = 0;
+      const tick = () => {
+        pct = Math.min(100, pct + 8);
+        updateModelSettings({
+          status: pct >= 100 ? 'done' : 'downloading',
+          pct,
+          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : 'both (highest quality)'),
+          downloaded_bytes: Math.round(totalBytes * (pct / 100)),
+          total_bytes: Math.round(totalBytes),
+          eta_seconds: pct >= 100 ? 0 : Math.max(0, Math.round((100 - pct) * 0.55)),
+          error: '',
+          missing: pct >= 100 ? [] : ['vocals', 'instrumental', 'deux'],
+        });
+        if(pct >= 100){
+          modelPreviewTimer = setTimeout(() => {
+            modelPreviewTimer = null;
+            restoreModelPreview({ immediate: true });
+          }, 900);
+          return;
+        }
+        modelPreviewTimer = setTimeout(tick, 170);
+      };
+      tick();
+    }
+
     function startModelStatusPolling(){
       if(modelStatusPoll) return;
       modelStatusPoll = setInterval(() => {
@@ -1580,15 +1902,16 @@
       modelsBlocked = missing.length > 0 || isDownloading;
       renderModelChecklist(status);
       if(modelsNote){
+        let noteMessage = '';
         if(isError){
-          modelsNote.textContent = status.error || 'model download failed';
+          noteMessage = status.error || 'model download failed';
         }else if(isDownloading){
-          modelsNote.textContent = `downloading ${status.current_model || 'models'}`;
+          noteMessage = `downloading ${status.current_model || 'models'}`;
         }else if(missing.length){
-          modelsNote.textContent = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
-        }else{
-          modelsNote.textContent = '';
+          noteMessage = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
         }
+        modelsNote.textContent = noteMessage;
+        modelsNote.hidden = !noteMessage;
       }
       if(modelsProgressWrap){
         modelsProgressWrap.hidden = !isDownloading && !isError;
@@ -1615,11 +1938,15 @@
         const showDownloadButton = missing.length > 0 && !isDownloading;
         modelsDownloadBtn.hidden = !showDownloadButton;
         modelsDownloadBtn.disabled = false;
-        modelsDownloadBtn.classList.toggle('attention-pulse', showDownloadButton);
+        modelsDownloadBtn.classList.toggle('attention-sequence', showDownloadButton);
         modelsDownloadBtn.textContent = isError ? 'retry download' : 'download models';
       }
       if(modelsFolderBtn){
         modelsFolderBtn.hidden = missing.length === 0 && !isError;
+      }
+      if(modelsCtaWrap){
+        const allChildrenHidden = Array.from(modelsCtaWrap.children).every((child) => child.hidden);
+        modelsCtaWrap.hidden = allChildrenHidden;
       }
       updateUI();
     }
@@ -1697,50 +2024,42 @@
       }
     }
 
-    async function skipRelease(){
-      try{
-        await fetch('/api/release_status/skip', { method: 'POST' });
-      }catch(err){
-        console.warn('release skip failed', err);
-      }
-    }
-
     function showReleaseOverlay(status){
       closeOverlay(activeReleaseOverlay);
       const { overlay, card } = createOverlayCard('new release available');
       activeReleaseOverlay = overlay;
-      const info = document.createElement('div');
-      info.className = 'text-sm opacity-90 whitespace-pre-line';
       const headline = status.latest_name || status.latest_version || 'new release';
-      const notes = (status.notes || '').trim();
-      info.textContent = notes
-        ? `${headline}\n\n${notes.slice(0, 700)}${notes.length > 700 ? '…' : ''}`
-        : `${headline}\n\na newer version of stemsplat is available.`;
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90';
+      info.textContent = `${headline} is ready.`;
       card.appendChild(info);
+      const bullets = parseReleaseHighlights(status.notes);
+      if(bullets.length){
+        const list = document.createElement('ul');
+        list.className = 'list-disc pl-5 text-sm opacity-90 space-y-1';
+        bullets.forEach((item) => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          list.appendChild(li);
+        });
+        card.appendChild(list);
+      }
       const row = document.createElement('div');
       row.className = 'flex gap-3 justify-end flex-wrap';
       const laterBtn = makeActionButton('later', 'bg-white/10 text-white');
-      const skipBtn = makeActionButton('skip this version', 'bg-white/10 text-white');
       const downloadBtn = makeActionButton('download update', 'bg-white text-black');
       laterBtn.onclick = async () => {
         await acknowledgeRelease();
         closeOverlay(activeReleaseOverlay);
         activeReleaseOverlay = null;
       };
-      skipBtn.onclick = async () => {
-        await skipRelease();
-        closeOverlay(activeReleaseOverlay);
-        activeReleaseOverlay = null;
-      };
       downloadBtn.onclick = async () => {
         await acknowledgeRelease();
-        if(status.latest_url){
-          window.open(status.latest_url, '_blank', 'noopener');
-        }
+        window.open(RELEASES_PAGE_URL, '_blank', 'noopener');
         closeOverlay(activeReleaseOverlay);
         activeReleaseOverlay = null;
       };
-      row.append(laterBtn, skipBtn, downloadBtn);
+      row.append(laterBtn, downloadBtn);
       card.appendChild(row);
     }
 
@@ -2387,14 +2706,14 @@
           <div id="port-status-text" class="text-xs opacity-60" hidden></div>
           </div>
           <div class="space-y-2">
-          <div class="text-sm opacity-80">models</div>
+          <div class="text-sm opacity-80">models - by <a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">becruily</a></div>
           <div id="models-list" class="model-list"></div>
-          <div id="models-note" class="model-note"></div>
+          <div id="models-note" class="model-note" hidden></div>
           <div id="models-progress-wrap" class="space-y-2" hidden>
             <div class="bar"><div id="models-progress-bar" class="bar-fill"></div></div>
             <div id="models-progress-meta" class="text-xs opacity-70"></div>
           </div>
-          <div class="flex gap-2">
+          <div id="models-cta-wrap" class="models-cta-wrap">
             <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
             <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
           </div>
@@ -2408,7 +2727,6 @@
           <a href="https://github.com/Skytheredhead/stemsplat" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">github</a>
           <a href="https://forms.gle/wSpe2nyFgcmuxSr28" target="_blank" rel="noopener noreferrer" class="btn bg-white text-black px-1 py-2 text-xs flex-1 text-center" style="border-radius:12px;">bugs/feedback</a>
         </div>
-        <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
       <div class="mt-6 text-center opacity-70 text-sm">v0.3</div>

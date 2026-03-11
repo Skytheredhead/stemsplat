@@ -243,6 +243,7 @@ class ServerController:
 class DesktopApi:
     def __init__(self, controller: ServerController) -> None:
         self.controller = controller
+        self.window: Any | None = None
 
     def get_runtime_status(self) -> dict[str, Any]:
         return self.controller.runtime_status()
@@ -252,6 +253,18 @@ class DesktopApi:
 
     def acknowledge_port_conflict(self) -> dict[str, Any]:
         return self.controller.acknowledge_port_conflict()
+
+    def close_window(self) -> None:
+        if self.window is not None:
+            self.window.destroy()
+
+    def minimize_window(self) -> None:
+        if self.window is not None:
+            self.window.minimize()
+
+    def toggle_fullscreen_window(self) -> None:
+        if self.window is not None:
+            self.window.toggle_fullscreen()
 
 
 def _open_browser_when_ready(url: str) -> None:
@@ -266,6 +279,8 @@ def _run_windowed_app(controller: ServerController) -> int:
     if webview is None:
         raise RuntimeError("pywebview is not available")
     controller.set_windowed(True)
+    with contextlib.suppress(Exception):
+        webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
     storage_path = RUNTIME_DIR / "webview"
     storage_path.mkdir(parents=True, exist_ok=True)
     api = DesktopApi(controller)
@@ -276,6 +291,8 @@ def _run_windowed_app(controller: ServerController) -> int:
         width=1280,
         height=900,
         min_size=(1100, 760),
+        frameless=True,
+        easy_drag=False,
         text_select=False,
         background_color="#0B1A1F",
     )
@@ -284,6 +301,7 @@ def _run_windowed_app(controller: ServerController) -> int:
         controller.stop()
 
     if window is not None:
+        api.window = window
         window.events.closed += _on_closed
     webview.start(
         gui="cocoa",

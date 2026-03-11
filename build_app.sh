@@ -4,7 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PYTHON_BIN="${PYTHON_BIN}"
+elif [[ -x "${SCRIPT_DIR}/venv/bin/python" ]]; then
+  PYTHON_BIN="${SCRIPT_DIR}/venv/bin/python"
+else
+  PYTHON_BIN="python3"
+fi
 
 ARGS=(
   --noconfirm
