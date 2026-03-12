@@ -1,32 +1,20 @@
-"""Unified entrypoint for stemsplat.
-
-This module consolidates the server, CLI, and model handling logic into a
-single location while focusing on Apple Silicon (Metal) execution. Detailed
-error codes are emitted for every failure so issues can be diagnosed quickly.
-"""
 from __future__ import annotations
 
-from collections import namedtuple
-from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
-from functools import partial, wraps
-from pathlib import Path
-from typing import Any, Callable, Optional
 import argparse
 import asyncio
-import http.server
-import importlib
-import importlib.util
+import contextlib
+import gc
 import json
 import logging
 import math
 import os
+import platform
 import queue
+import re
+import resource
+import secrets
 import shutil
 import socket
-import socketserver
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -36,136 +24,50 @@ import urllib.request
 import uuid
 import webbrowser
 import zipfile
-
-INSTALL_DEPS = [
-    "torch",
-    "torchaudio",
-    "fastapi",
-    "uvicorn[standard]",
-    "click",
-    "sse-starlette",
-    "python-multipart",
-    "numpy",
-    "pyyaml",
-    "soundfile",
-    "tqdm",
-    "einops",
-    "rotary_embedding_torch",
-    "packaging",
-    "beartype>=0.17",
-    "librosa",
-    "imageio-ffmpeg",
-    "certifi",
-]
-
-
-def _in_venv() -> bool:
-    return sys.prefix != sys.base_prefix
-
-
-def pip_path() -> Path:
-    if os.name == "nt":
-        return Path("venv") / "Scripts" / "pip"
-    return Path("venv") / "bin" / "pip"
-
-
-def python_path() -> Path:
-    if os.name == "nt":
-        return Path("venv") / "Scripts" / "python"
-    return Path("venv") / "bin" / "python"
-
-
-def _bootstrap_install() -> None:
-    if not Path("venv").exists():
-        subprocess.check_call([sys.executable, "-m", "venv", "venv"])
-    subprocess.check_call([str(pip_path()), "install", "--upgrade", "pip"])
-    for dep in INSTALL_DEPS:
-        subprocess.check_call([str(pip_path()), "install", dep])
-    subprocess.check_call([str(python_path()), str(Path(__file__).resolve()), "--install"])
-    raise SystemExit(0)
-
-
-if "--install" in sys.argv and not _in_venv():
-    _bootstrap_install()
-
-FILES = [
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_vocals_becruily.ckpt",
-        "tag": "vocals",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_instrumental_becruily.ckpt",
-        "tag": "instrumental",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
-        "subdir": "models",
-        "filename": "becruily_deux.ckpt",
-        "tag": "deux",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_karaoke_becruily.ckpt",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-        "subdir": "models",
-        "filename": "becruily_guitar.ckpt",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_bass.onnx?download=true",
-        "subdir": "models",
-        "filename": "kuielab_a_bass.onnx",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_drums.onnx?download=true",
-        "subdir": "models",
-        "filename": "kuielab_a_drums.onnx",
-        "tag": None,
-    },
-    {
-        "url": "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/kuielab_a_other.onnx?download=true",
-        "subdir": "models",
-        "filename": "kuielab_a_other.onnx",
-        "tag": None,
-    },
-]
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 import numpy as np
 import soundfile as sf
 import torch
-import torchaudio
 import yaml
-from beartype import beartype
-from beartype.typing import Callable as BeartypeCallable
-from beartype.typing import Optional as BeartypeOptional
-from beartype.typing import Tuple as BeartypeTuple
-from einops import pack, rearrange, reduce, repeat, unpack
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from librosa import filters
-from packaging import version
-from rotary_embedding_torch import RotaryEmbedding
-from sse_starlette.sse import EventSourceResponse
-from tqdm import tqdm
-from torch import einsum, nn
-from torch.nn import Module, ModuleList
-import torch.nn.functional as F
+from downloader import SSL_CONTEXT, download_to
+from app_paths import (
+    ARTWORK_DIR,
+    CONFIG_DIR,
+    LOG_DIR,
+    MODEL_DIR,
+    OUTPUT_ROOT,
+    RESOURCE_DIR,
+    RUNTIME_DIR,
+    ETA_HISTORY_PATH,
+    SETTINGS_PATH,
+    UPLOAD_DIR,
+    WEB_DIR,
+    WORK_DIR,
+    ensure_app_dirs,
+    model_search_dirs,
+)
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
-def _optional_import(module_name: str):
-    spec = importlib.util.find_spec(module_name)
-    if spec is None:
-        return None
-    return importlib.import_module(module_name)
+try:
+    from mutagen import File as MutagenFile
+except Exception:  # pragma: no cover - optional cleanup dependency
+    MutagenFile = None
 
+BASE_DIR = RESOURCE_DIR
+
+try:  # pragma: no cover - import failure is surfaced at runtime
+    from split.mel_band_roformer import MelBandRoformer
+except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
+    MelBandRoformer = None  # type: ignore[assignment]
+    _model_import_error = exc
+else:
+    _model_import_error = None
 
 certifi = _optional_import("certifi")
 ort = _optional_import("onnxruntime")
@@ -812,21 +714,15 @@ class MelBandRoformer(Module):
         return total_loss, loss, multi_stft_resolution_loss
 
 class ErrorCode(str, Enum):
-    TORCH_MISSING = "E001"
-    MPS_UNAVAILABLE = "E002"
-    SPLIT_IMPORT_FAILED = "E003"
-    MODEL_MISSING = "E004"
-    CONFIG_MISSING = "E005"
-    ONNX_RUNTIME_MISSING = "E006"
-    UPLOAD_FAILED = "E007"
-    AUDIO_LOAD_FAILED = "E008"
-    RESAMPLE_FAILED = "E009"
-    FFMPEG_MISSING = "E010"
-    SEPARATION_FAILED = "E011"
-    ZIP_FAILED = "E012"
-    TASK_NOT_FOUND = "E013"
-    INVALID_REQUEST = "E014"
-    RERUN_PREREQ_MISSING = "E015"
+    MODEL_IMPORT_FAILED = "E001"
+    MODEL_MISSING = "E002"
+    CONFIG_MISSING = "E003"
+    FFMPEG_MISSING = "E004"
+    AUDIO_DECODE_FAILED = "E005"
+    AUDIO_LOAD_FAILED = "E006"
+    SEPARATION_FAILED = "E007"
+    TASK_NOT_FOUND = "E008"
+    INVALID_REQUEST = "E009"
 
 
 @dataclass
@@ -839,365 +735,138 @@ class AppError(Exception):
 
 
 class TaskStopped(Exception):
-    """Signal that a task was stopped by the user."""
+    pass
 
 
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "models"
-CONFIG_DIR = BASE_DIR / "configs"
-UPLOAD_DIR = BASE_DIR / "uploads"
-CONVERTED_DIR = BASE_DIR / "uploads_converted"
-SEGMENT = 352_800
-DEUX_SEGMENT = 573_300
-OVERLAP = 12
-LOG_PATH = BASE_DIR / "main_stemsplat.log"
-LEGACY_LOG = BASE_DIR / "stemsplat.log"
-if LEGACY_LOG.exists():
-    try:
-        LEGACY_LOG.unlink()
-    except Exception:
-        pass
+@dataclass(frozen=True)
+class ModelSpec:
+    filename: str
+    config: str
+    segment: int
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    suffix: str
+    codec: str | None
+    bit_rate: int | None
+    channels: int
+    has_cover: bool
+    has_video: bool
+
+
+@dataclass(frozen=True)
+class ExportPlan:
+    suffix: str
+    audio_args: list[str]
+    supports_cover: bool
+
+
+LOG_PATH = LOG_DIR / "main_stemsplat.log"
+MODEL_SEARCH_DIRS = model_search_dirs()
+APP_VERSION = "0.3"
+GITHUB_REPO = "Skytheredhead/stemsplat"
+GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+WATCHDOG_INTERVAL_SECONDS = 5.0
+WATCHDOG_CONFIRM_SAMPLES = 3
+TASK_STALL_TIMEOUT_SECONDS = 300.0
+TASK_HARD_TIMEOUT_SECONDS = 7200.0
+PROCESS_RSS_HEADROOM_RATIO = 0.82
+PROCESS_RSS_LIMIT_FALLBACK_BYTES = 8 * 1024 * 1024 * 1024
+MPS_MEMORY_HEADROOM_RATIO = 0.88
+UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
+LAN_AUTH_COOKIE_NAME = "stemsplat_lan_auth"
+LAN_AUTH_TTL_CHOICES = {"15m", "1d", "1w", "never"}
+LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth"}
+TERMINAL_TASK_RETENTION_LIMIT = 100
+MODEL_PROMPT_PENDING = "pending"
+MODEL_PROMPT_DISMISSED = "dismissed"
+MODEL_PROMPT_ACCEPTED = "accepted"
+MODEL_PROMPT_COMPLETE = "complete"
+COMPAT_SETTINGS_DEFAULTS = {
+    "output_format": "same_as_input",
+    "output_root": str(OUTPUT_ROOT),
+    "output_same_as_input": False,
+    "video_handling": "audio_only",
+    "structure_mode": "flat",
+    "model_prompt_state": MODEL_PROMPT_PENDING,
+    "update_last_checked_at": 0.0,
+    "update_latest_version": "",
+    "update_latest_name": "",
+    "update_latest_url": "",
+    "update_latest_notes": "",
+    "update_last_notified_version": "",
+    "update_skipped_version": "",
+    "lan_passcode_enabled": False,
+    "lan_passcode": "",
+    "lan_passcode_ttl": "1d",
+}
+
+MODEL_SPECS: dict[str, ModelSpec] = {
+    "vocals": ModelSpec(
+        filename="mel_band_roformer_vocals_becruily.ckpt",
+        config="Mel Band Roformer Vocals Config.yaml",
+        segment=352_800,
+    ),
+    "instrumental": ModelSpec(
+        filename="mel_band_roformer_instrumental_becruily.ckpt",
+        config="Mel Band Roformer Instrumental Config.yaml",
+        segment=352_800,
+    ),
+    "deux": ModelSpec(
+        filename="becruily_deux.ckpt",
+        config="config_deux_becruily.yaml",
+        segment=573_300,
+    ),
+}
 
 MODEL_ALIAS_MAP = {
     "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
     "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
+    "becruily_deux.ckpt": ["Mel Band Roformer Deux.ckpt"],
 }
 
-CONFIG_ALIAS_MAP: dict[str, list[str]] = {}
-
-file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
-stream_handler = logging.StreamHandler()
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
-    handlers=[
-        stream_handler,
-        file_handler,
-    ],
-)
-logger = logging.getLogger("stemsplat")
-for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-    uvicorn_logger = logging.getLogger(name)
-    uvicorn_logger.setLevel(logging.INFO)
-    uvicorn_logger.addHandler(file_handler)
-
-# Silence extremely noisy multipart debug logs
-logging.getLogger("python_multipart").setLevel(logging.INFO)
-
-INSTALL_LOG_PATH = BASE_DIR / "install_stemsplat.log"
-install_logger = logging.getLogger("stemsplat.install")
-install_logger.setLevel(logging.DEBUG)
-install_logger.addHandler(logging.FileHandler(INSTALL_LOG_PATH, encoding="utf-8"))
-
-DEFAULT_OUTPUT_ROOT = (Path.home() / "Downloads" / "stemsplat").expanduser()
-MODEL_FILE_MAP = {
-    "vocals": ("mel_band_roformer_vocals_becruily.ckpt", "Mel Band Roformer Vocals Config.yaml"),
-    "instrumental": ("mel_band_roformer_instrumental_becruily.ckpt", "Mel Band Roformer Instrumental Config.yaml"),
-    "deux": ("becruily_deux.ckpt", "config_deux_becruily.yaml"),
-    "drums": ("kuielab_a_drums.onnx", None),
-    "bass": ("kuielab_a_bass.onnx", None),
-    "other": ("kuielab_a_other.onnx", None),
-    "karaoke": ("mel_band_roformer_karaoke_becruily.ckpt", None),
-    "guitar": ("becruily_guitar.ckpt", "config_guitar_becruily.yaml"),
+MODEL_URLS = {
+    "vocals": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
+    "instrumental": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
+    "deux": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
 }
+ETA_HISTORY_KEYS = ("vocals", "instrumental", "deux")
+ETA_HISTORY_LIMIT = 10
+ETA_PREP_OVERHEAD_SECONDS = 5.0
+ETA_EXPORT_PER_OUTPUT_SECONDS = 2.5
 
-install_progress = {"pct": 0, "step": "starting", "models_missing": []}
-choice_event = threading.Event()
-shutdown_event = threading.Event()
-INSTALL_PORT = 6060
-MAIN_PORT = 8000
-MODEL_URLS = [(item["filename"], item["url"]) for item in FILES]
-TOTAL_BYTES = int(3.68 * 1024**3)
-
-
-class InstallerHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        self.web_dir = BASE_DIR / "web"
-        super().__init__(*args, directory=str(self.web_dir), **kwargs)
-
-    def log_message(self, format, *args):  # noqa: A003 - match base signature
-        install_logger.info("HTTP %s", format % args)
-
-    def do_GET(self):
-        if self.path == "/progress":
-            install_logger.debug("progress requested: %s", install_progress)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(install_progress).encode())
-            return
-
-        if self.path in {"/", "/index.html", "/install.html"}:
-            install_logger.debug("redirecting installer ui %s to main app", self.path)
-            self.send_response(302)
-            self.send_header("Location", f"http://localhost:{MAIN_PORT}/")
-            self.end_headers()
-            return
-
-        if self.path == "/installer_shutdown":
-            install_logger.info("installer shutdown requested via http")
-            shutdown_event.set()
-            self.send_response(200)
-            self.end_headers()
-            return
-
-        return super().do_GET()
-
-    def do_POST(self):
-        if self.path == "/download_models":
-            install_logger.info("user requested model download")
-            length = int(self.headers.get("Content-Length", 0))
-            selection = None
-            if length:
-                try:
-                    body = self.rfile.read(length)
-                    parsed = json.loads(body.decode("utf-8"))
-                    if isinstance(parsed, dict) and isinstance(parsed.get("models"), list):
-                        selection = [str(x) for x in parsed["models"]]
-                except Exception:
-                    install_logger.debug("failed to parse selection body", exc_info=True)
-            install_progress["choice"] = "download"
-            install_progress["selection"] = selection
-            choice_event.set()
-            self.send_response(200)
-            self.end_headers()
-            return
-        if self.path == "/skip_models":
-            install_logger.info("user skipped model download")
-            install_progress["choice"] = "skip"
-            choice_event.set()
-            self.send_response(200)
-            self.end_headers()
-            return
-        if self.path == "/installer_shutdown":
-            install_logger.info("installer shutdown requested via post")
-            shutdown_event.set()
-            self.send_response(200)
-            self.end_headers()
-            return
-
-        self.send_response(404)
-        self.end_headers()
-
-
-def _installed():
-    return Path("venv").exists()
-
-
-def run_installer_ui():
-    handler = InstallerHandler
-    worker = threading.Thread(target=install, daemon=True)
-    worker.start()
-    threading.Thread(target=_launch_main_page, daemon=True).start()
-    socketserver.TCPServer.allow_reuse_address = True
-
-    if not _port_available(INSTALL_PORT):
-        msg = f"Port {INSTALL_PORT} is already in use. Skipping installer UI."
-        install_logger.warning(msg)
-        print(msg)
-        while not shutdown_event.wait(0.5):
-            continue
-        return
-
-    try:
-        with socketserver.TCPServer(("localhost", INSTALL_PORT), handler) as httpd:
-            install_logger.info("installer ui listening on http://localhost:%s", INSTALL_PORT)
-            server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            server_thread.start()
-            install_logger.debug("waiting for installer routine to finish before shutting ui")
-            try:
-                while not shutdown_event.wait(0.5):
-                    continue
-                install_logger.info("installer routine finished; shutting down installer ui")
-                httpd.shutdown()
-                httpd.server_close()
-                server_thread.join(timeout=2)
-                install_logger.debug(
-                    "installer ui closed; main app launch handled by installer page"
-                )
-            except KeyboardInterrupt:
-                install_logger.info("installer interrupted; shutting down")
-                httpd.shutdown()
-                httpd.server_close()
-    except OSError as exc:
-        install_logger.warning("failed to bind install server on port %s: %s", INSTALL_PORT, exc)
-        print(f"Port {INSTALL_PORT} is already in use. Skipping installer UI.")
-        while not shutdown_event.wait(0.5):
-            continue
-        return
-
-
-def _missing_required_models() -> list[str]:
-    models_dir_candidates = [BASE_DIR / "Models", Path("Models")]
-    models_dir = next((d for d in models_dir_candidates if d.exists()), models_dir_candidates[0])
-    required_terms = ["instrumental", "vocals", "deux"]
-    found = {term: False for term in required_terms}
-    if models_dir.exists():
-        for path in models_dir.rglob("*"):
-            if not path.is_file():
-                continue
-            name = path.name.lower()
-            if not name.endswith(".cpkt"):
-                continue
-            for term in required_terms:
-                if term in name:
-                    found[term] = True
-    return [term for term, present in found.items() if not present]
-
-
-def _models_missing() -> bool:
-    return len(_missing_required_models()) > 0
-
-
-def _start_server():
-    install_logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
-    if not _port_available(MAIN_PORT):
-        install_logger.info("main server already running on port %s; opening browser", MAIN_PORT)
-        install_progress["main_running"] = True
-        install_logger.debug("main server already running; installer page will navigate")
-        shutdown_event.set()
-        return
-    subprocess.Popen(
-        [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)]
-    )
-    install_logger.debug("main server started; installer page will navigate")
-
-
-def _launch_main_page() -> None:
-    main_url = f"http://localhost:{MAIN_PORT}/"
-    for _ in range(40):
-        try:
-            with urllib.request.urlopen(main_url, timeout=1):
-                webbrowser.open(main_url, new=0)
-                return
-        except Exception:
-            time.sleep(0.5)
-    webbrowser.open(main_url, new=0)
-
-
-def _download_models(selection: Optional[list[str]] = None):
-    try:
-        install_progress["step"] = "downloading models"
-        install_progress["pct"] = 5
-        download_to(BASE_DIR, selection or [])
-        install_progress["pct"] = 100
-        install_progress["step"] = "done"
-        _start_server()
-    except Exception as exc:
-        install_logger.exception("model download failed")
-        install_progress["step"] = f"download failed: {exc}"
-        install_progress["error"] = str(exc)
-        install_progress["pct"] = -1
-
-
-def install():
-    install_logger.info("install routine starting")
-    try:
-        install_progress["step"] = "installing prerequisites"
-        install_progress["pct"] = 1
-        install_progress["models_missing"] = _missing_required_models()
-        if _installed():
-            _start_server()
-        if _installed():
-            install_logger.info("virtual environment already present")
-        steps = []
-        if not _installed():
-            steps.append(("creating virtual environment", [sys.executable, "-m", "venv", "venv"]))
-        steps.append(("upgrading pip", [str(pip_path()), "install", "--upgrade", "pip"]))
-        steps.extend([(f"installing {pkg}", [str(pip_path()), "install", pkg]) for pkg in INSTALL_DEPS])
-
-        total = max(1, len(steps))
-        for i, (msg, cmd) in enumerate(steps, start=1):
-            install_progress["step"] = msg
-            install_progress["pct"] = int((i - 1) / total * 100)
-            install_logger.info("running step %s/%s: %s", i, total, msg)
-            try:
-                subprocess.check_call(cmd)
-            except subprocess.CalledProcessError as exc:
-                install_logger.exception("error during %s", msg)
-                install_progress["step"] = f"error during {msg}: {exc}"
-                install_progress["pct"] = -1
-                return
-
-        if _models_missing():
-            install_logger.info("models missing; skipping downloads per v0.1 flow")
-            install_progress["step"] = "models missing; skipping downloads"
-            install_progress["pct"] = 100
-            _start_server()
-            return
-
-        install_progress["pct"] = 100
-        install_progress["step"] = "done"
-        install_logger.info("prerequisites satisfied; launching server")
-        _start_server()
-    except Exception:
-        install_logger.exception("installer crashed")
-        install_progress["step"] = "installation failed"
-        install_progress["pct"] = -1
-    finally:
-        shutdown_event.set()
-
-CHUNK_SIZE = 8 * 1024 * 1024
-SSL_CONTEXT = (
-    ssl.create_default_context(cafile=certifi.where())
-    if certifi is not None
-    else ssl.create_default_context()
-)
-
-def try_head_content_length(url: str) -> int | None:
-    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "app-downloader"})
-    try:
-        with urllib.request.urlopen(req, timeout=60, context=SSL_CONTEXT) as resp:
-            cl = resp.headers.get("Content-Length")
-    except Exception:
-        return None
-    return int(cl) if cl and cl.isdigit() else None
-
-
-def download_to(base_dir: Path, selected: list[str] | None = None) -> None:
-    base_dir = base_dir.resolve()
-    wanted = set(selected or [])
-    for item in FILES:
-        tag = item.get("tag")
-        if wanted and tag and tag not in wanted:
-            continue
-        dest = base_dir / item["subdir"] / item["filename"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".part")
-
-        remote_len = try_head_content_length(item["url"])
-        if dest.exists() and remote_len is not None and dest.stat().st_size == remote_len:
-            continue
-
-        req = urllib.request.Request(item["url"], headers={"User-Agent": "app-downloader"})
-        with urllib.request.urlopen(req, timeout=60, context=SSL_CONTEXT) as resp:
-            if tmp.exists():
-                tmp.unlink()
-            with open(tmp, "wb") as handle:
-                while True:
-                    chunk = resp.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
-
-        os.replace(tmp, dest)
+MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
+OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
+VIDEO_HANDLING_CHOICES = {"audio_only"}
+TERMINAL_STATUSES = {"done", "error", "stopped"}
+SUPPORTED_MEDIA_SUFFIXES = {
+    ".wav",
+    ".wave",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".aif",
+    ".aiff",
+    ".alac",
+    ".ogg",
+    ".opus",
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
+}
+OVERLAP_RATIO = 0.12
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+RUNTIME_CLEANUP_MAX_AGE_SEC = 24 * 60 * 60
 
 
 def _ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def ensure_unique_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    counter = 2
-    stem, suffix = path.stem, path.suffix
-    while True:
-        candidate = path.with_name(f"{stem}_{counter}{suffix}")
-        if not candidate.exists():
-            return candidate
-        counter += 1
 
 
 def ensure_unique_dir(path: Path) -> Path:
@@ -1211,96 +880,435 @@ def ensure_unique_dir(path: Path) -> Path:
         counter += 1
 
 
+def ensure_unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    counter = 2
+    stem = path.stem
+    suffix = path.suffix
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _safe_stem(name: str) -> str:
+    raw = Path(name).stem or "split"
+    cleaned = re.sub(r"[^\w .-]+", "_", raw, flags=re.ASCII).strip(" ._")
+    return cleaned or "split"
+
+
 def _locate_case_insensitive(path: Path) -> Path | None:
-    """Return a filesystem entry matching ``path`` regardless of case."""
     if path.exists():
         return path
     parent = path.parent
     if not parent.exists():
         return None
-    target_lower = path.name.lower()
+    target = path.name.lower()
     for candidate in parent.iterdir():
-        if candidate.name.lower() == target_lower:
+        if candidate.name.lower() == target:
             return candidate
     return None
 
 
-@dataclass
-class UserSettings:
-    output_root: Path = DEFAULT_OUTPUT_ROOT
-    structure_mode: str = "flat"  # structured|flat
+compat_settings_lock = threading.RLock()
 
-    def as_dict(self) -> dict[str, str | bool]:
-        return {
-            "output_root": str(self.output_root),
-            "structure_mode": self.structure_mode,
-        }
 
-    def resolve_output_dir(self, base_name: str) -> Path:
-        root = self.output_root.expanduser()
-        if not root.exists():
-            raise AppError(ErrorCode.INVALID_REQUEST, "output root missing")
-        target = root if self.structure_mode == "flat" else ensure_unique_dir(root / base_name)
-        return _ensure_dir(target)
+def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(COMPAT_SETTINGS_DEFAULTS)
+    normalized.update(settings)
+    output_root = Path(str(normalized.get("output_root") or OUTPUT_ROOT)).expanduser()
+    normalized["output_root"] = str(output_root)
+    normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
+    normalized["lan_passcode_enabled"] = bool(normalized.get("lan_passcode_enabled"))
+    normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
+    if str(normalized.get("lan_passcode_ttl") or "") not in LAN_AUTH_TTL_CHOICES:
+        normalized["lan_passcode_ttl"] = "1d"
+    if str(normalized.get("video_handling") or "") not in VIDEO_HANDLING_CHOICES:
+        normalized["video_handling"] = "audio_only"
+    normalized["structure_mode"] = "flat"
+    return normalized
 
-    def update(
-        self,
-        *,
-        output_root: Optional[str] = None,
-        structure_mode: Optional[str] = None,
-    ) -> None:
-        if output_root is not None:
-            candidate = Path(output_root).expanduser()
+
+def _load_compat_settings() -> dict[str, Any]:
+    settings = dict(COMPAT_SETTINGS_DEFAULTS)
+    if not SETTINGS_PATH.exists():
+        return _normalize_settings_payload(settings)
+    try:
+        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key in settings:
+                    settings[key] = value
+    except Exception:
+        logging.getLogger("stemsplat").debug("failed to load settings from %s", SETTINGS_PATH, exc_info=True)
+    return _normalize_settings_payload(settings)
+
+
+def _load_eta_history() -> dict[str, list[dict[str, float]]]:
+    payload: dict[str, list[dict[str, float]]] = {key: [] for key in ETA_HISTORY_KEYS}
+    if not ETA_HISTORY_PATH.exists():
+        return payload
+    try:
+        data = json.loads(ETA_HISTORY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logging.getLogger("stemsplat").debug("failed to load eta history from %s", ETA_HISTORY_PATH, exc_info=True)
+        return payload
+    if not isinstance(data, dict):
+        return payload
+    for key in ETA_HISTORY_KEYS:
+        raw_entries = data.get(key)
+        if not isinstance(raw_entries, list):
+            continue
+        normalized_entries: list[dict[str, float]] = []
+        for entry in raw_entries[-ETA_HISTORY_LIMIT:]:
+            if not isinstance(entry, dict):
+                continue
             try:
-                candidate.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
-                raise AppError(ErrorCode.INVALID_REQUEST, f"unable to create folder: {exc}")
-            if not candidate.is_dir():
-                raise AppError(ErrorCode.INVALID_REQUEST, "folder does not exist")
-            self.output_root = candidate
-        if structure_mode in {"structured", "flat"}:
-            self.structure_mode = structure_mode
+                audio_seconds = float(entry.get("audio_seconds") or 0.0)
+                elapsed_seconds = float(entry.get("elapsed_seconds") or 0.0)
+            except Exception:
+                continue
+            if audio_seconds <= 0 or elapsed_seconds <= 0:
+                continue
+            normalized_entries.append(
+                {
+                    "audio_seconds": audio_seconds,
+                    "elapsed_seconds": elapsed_seconds,
+                }
+            )
+        payload[key] = normalized_entries[-ETA_HISTORY_LIMIT:]
+    return payload
 
 
-settings = UserSettings()
-_ensure_dir(settings.output_root)
+def _save_eta_history(history: dict[str, list[dict[str, float]]]) -> None:
+    ETA_HISTORY_PATH.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
-def resolve_output_plan(info: dict, *, structure_mode: Optional[str] = None) -> dict[str, Path | str | None]:
-    base_name = Path(info.get("orig_name") or info.get("conv_src", "stems")).stem
-    root = DEFAULT_OUTPUT_ROOT
-    flat_root = root.parent if root.name == "stemsplat" else root
-    _ensure_dir(flat_root)
-    staging_dir = Path(tempfile.mkdtemp(prefix="stemsplat_stage_", dir=str(CONVERTED_DIR)))
-    deliver_dir = flat_root
-    zip_target = ensure_unique_path(flat_root / f"{base_name}.zip")
-    return {"deliver_dir": deliver_dir, "staging_dir": staging_dir, "zip_target": zip_target, "structure_mode": "flat"}
-
-# ── Device handling ─────────────────────────────────────────────────────────
-
-def _ensure_torch() -> None:
-    if not hasattr(torch, "backends"):
-        raise AppError(ErrorCode.TORCH_MISSING, "PyTorch is unavailable; install torch with Metal support.")
+def _save_compat_settings(settings: dict[str, Any]) -> None:
+    payload = _normalize_settings_payload(settings)
+    SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def select_device() -> torch.device:
-    """Prefer Metal (MPS) on Apple Silicon; fall back to CPU with explicit warning."""
-    _ensure_torch()
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        return torch.device("mps")
-    raise AppError(ErrorCode.MPS_UNAVAILABLE, "Apple Metal (mps) device is unavailable; ensure torch==2.x with mps support.")
+def _compat_settings_payload() -> dict[str, Any]:
+    with compat_settings_lock:
+        return dict(_compat_settings)
+
+
+def _set_compat_settings(patch: dict[str, Any]) -> dict[str, Any]:
+    with compat_settings_lock:
+        current = _normalize_settings_payload(dict(_compat_settings))
+        updated = dict(current)
+        updated.update(patch)
+        updated = _normalize_settings_payload(updated)
+        _save_compat_settings(updated)
+        _compat_settings.clear()
+        _compat_settings.update(updated)
+        changed_security = any(
+            current.get(key) != updated.get(key)
+            for key in ("lan_passcode_enabled", "lan_passcode", "lan_passcode_ttl")
+        )
+        result = dict(_compat_settings)
+    if changed_security:
+        _reset_lan_auth_sessions()
+    return result
+
+
+def _current_output_root() -> Path:
+    with compat_settings_lock:
+        raw = str(_compat_settings.get("output_root") or OUTPUT_ROOT)
+    return _ensure_dir(Path(raw).expanduser())
+
+
+def _is_remote_client(request: Request | None) -> bool:
+    if request is None or request.client is None:
+        return False
+    host = str(request.client.host or "").strip().lower()
+    return host not in {"127.0.0.1", "::1", "localhost"}
+
+
+def _should_use_mobile_ui(request: Request | None) -> bool:
+    if not _is_remote_client(request):
+        return False
+    user_agent = str((request.headers.get("user-agent") if request else "") or "").lower()
+    mobile_markers = (
+        "iphone",
+        "ipad",
+        "ipod",
+        "android",
+        "mobile",
+        "windows phone",
+        "blackberry",
+    )
+    return any(marker in user_agent for marker in mobile_markers)
+
+
+def _lan_auth_ttl_seconds(ttl_value: str | None) -> int | None:
+    normalized = str(ttl_value or "").strip().lower()
+    if normalized == "15m":
+        return 15 * 60
+    if normalized == "1d":
+        return 24 * 60 * 60
+    if normalized == "1w":
+        return 7 * 24 * 60 * 60
+    return None
+
+
+def _reset_lan_auth_sessions() -> None:
+    with lan_auth_lock:
+        lan_auth_sessions.clear()
+
+
+def _lan_passcode_required(request: Request | None) -> bool:
+    if not _is_remote_client(request):
+        return False
+    settings = _compat_settings_payload()
+    return bool(settings.get("lan_passcode_enabled")) and bool(str(settings.get("lan_passcode") or "").strip())
+
+
+def _request_client_host(request: Request | None) -> str:
+    if request is None or request.client is None:
+        return ""
+    return str(request.client.host or "").strip()
+
+
+def _require_local_request(request: Request, message: str = "This action is only available on the host machine.") -> None:
+    if _is_remote_client(request):
+        raise AppError(ErrorCode.INVALID_REQUEST, message).to_http(403)
+
+
+def _prune_lan_auth_sessions_locked(now: float | None = None) -> None:
+    current = time.time() if now is None else now
+    expired_tokens = [
+        token
+        for token, session in lan_auth_sessions.items()
+        if isinstance(session.get("expires_at"), (int, float)) and float(session["expires_at"]) <= current
+    ]
+    for token in expired_tokens:
+        lan_auth_sessions.pop(token, None)
+
+
+def _request_has_valid_lan_session(request: Request) -> bool:
+    token = request.cookies.get(LAN_AUTH_COOKIE_NAME)
+    if not token:
+        return False
+    client_host = _request_client_host(request)
+    now = time.time()
+    with lan_auth_lock:
+        _prune_lan_auth_sessions_locked(now)
+        session = lan_auth_sessions.get(token)
+        if not isinstance(session, dict):
+            return False
+        session_host = str(session.get("host") or "")
+        if not session_host or session_host != client_host:
+            lan_auth_sessions.pop(token, None)
+            return False
+        expires_at = session.get("expires_at")
+        if isinstance(expires_at, (int, float)) and float(expires_at) <= now:
+            lan_auth_sessions.pop(token, None)
+            return False
+        return True
+
+
+def _load_lan_login_page() -> str:
+    candidate = WEB_DIR / "lan_login.html"
+    if candidate.exists():
+        return candidate.read_text(encoding="utf-8")
+    return """<!DOCTYPE html><html><body style="background:#0f2027;color:#fff;font-family:sans-serif;display:grid;place-items:center;min-height:100vh;">lan login page missing</body></html>"""
+
+
+def _lan_unauthorized_response(request: Request) -> HTMLResponse | JSONResponse:
+    if request.method in {"GET", "HEAD"} and request.url.path == "/":
+        return HTMLResponse(_load_lan_login_page())
+    response = JSONResponse(status_code=401, content={"error": "lan passcode required", "requires_auth": True})
+    response.delete_cookie(LAN_AUTH_COOKIE_NAME, path="/")
+    return response
+
+
+def _normalize_version_parts(raw: str) -> tuple[int, ...]:
+    matches = [int(part) for part in re.findall(r"\d+", raw or "")]
+    return tuple(matches or [0])
+
+
+def _is_newer_version(candidate: str, current: str) -> bool:
+    left = list(_normalize_version_parts(candidate))
+    right = list(_normalize_version_parts(current))
+    width = max(len(left), len(right))
+    left.extend([0] * (width - len(left)))
+    right.extend([0] * (width - len(right)))
+    return tuple(left) > tuple(right)
+
+
+def _fetch_latest_release() -> dict[str, Any]:
+    req = urllib.request.Request(
+        GITHUB_LATEST_RELEASE_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"stemsplat/{APP_VERSION} ({platform.system()})",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return {
+        "version": str(payload.get("tag_name") or "").strip(),
+        "name": str(payload.get("name") or "").strip(),
+        "url": str(payload.get("html_url") or "").strip(),
+        "notes": str(payload.get("body") or "").strip(),
+    }
+
+
+def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
+    now = time.time()
+    settings = _compat_settings_payload()
+    last_checked = float(settings.get("update_last_checked_at") or 0.0)
+    cached = {
+        "current_version": APP_VERSION,
+        "latest_version": str(settings.get("update_latest_version") or ""),
+        "latest_name": str(settings.get("update_latest_name") or ""),
+        "latest_url": str(settings.get("update_latest_url") or ""),
+        "notes": str(settings.get("update_latest_notes") or ""),
+        "last_checked_at": last_checked,
+        "last_notified_version": str(settings.get("update_last_notified_version") or ""),
+        "skipped_version": str(settings.get("update_skipped_version") or ""),
+    }
+    should_refresh = refresh or (now - last_checked >= UPDATE_CHECK_INTERVAL_SEC) or not cached["latest_version"]
+    if should_refresh:
+        try:
+            latest = _fetch_latest_release()
+        except Exception:
+            logger.debug("release check failed", exc_info=True)
+        else:
+            cached.update(
+                {
+                    "latest_version": latest["version"],
+                    "latest_name": latest["name"],
+                    "latest_url": latest["url"],
+                    "notes": latest["notes"],
+                    "last_checked_at": now,
+                }
+            )
+            _set_compat_settings(
+                {
+                    "update_last_checked_at": now,
+                    "update_latest_version": latest["version"],
+                    "update_latest_name": latest["name"],
+                    "update_latest_url": latest["url"],
+                    "update_latest_notes": latest["notes"],
+                }
+            )
+    cached["update_available"] = bool(cached["latest_version"]) and _is_newer_version(
+        cached["latest_version"], cached["current_version"]
+    )
+    return cached
+
+
+def _mode_to_stems(mode: str) -> list[str]:
+    if mode == "vocals":
+        return ["vocals"]
+    if mode == "instrumental":
+        return ["instrumental"]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode == "both_separate":
+        return ["vocals", "instrumental"]
+    return []
+
+
+def _stems_to_mode(stems_raw: str) -> str:
+    stems = [item.strip().lower() for item in stems_raw.split(",") if item.strip()]
+    if stems == ["vocals"]:
+        return "vocals"
+    if stems == ["instrumental"]:
+        return "instrumental"
+    if stems == ["deux"]:
+        return "both_deux"
+    if stems == ["vocals", "instrumental"] or stems == ["instrumental", "vocals"]:
+        return "both_separate"
+    raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.")
+
+
+_compat_settings = _load_compat_settings()
+eta_history_lock = threading.RLock()
+eta_history = _load_eta_history()
+lan_auth_lock = threading.RLock()
+lan_auth_sessions: dict[str, dict[str, Any]] = {}
+
+
+ensure_app_dirs()
+file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+stream_handler = logging.StreamHandler()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
+    handlers=[stream_handler, file_handler],
+)
+logger = logging.getLogger("stemsplat")
+logging.getLogger("python_multipart").setLevel(logging.INFO)
+for uvicorn_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uvicorn_logger = logging.getLogger(uvicorn_name)
+    uvicorn_logger.setLevel(logging.INFO)
+    if file_handler not in uvicorn_logger.handlers:
+        uvicorn_logger.addHandler(file_handler)
+
+for path in (MODEL_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, OUTPUT_ROOT):
+    _ensure_dir(path)
 
 
 def _close_installer_ui(port: int = 6060) -> None:
-    """Best-effort request to shut down the installer helper server."""
-
     url = f"http://localhost:{port}/installer_shutdown"
-    logger.info("attempting to close installer ui on port %s", port)
     try:
-        with urllib.request.urlopen(url, timeout=1) as resp:
-            logger.debug("installer ui shutdown status=%s", getattr(resp, "status", "unknown"))
-    except Exception as exc:
-        logger.debug("installer ui not reachable on %s: %s", url, exc)
+        with urllib.request.urlopen(url, timeout=1):
+            logger.debug("closed installer ui on %s", url)
+    except Exception:
+        logger.debug("installer ui not reachable at %s", url)
+
+
+def _cleanup_old_runtime_entries(path: Path, max_age_seconds: int = RUNTIME_CLEANUP_MAX_AGE_SEC) -> None:
+    cutoff = time.time() - max_age_seconds
+    for candidate in path.iterdir():
+        try:
+            if candidate.stat().st_mtime >= cutoff:
+                continue
+            _cleanup_path(candidate)
+        except Exception:
+            logger.debug("failed to cleanup runtime entry %s", candidate, exc_info=True)
+
+
+def _required_models_for_mode(mode: str) -> list[str]:
+    if mode == "vocals":
+        return ["vocals"]
+    if mode == "instrumental":
+        return ["instrumental"]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode == "both_separate":
+        return ["vocals", "instrumental"]
+    return []
+
+
+def _model_file_exists(filename: str) -> bool:
+    search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+    for base_dir in MODEL_SEARCH_DIRS:
+        for search_name in search_names:
+            if _locate_case_insensitive(base_dir / search_name):
+                return True
+    return False
+
+
+def _find_missing_models_for_mode(mode: str) -> list[str]:
+    missing: list[str] = []
+    for key in _required_models_for_mode(mode):
+        if not _model_file_exists(MODEL_SPECS[key].filename):
+            missing.append(key)
+    return missing
+
+
+def _validate_models_for_mode(mode: str) -> None:
+    missing = _find_missing_models_for_mode(mode)
+    if missing:
+        joined = ", ".join(missing)
+        raise AppError(ErrorCode.MODEL_MISSING, f"Missing required model files: {joined}.")
 
 
 def _port_available(port: int) -> bool:
@@ -1313,644 +1321,284 @@ def _port_available(port: int) -> bool:
             return False
 
 
-# ── Model management ────────────────────────────────────────────────────────
-
-DEFAULT_CKPT = BASE_DIR / "models" / "Mel Band Roformer Vocals.ckpt"
-DEFAULT_YAML = BASE_DIR / "configs" / "Mel Band Roformer Vocals Config.yaml"
-
-
-def load_model(ckpt_path: str, yaml_path: str, device: torch.device):
-    with open(yaml_path, "r") as handle:
-        cfg_root = yaml.unsafe_load(handle)
-
-    default_target = "mel_band_roformer.MelBandRoformer"
-
-    def find_target(cfg):
-        if "target" in cfg:
-            target = cfg.pop("target")
-            return target, cfg
-        raise ValueError("No 'target' in YAML")
-
-    try:
-        target_path, kwargs = find_target(cfg_root)
-    except ValueError:
-        target_path, kwargs = default_target, {"model": cfg_root.get("model", {})}
-
-    module_name, class_name = target_path.rsplit(".", 1)
-    if module_name == "mel_band_roformer":
-        ModelClass = MelBandRoformer
-    else:
-        ModelClass = getattr(importlib.import_module(module_name), class_name)
-
-    model = ModelClass(**kwargs.get("model", {}))
-    state = torch.load(ckpt_path, map_location="cpu")
-    model.load_state_dict(state.get("state_dict", state), strict=False)
-    return model.to(device).eval()
-
-
-def overlap_add(dst: np.ndarray, seg: np.ndarray, start: int, fade: int):
-    end = start + seg.shape[-1]
-    fade = min(fade, seg.shape[-1] // 2)
-    if fade > 0:
-        win = np.ones(seg.shape[-1], dtype=np.float32)
-        ramp = np.linspace(0, 1, fade, dtype=np.float32)
-        win[:fade] = ramp
-        win[-fade:] = ramp[::-1]
-        dst[..., start:end] += seg * win
-    else:
-        dst[..., start:end] += seg
-
-
-def split_main(argv=None, progress_cb=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", default=str(DEFAULT_CKPT), help=".ckpt weights")
-    parser.add_argument("--config", default=str(DEFAULT_YAML), help=".yaml model def")
-    parser.add_argument("--wav", required=True, help="input WAV")
-    parser.add_argument("--out", default="stems_out", help="output dir")
-    parser.add_argument("--segment", type=int, default=352_800, help="segment size")
-    parser.add_argument("--overlap", type=int, default=18, help="overlap percent")
-    parser.add_argument("--vocals-only", action="store_true", help="only save vocals")
-    parser.add_argument(
-        "--device",
-        default=(
-            "mps"
-            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
-            else "cpu"
-        ),
-        help="compute device: 'mps' (Apple Metal) or 'cpu' (fallback)",
-    )
-    args = parser.parse_args(argv)
-
-    wav, sr = torchaudio.load(args.wav)
-    if sr != 44_100:
-        wav = torchaudio.functional.resample(wav, sr, 44_100)
-        sr = 44_100
-    is_tensor = getattr(torch, "is_tensor", lambda _: False)
-    if is_tensor(wav):
-        if hasattr(wav, "detach"):
-            wav = wav.detach().cpu().numpy()
-        else:
-            wav = wav.cpu().numpy() if hasattr(wav, "cpu") else wav.numpy()
-
-    n_channels = wav.shape[0]
-    n_samples = wav.shape[1]
-
-    stems = np.zeros((2, n_channels, n_samples), dtype=np.float32)
-
-    seg_size = args.segment
-    fade_len = int(seg_size * (args.overlap / 100))
-    hop_size = seg_size - fade_len
-
-    device = torch.device(args.device)
-    model = load_model(args.ckpt, args.config, device)
-
-    if progress_cb:
-        progress_cb(0.0)
-    with torch.no_grad(), tqdm(total=n_samples, unit="sample") as bar:
-        for start in range(0, n_samples, hop_size):
-            end = min(start + seg_size, n_samples)
-            seg = wav[:, start:end]
-            if seg.shape[1] < seg_size:
-                seg = np.pad(seg, ((0, 0), (0, seg_size - seg.shape[1])))
-
-            pred = model(torch.from_numpy(seg).unsqueeze(0).to(device))
-            if isinstance(pred, dict) and "sources" in pred:
-                pred = pred["sources"]
-            pred = pred.squeeze(0).cpu().numpy()
-
-            if pred.ndim == 2:
-                if pred.shape[0] == 2:
-                    pred = pred[:, np.newaxis, :]
-                else:
-                    pred = pred[np.newaxis, :, :]
-            elif pred.ndim == 3 and pred.shape[1] not in (1, n_channels):
-                pred = pred.transpose(1, 0, 2)
-
-            if pred.shape[1] == 1 and n_channels == 2:
-                pred = np.repeat(pred, 2, axis=1)
-
-            chunk_len = end - start
-            if pred.shape[2] > chunk_len:
-                pred = pred[:, :, :chunk_len]
-            if pred.shape[0] == 1:
-                vocals_seg = pred[0]
-                mix_seg = seg[:, :chunk_len]
-                inst_seg = mix_seg - vocals_seg
-                pred = np.stack([vocals_seg, inst_seg], axis=0)
-
-            overlap_add(stems, pred, start, fade_len)
-            bar.update(min(hop_size, n_samples - start))
-            if progress_cb:
-                progress_cb(bar.n / bar.total)
-
-    window_sum = np.ones(n_samples, dtype=np.float32)
-    if fade_len:
-        win = np.ones(seg_size, dtype=np.float32)
-        ramp = np.linspace(0, 1, fade_len, dtype=np.float32)
-        win[:fade_len] = ramp
-        win[-fade_len:] = ramp[::-1]
-        for start in range(0, n_samples, hop_size):
-            end = min(start + seg_size, n_samples)
-            window_sum[start:end] += win[: end - start]
-    stems /= window_sum[None, None, :]
-
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    sf.write(out_dir / "vocals.wav", stems[0].T, sr)
-    if not args.vocals_only:
-        sf.write(out_dir / "instrumental.wav", stems[1].T, sr)
-    if progress_cb:
-        progress_cb(1.0)
-    print(f"✓ Done – stems saved to “{out_dir}”")
-
-
-def _load_optional_roformer(path: Path, config_path: Optional[Path], device: torch.device):
-    return load_model(str(path), str(config_path or ""), device)
-
-
-class StemModel:
-    def __init__(self, path: Path | None, device: torch.device, config_path: Path | None = None):
-        self.device = device
-        self.kind = "none"
-        self.session = None
-        self.net = None
-        self.path = path
-        self.config_path = config_path
-        self.expects_waveform = False
-        if path is None:
-            return
-        if path.suffix.lower() == ".ckpt":
-            self.net = _load_optional_roformer(path, config_path, device)
-            self.net.eval()
-            self.kind = "roformer"
-            self.expects_waveform = True
-            return
-        if path.suffix.lower() == ".onnx":
-            if ort is None:
-                raise AppError(ErrorCode.ONNX_RUNTIME_MISSING, "onnxruntime is required for ONNX models on Apple Silicon (CPU mode).")
-            self.session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-            self.kind = "onnx"
-            return
-        self.net = torch.jit.load(str(path), map_location=device)
-        self.net.eval()
-        self.kind = "torchscript"
-
-    def _move_to(self, device: torch.device) -> None:
-        """Move model to a different device (no-op for ONNX)."""
-        if self.kind == "onnx":
-            return
-        if self.net is not None:
-            self.net = self.net.to(device)
-        self.device = device
-
-    def __call__(self, mag: "torch.Tensor") -> "torch.Tensor":
-        if self.kind == "onnx" and self.session is not None:
-            inp_name = self.session.get_inputs()[0].name
-            out = self.session.run(None, {inp_name: mag.detach().cpu().numpy()})[0]
-            return torch.from_numpy(out).to(mag.device)
-        if self.net is None:
-            raise AppError(ErrorCode.MODEL_MISSING, "Model session not initialized.")
-        with torch.no_grad():
-            return self.net(mag)
-
-
-class ModelManager:
-    def __init__(self):
-        self.device = select_device()
-        self.model_info = dict(MODEL_FILE_MAP)
-        self.model_cache: dict[str, StemModel] = {}
-
-    def _resolve_path(self, filename: str) -> Path:
-        search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
-        search_dirs = [MODEL_DIR, Path.home() / "Library/Application Support/stems"]
-        for name in search_names:
-            for base in search_dirs:
-                match = _locate_case_insensitive(base / name)
-                if match:
-                    return match
-        raise AppError(ErrorCode.MODEL_MISSING, f"Model file missing: {filename}")
-
-    def _resolve_config(self, filename: Optional[str]) -> Optional[Path]:
-        if not filename:
-            return None
-        found = _locate_case_insensitive(CONFIG_DIR / filename)
-        if found:
-            return found
-        raise AppError(ErrorCode.CONFIG_MISSING, f"Config file missing: {filename}")
-
-    def _load_model(self, name: str) -> StemModel:
-        if name in self.model_cache:
-            return self.model_cache[name]
-        if name not in self.model_info:
-            raise AttributeError(name)
-        model_fname, cfg_fname = self.model_info[name]
-        model_path = self._resolve_path(model_fname)
-        cfg_path = self._resolve_config(cfg_fname)
-        model = StemModel(model_path, self.device, cfg_path)
-        self.model_cache[name] = model
-        if cfg_fname:
-            setattr(self, f"{name}_config", cfg_path)
-        return model
-
-    def __getattr__(self, name: str) -> StemModel:
-        if name in self.model_info:
-            return self._load_model(name)
-        raise AttributeError(name)
-
-    # Separation helpers
-    def split_vocals(
-        self,
-        waveform,
-        segment: int,
-        overlap: int,
-        progress_cb: Optional[Callable[[float], None]] = None,
-        delay: float = 0.0,
-    ):
-        if isinstance(waveform, torch.Tensor):
-            working = waveform.to(self.device)
-        else:
-            working = torch.tensor(waveform, dtype=torch.float32, device=self.device)
-        length = working.shape[1]
-        step = max(1, segment - overlap)
-        voc_acc = torch.zeros_like(working, device=self.device)
-        inst_acc = torch.zeros_like(working, device=self.device)
-        counts = torch.zeros((1, length), device=self.device)
-        if progress_cb:
-            progress_cb(0.0)
-        for start in range(0, length, step):
-            end = min(start + segment, length)
-            seg = working[:, start:end]
-            if seg.shape[1] < segment:
-                padded = torch.zeros((working.shape[0], segment), device=self.device)
-                padded[:, : seg.shape[1]] = seg
-            else:
-                padded = seg
-            with torch.no_grad():
-                pred = self.vocals(padded.unsqueeze(0))[0]
-            if pred.dim() == 2:
-                pred = pred[:, None, :]
-            elif pred.dim() == 3 and pred.shape[1] not in (1, working.shape[0]):
-                pred = pred.permute(1, 0, 2)
-            pred = pred[..., : seg.shape[1]]
-            voc_seg = pred[0]
-            inst_seg = pred[1] if pred.shape[0] > 1 else seg - voc_seg
-            sl = voc_seg.shape[1]
-            voc_acc[:, start : start + sl] += voc_seg
-            inst_acc[:, start : start + sl] += inst_seg
-            counts[:, start : start + sl] += 1
-            if progress_cb:
-                progress_cb(end / length)
-            if delay:
-                time.sleep(delay)
-        denom = counts.clamp_min(1)
-        return voc_acc / denom, inst_acc / denom
-
-    def split_pair_with_model(
-        self,
-        model: StemModel,
-        waveform,
-        segment: int,
-        overlap: int,
-        progress_cb: Optional[Callable[[float], None]] = None,
-        delay: float = 0.0,
-    ):
-        if isinstance(waveform, torch.Tensor):
-            working = waveform.to(self.device)
-        else:
-            working = torch.tensor(waveform, dtype=torch.float32, device=self.device)
-        length = working.shape[1]
-        step = max(1, segment - overlap)
-        out0 = torch.zeros_like(working, device=self.device)
-        out1 = torch.zeros_like(working, device=self.device)
-        counts = torch.zeros((1, length), device=self.device)
-        if progress_cb:
-            progress_cb(0.0)
-
-        if model.expects_waveform:
-            for start in range(0, length, step):
-                end = min(start + segment, length)
-                seg = working[:, start:end]
-                if seg.shape[1] < segment:
-                    padded = torch.zeros((working.shape[0], segment), device=self.device)
-                    padded[:, : seg.shape[1]] = seg
-                else:
-                    padded = seg
-                with torch.no_grad():
-                    pred = model(padded.unsqueeze(0))[0]
-                if pred.dim() == 2:
-                    pred = pred[:, None, :]
-                elif pred.dim() == 3 and pred.shape[1] not in (1, working.shape[0]):
-                    pred = pred.permute(1, 0, 2)
-                pred = pred[..., : seg.shape[1]]
-                stem0 = pred[0]
-                stem1 = pred[1] if pred.shape[0] > 1 else seg - stem0
-                sl = stem0.shape[1]
-                out0[:, start : start + sl] += stem0
-                out1[:, start : start + sl] += stem1
-                counts[:, start : start + sl] += 1
-                if progress_cb:
-                    progress_cb(end / length)
-                if delay:
-                    time.sleep(delay)
-            denom = counts.clamp_min(1)
-            return out0 / denom, out1 / denom
-
-        # STFT mask path
-        n_fft = 2048
-        hop = 441
-        win = torch.hann_window(n_fft, device=self.device)
-        for start in range(0, length, step):
-            end = min(start + segment, length)
-            seg = working[:, start:end]
-            if seg.shape[1] < n_fft:
-                out0[:, start:end] += seg
-                if progress_cb:
-                    progress_cb(end / length)
-                continue
-            spec = torch.stft(seg, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=win, return_complex=True)
-            mag = spec.abs().unsqueeze(0)
-            mask = model(mag)[0]
-            stem0_spec = spec * mask
-            stem0 = torch.istft(
-                stem0_spec,
-                n_fft=n_fft,
-                hop_length=hop,
-                win_length=n_fft,
-                window=win,
-                length=seg.shape[1],
-            )
-            out0[:, start : start + stem0.shape[1]] += stem0
-            out1[:, start : start + stem0.shape[1]] += seg[:, : stem0.shape[1]] - stem0
-            if progress_cb:
-                progress_cb(end / length)
-            if delay:
-                time.sleep(delay)
-        return out0, out1
-
-    def split_instrumental(
-        self,
-        waveform,
-        segment: int,
-        overlap: int,
-        progress_cb: Optional[Callable[[float], None]] = None,
-        delay: float = 0.0,
-    ):
-        if isinstance(waveform, torch.Tensor):
-            working = waveform.to(self.device)
-        else:
-            working = torch.tensor(waveform, dtype=torch.float32, device=self.device)
-        length = working.shape[1]
-        step = max(1, segment - overlap)
-        n_fft = 2048
-        hop = 441
-        win = torch.hann_window(n_fft, device=self.device)
-        drums = torch.zeros_like(working, device=self.device)
-        bass = torch.zeros_like(working, device=self.device)
-        other = torch.zeros_like(working, device=self.device)
-        karaoke = torch.zeros_like(working, device=self.device)
-        guitar = torch.zeros_like(working, device=self.device)
-        if progress_cb:
-            progress_cb(0.0)
-        for start in range(0, length, step):
-            end = min(start + segment, length)
-            seg = working[:, start:end]
-            if seg.shape[1] < n_fft:
-                for tensor in (drums, bass, other, karaoke, guitar):
-                    tensor[:, start:end] += seg * 0
-                if progress_cb:
-                    progress_cb(end / length)
-                continue
-            spec = torch.stft(seg, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=win, return_complex=True)
-            mag = spec.abs().unsqueeze(0)
-            masks = {
-                "drums": self.drums(mag)[0],
-                "bass": self.bass(mag)[0],
-                "other": self.other(mag)[0],
-                "karaoke": self.karaoke(mag)[0],
-                "guitar": self.guitar(mag)[0],
-            }
-            stems = {
-                "drums": drums,
-                "bass": bass,
-                "other": other,
-                "karaoke": karaoke,
-                "guitar": guitar,
-            }
-            for name, mask in masks.items():
-                spec_masked = spec * mask
-                stem = torch.istft(
-                    spec_masked,
-                    n_fft=n_fft,
-                    hop_length=hop,
-                    win_length=n_fft,
-                    window=win,
-                    length=seg.shape[1],
-                )
-                stems[name][:, start : start + stem.shape[1]] += stem
-            if progress_cb:
-                progress_cb(end / length)
-            if delay:
-                time.sleep(delay)
-        return drums, bass, other, karaoke, guitar
-
-
-# Ensure core helper methods remain bound to ModelManager
-_REQUIRED_MANAGER_HELPERS = ("split_vocals", "split_pair_with_model", "split_instrumental")
-_missing_helpers = [name for name in _REQUIRED_MANAGER_HELPERS if not hasattr(ModelManager, name)]
-if _missing_helpers:
-    raise AppError(ErrorCode.SPLIT_IMPORT_FAILED, f"ModelManager missing helpers: {', '.join(_missing_helpers)}")
-
-
-# ── Task orchestration ─────────────────────────────────────────────────────-
-
-app = FastAPI()
-progress: dict[str, dict[str, int | str]] = {}
-errors: dict[str, str] = {}
-tasks: dict[str, dict] = {}
-controls: dict[str, dict[str, threading.Event]] = {}
-process_queue: queue.Queue[Callable[[], None]] = queue.Queue()
-app_ready_event = threading.Event()
-app_ready_state = {"ready": False, "checking": True, "models_missing": []}
-
-def _worker() -> None:
-    while True:
-        fn = process_queue.get()
-        try:
-            fn()
-        finally:
-            process_queue.task_done()
-
-threading.Thread(target=_worker, daemon=True).start()
-
-download_lock = threading.Lock()
-downloading = False
-
-
-def _run_startup_checks() -> None:
-    try:
-        app_ready_state["checking"] = True
-        app_ready_state["models_missing"] = _missing_required_models()
-    finally:
-        app_ready_state["checking"] = False
-        app_ready_state["ready"] = True
-        app_ready_event.set()
-
-
-@app.on_event("startup")
-async def _startup_cleanup() -> None:
-    _close_installer_ui()
-    threading.Thread(target=_run_startup_checks, daemon=True).start()
-
-
-@app.exception_handler(AppError)
-async def _handle_app_error(request: Request, exc: AppError):  # noqa: D401 - FastAPI signature
-    """Return JSON-encoded error responses while logging the failure."""
-
-    logger.error("app error for %s %s: %s %s", request.method, request.url.path, exc.code, exc.message)
-    return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
-
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    logger.info("request %s %s from %s", request.method, request.url.path, request.client.host if request.client else "?")
-    try:
-        response = await call_next(request)
-    except Exception:
-        logger.exception("unhandled error for %s %s", request.method, request.url.path)
-        raise
-    duration = (time.time() - start) * 1000
-    logger.info("completed %s %s in %.1fms status=%s", request.method, request.url.path, duration, response.status_code)
-    return response
-
-
-def _download_models() -> None:
-    global downloading
-    with download_lock:
-        if downloading:
-            return
-        downloading = True
-    MODEL_DIR.mkdir(exist_ok=True)
-    for name, url in MODEL_URLS:
-        dest = MODEL_DIR / name
-        try:
-            import urllib.request
-
-            with urllib.request.urlopen(url) as resp, open(dest, "wb") as out:
-                while True:
-                    chunk = resp.read(8192)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    logger.debug("downloaded chunk for %s", name)
-        except Exception as exc:  # pragma: no cover - network errors
-            logging.error("model download failed: %s", exc)
-            logger.exception("model download failure for %s", name)
-    downloading = False
-
-
-@app.post("/download_models")
-async def download_models():
-    thread = threading.Thread(target=_download_models, daemon=True)
-    thread.start()
-    return {"status": "started"}
-
-
-# ── Separation helpers ─────────────────────────────────────────────────────-
-
-def _prepare_waveform(audio_path: Path) -> torch.Tensor:
-    loaded_via_soundfile = False
-    try:
-        logger.info("loading audio %s", audio_path)
-        waveform, sr = torchaudio.load(str(audio_path))
-    except Exception as exc:
-        needs_fallback = isinstance(exc, ImportError) and ("torchcodec" in str(exc).lower() or "TorchCodec" in str(exc))
-        if not needs_fallback:
-            logger.exception("failed to load %s", audio_path)
-            raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {exc}") from exc
-
-        logger.warning("torchcodec missing; retrying %s with soundfile backend", audio_path)
-        try:
-            torchaudio.set_audio_backend("soundfile")
-            waveform, sr = torchaudio.load(str(audio_path))
-            logger.info("loaded %s via torchaudio soundfile backend", audio_path)
-        except Exception as sf_exc:
-            logger.debug("torchaudio soundfile backend failed for %s: %s", audio_path, sf_exc)
-            try:
-                data, sr = sf.read(str(audio_path))
-                waveform = torch.from_numpy(data)
-                logger.info("loaded %s via soundfile direct read", audio_path)
-                loaded_via_soundfile = True
-            except Exception as final_exc:
-                logger.exception("failed to load %s via all fallbacks", audio_path)
-                raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Failed to load audio: {final_exc}") from final_exc
-
-    if loaded_via_soundfile and waveform.ndim == 2:
-        waveform = waveform.transpose(0, 1)
-    if waveform.ndim == 1:
-        waveform = waveform.unsqueeze(0)
-    if not torch.is_floating_point(waveform):
-        waveform = waveform.float()
-    if waveform.dtype != torch.float32:
-        waveform = waveform.float()
-    if sr != 44100:
-        try:
-            logger.info("resampling %s from %s to 44100", audio_path, sr)
-            waveform = torchaudio.functional.resample(waveform, sr, 44100)
-        except Exception as exc:
-            logger.exception("resample failed for %s", audio_path)
-            raise AppError(ErrorCode.RESAMPLE_FAILED, f"Resample failed: {exc}") from exc
-    logger.debug("loaded waveform shape=%s sr=44100", tuple(waveform.shape))
-    return waveform
-
 def _ensure_ffmpeg() -> str:
-    """Return a usable ffmpeg executable path, downloading a bundled copy if needed."""
-
-    import shutil
-    import subprocess
-
     path = shutil.which("ffmpeg")
     candidates: list[str] = []
     if path:
         candidates.append(path)
 
-    try:  # fallback to bundled binary if available
+    try:  # pragma: no cover - optional fallback dependency
         import imageio_ffmpeg  # type: ignore
 
-        try:
-            bundled = imageio_ffmpeg.get_ffmpeg_exe()
-            if bundled:
-                candidates.append(bundled)
-                logger.debug("using bundled ffmpeg at %s", bundled)
-        except Exception:
-            logger.debug("imageio-ffmpeg present but failed to provide binary", exc_info=True)
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled:
+            candidates.append(bundled)
     except Exception:
-        logger.debug("imageio-ffmpeg not available; relying on system ffmpeg")
+        logger.debug("imageio-ffmpeg unavailable; relying on PATH")
 
     for candidate in candidates:
         try:
-            subprocess.run([candidate, "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                [candidate, "-version"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             return candidate
-        except FileNotFoundError:
-            logger.debug("ffmpeg candidate missing at %s", candidate)
-        except Exception as exc:
-            logger.debug("ffmpeg candidate at %s failed health check: %s", candidate, exc)
+        except Exception:
+            logger.debug("ffmpeg candidate failed: %s", candidate, exc_info=True)
 
-    logger.error("ffmpeg binary missing from PATH and bundled lookup failed; conversion cannot proceed")
-    raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg or ensure imageio-ffmpeg can download it.")
+    raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg or add imageio-ffmpeg.")
 
 
-def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
-    """Convert ``audio_path`` to WAV in-place and optionally drop the original copy."""
-
+def _ffprobe_path() -> str:
+    path = shutil.which("ffprobe")
+    if path:
+        return path
     ffmpeg_path = _ensure_ffmpeg()
+    probe_candidate = str(Path(ffmpeg_path).with_name("ffprobe"))
+    if Path(probe_candidate).exists():
+        return probe_candidate
+    raise AppError(ErrorCode.FFMPEG_MISSING, "ffprobe not found; install ffmpeg.")
 
-    if audio_path.suffix.lower() in {".wav", ".wave"}:
-        logger.debug("%s already wav; skipping convert", audio_path)
-        return audio_path
 
-    wav_path = audio_path.with_suffix(".wav")
-    logger.info("converting %s to wav at %s", audio_path, wav_path)
+def _fallback_source_info(path: Path) -> SourceInfo:
+    channels = 2
+    bit_rate: int | None = None
+    has_cover = False
+    codec: str | None = None
+
+    if MutagenFile is not None:
+        try:
+            audio = MutagenFile(path)
+            if audio is not None:
+                info = getattr(audio, "info", None)
+                if info is not None:
+                    raw_channels = getattr(info, "channels", None)
+                    raw_bit_rate = getattr(info, "bitrate", None)
+                    raw_codec = getattr(info, "codec", None) or getattr(info, "codec_description", None)
+                    if raw_channels:
+                        channels = max(1, min(2, int(raw_channels)))
+                    if raw_bit_rate:
+                        bit_rate = int(raw_bit_rate)
+                    if raw_codec:
+                        codec = str(raw_codec).lower()
+
+                tags = getattr(audio, "tags", None)
+                if tags is not None:
+                    has_cover = any(
+                        str(key).lower() in {"apic", "covr", "metadata_block_picture"}
+                        for key in tags.keys()
+                    )
+        except Exception:
+            logger.debug("mutagen probe failed for %s", path, exc_info=True)
+
+    return SourceInfo(
+        suffix=path.suffix.lower(),
+        codec=codec,
+        bit_rate=bit_rate,
+        channels=channels,
+        has_cover=has_cover,
+        has_video=False,
+    )
+
+
+def _probe_source(path: Path) -> SourceInfo:
+    fallback = _fallback_source_info(path)
+    try:
+        cmd = [
+            _ffprobe_path(),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,bit_rate,channels,disposition:format=bit_rate",
+            "-of",
+            "json",
+            str(path),
+        ]
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        data = json.loads(result.stdout or "{}")
+    except Exception as exc:
+        logger.warning("ffprobe failed for %s: %s", path, exc)
+        return fallback
+
+    streams = data.get("streams") or []
+    audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    has_cover = any(bool((stream.get("disposition") or {}).get("attached_pic")) for stream in video_streams)
+    has_video = any(not bool((stream.get("disposition") or {}).get("attached_pic")) for stream in video_streams)
+    bit_rate = audio_stream.get("bit_rate") or (data.get("format") or {}).get("bit_rate")
+    with contextlib.suppress(Exception):
+        bit_rate = int(bit_rate) if bit_rate else None
+    return SourceInfo(
+        suffix=path.suffix.lower(),
+        codec=audio_stream.get("codec_name") or fallback.codec,
+        bit_rate=bit_rate if isinstance(bit_rate, int) else fallback.bit_rate,
+        channels=max(1, min(2, int(audio_stream.get("channels") or fallback.channels or 2))),
+        has_cover=has_cover or fallback.has_cover,
+        has_video=has_video,
+    )
+
+
+def _clamp_kbps(bit_rate: int | None, fallback: int) -> int:
+    if not bit_rate:
+        return fallback
+    return max(96, min(320, int(round(bit_rate / 1000.0))))
+
+
+def _resolve_export_plan(source_info: SourceInfo, selection: str) -> ExportPlan:
+    if selection == "mp3_320":
+        return ExportPlan(".mp3", ["-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3"], True)
+    if selection == "mp3_128":
+        return ExportPlan(".mp3", ["-c:a", "libmp3lame", "-b:a", "128k", "-id3v2_version", "3"], True)
+    if selection == "wav":
+        return ExportPlan(".wav", ["-c:a", "pcm_s16le"], False)
+    if selection == "m4a":
+        return ExportPlan(".m4a", ["-c:a", "aac", "-b:a", "256k"], True)
+    if selection == "flac":
+        return ExportPlan(".flac", ["-c:a", "flac"], True)
+
+    codec = (source_info.codec or "").lower()
+    suffix = source_info.suffix
+    if suffix == ".mp3" or codec == "mp3":
+        kbps = _clamp_kbps(source_info.bit_rate, 320)
+        return ExportPlan(".mp3", ["-c:a", "libmp3lame", "-b:a", f"{kbps}k", "-id3v2_version", "3"], True)
+    if suffix in {".wav", ".wave"}:
+        return ExportPlan(".wav", ["-c:a", "pcm_s16le"], False)
+    if suffix in {".aif", ".aiff"}:
+        return ExportPlan(".aiff", ["-c:a", "pcm_s16be"], False)
+    if suffix == ".flac" or codec == "flac":
+        return ExportPlan(".flac", ["-c:a", "flac"], True)
+    if suffix == ".aac":
+        kbps = _clamp_kbps(source_info.bit_rate, 256)
+        return ExportPlan(".aac", ["-c:a", "aac", "-b:a", f"{kbps}k"], False)
+    if suffix == ".ogg":
+        kbps = _clamp_kbps(source_info.bit_rate, 192)
+        if codec == "opus":
+            return ExportPlan(".ogg", ["-c:a", "libopus", "-b:a", f"{kbps}k"], False)
+        return ExportPlan(".ogg", ["-c:a", "libvorbis", "-q:a", "6"], False)
+    if suffix == ".opus" or codec == "opus":
+        kbps = _clamp_kbps(source_info.bit_rate, 192)
+        return ExportPlan(".opus", ["-c:a", "libopus", "-b:a", f"{kbps}k"], False)
+    if suffix == ".m4a" or codec == "aac":
+        kbps = _clamp_kbps(source_info.bit_rate, 256)
+        return ExportPlan(".m4a", ["-c:a", "aac", "-b:a", f"{kbps}k"], True)
+    if suffix == ".alac" or codec == "alac":
+        return ExportPlan(".m4a", ["-c:a", "alac"], True)
+    if codec.startswith("pcm_"):
+        return ExportPlan(".wav", ["-c:a", "pcm_s16le"], False)
+    kbps = _clamp_kbps(source_info.bit_rate, 256)
+    return ExportPlan(".m4a", ["-c:a", "aac", "-b:a", f"{kbps}k"], True)
+
+
+def _strip_title_metadata(path: Path) -> None:
+    if MutagenFile is None:
+        return
+    try:
+        audio = MutagenFile(path)
+        if audio is None or audio.tags is None:
+            return
+        tags = audio.tags
+        with contextlib.suppress(Exception):
+            if hasattr(tags, "delall"):
+                for key in ("TIT2", "title", "\xa9nam"):
+                    tags.delall(key)
+        for key in list(tags.keys()):
+            lower = str(key).lower()
+            if lower in {"tit2", "title", "\xa9nam"}:
+                with contextlib.suppress(Exception):
+                    del tags[key]
+        audio.save()
+    except Exception:
+        logger.debug("failed to strip title metadata from %s", path, exc_info=True)
+
+
+def _export_stem(
+    stem_wav: Path,
+    source_path: Path,
+    dest_path: Path,
+    plan: ExportPlan,
+    has_cover: bool,
+) -> Path:
+    ffmpeg_path = _ensure_ffmpeg()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate = ensure_unique_path(dest_path)
+
+    def _build_command(include_cover: bool) -> list[str]:
+        cmd = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(stem_wav),
+            "-i",
+            str(source_path),
+            "-map",
+            "0:a:0",
+            "-map_metadata",
+            "1",
+        ]
+        if include_cover:
+            cmd.extend(["-map", "1:v?"])
+        cmd.extend(plan.audio_args)
+        if include_cover:
+            cmd.extend(["-c:v", "copy", "-disposition:v", "attached_pic"])
+        cmd.extend(["-metadata", "title=", str(candidate)])
+        return cmd
+
+    attempts = [False]
+    if plan.supports_cover and has_cover:
+        attempts = [True, False]
+
+    last_error: Exception | None = None
+    for include_cover in attempts:
+        try:
+            subprocess.run(
+                _build_command(include_cover),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            _strip_title_metadata(candidate)
+            return candidate
+        except Exception as exc:
+            last_error = exc
+            _cleanup_path(candidate)
+            logger.warning(
+                "export failed for %s with include_cover=%s: %s",
+                candidate,
+                include_cover,
+                exc,
+            )
+    raise AppError(ErrorCode.SEPARATION_FAILED, f"Export failed: {last_error}") from last_error
+
+
+def _resolve_video_output(source_info: SourceInfo) -> tuple[str, list[str]]:
+    suffix = source_info.suffix.lower()
+    if suffix in {".mp4", ".m4v", ".mov"}:
+        return suffix, ["-c:a", "aac", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 256)}k"]
+    if suffix == ".webm":
+        return ".webm", ["-c:a", "libopus", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 192)}k"]
+    if suffix == ".avi":
+        return ".avi", ["-c:a", "libmp3lame", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 192)}k"]
+    return ".mkv", ["-c:a", "aac", "-b:a", f"{_clamp_kbps(source_info.bit_rate, 256)}k"]
+
+
+def _export_video_stem(
+    stem_wav: Path,
+    source_path: Path,
+    dest_path: Path,
+    source_info: SourceInfo,
+) -> Path:
+    ffmpeg_path = _ensure_ffmpeg()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate = ensure_unique_path(dest_path)
+    suffix, audio_args = _resolve_video_output(source_info)
+    if candidate.suffix.lower() != suffix:
+        candidate = ensure_unique_path(candidate.with_suffix(suffix))
     cmd = [
         ffmpeg_path,
         "-hide_banner",
@@ -1958,280 +1606,87 @@ def _convert_to_wav(audio_path: Path, *, remove_source: bool = False) -> Path:
         "error",
         "-y",
         "-i",
-        str(audio_path),
+        str(source_path),
+        "-i",
+        str(stem_wav),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-map_metadata",
+        "0",
+        "-c:v",
+        "copy",
+        *audio_args,
+        "-shortest",
+        "-metadata",
+        "title=",
+        str(candidate),
+    ]
+    if suffix in {".mp4", ".m4v", ".mov"}:
+        cmd.extend(["-movflags", "+faststart"])
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _strip_title_metadata(candidate)
+        return candidate
+    except Exception as exc:
+        _cleanup_path(candidate)
+        raise AppError(ErrorCode.SEPARATION_FAILED, f"Video export failed: {exc}") from exc
+
+
+def _decode_audio_to_wav(source_path: Path, work_dir: Path, channels: int) -> Path:
+    ffmpeg_path = _ensure_ffmpeg()
+    decoded_path = work_dir / "input.wav"
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
         "-ar",
         "44100",
         "-ac",
-        "2",
+        str(max(1, min(2, channels))),
         "-vn",
-        str(wav_path),
+        str(decoded_path),
     ]
-    conversion_ok = False
     try:
-        import subprocess
-
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        conversion_ok = True
     except FileNotFoundError as exc:
-        raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found; install ffmpeg and ensure it is on PATH.") from exc
+        raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found.") from exc
     except Exception as exc:
-        logger.error("conversion to wav failed for %s: %s", audio_path, exc)
-        try:
-            if hasattr(exc, "stderr") and exc.stderr:
-                logger.error("ffmpeg stderr: %s", exc.stderr)
-        except Exception:
-            pass
-        raise AppError(ErrorCode.UPLOAD_FAILED, f"Conversion to WAV failed: {exc}") from exc
-
-    if conversion_ok and not wav_path.exists():
-        raise AppError(ErrorCode.UPLOAD_FAILED, f"WAV conversion did not create output for {audio_path}")
-
-    if remove_source and conversion_ok and wav_path != audio_path:
-        try:
-            audio_path.unlink()
-        except Exception as exc:
-            logging.warning("failed to remove source %s after conversion: %s", audio_path, exc)
-    elif remove_source and not conversion_ok and audio_path.exists():
-        logger.debug("preserving original %s because conversion did not complete", audio_path)
-    return wav_path
+        raise AppError(ErrorCode.AUDIO_DECODE_FAILED, f"Could not decode audio: {exc}") from exc
+    if not decoded_path.exists():
+        raise AppError(ErrorCode.AUDIO_DECODE_FAILED, "Decoded WAV was not created.")
+    return decoded_path
 
 
-def _stage_audio_copy(src: Path, dest_dir: Path, *, remove_original_copy: bool = True) -> Path:
-    """Place a copy of ``src`` into ``dest_dir`` and normalize it to WAV."""
-
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    staged = dest_dir / src.name
-    if staged != src:
-        logger.debug("copying %s (%s bytes) to %s", src, src.stat().st_size if src.exists() else "n/a", staged)
-        shutil.copy2(src, staged)
+def _load_waveform(wav_path: Path) -> torch.Tensor:
     try:
-        wav_path = _convert_to_wav(staged, remove_source=remove_original_copy)
-    except AppError:
-        if staged.exists() and staged.suffix.lower() != ".wav":
-            try:
-                staged.unlink()
-                logger.debug("cleaned failed staging copy %s", staged)
-            except Exception as exc:
-                logger.warning("failed to clean staging copy %s after error: %s", staged, exc)
-        raise
-    if staged.exists() and staged.suffix.lower() != ".wav" and staged != wav_path:
-        try:
-            staged.unlink()
-            logger.debug("removed non-wav staging copy %s after conversion", staged)
-        except Exception as exc:
-            logger.warning("failed to remove staging copy %s: %s", staged, exc)
-    logger.info("staged %s as %s", src, wav_path)
-    return wav_path
+        data, sample_rate = sf.read(str(wav_path), dtype="float32", always_2d=True)
+    except Exception as exc:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Could not read WAV: {exc}") from exc
+    if sample_rate != 44100:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, f"Expected 44.1 kHz audio, got {sample_rate}.")
+    waveform = torch.from_numpy(data.T.copy())
+    if waveform.ndim != 2:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, "Decoded audio has an invalid shape.")
+    if waveform.shape[0] == 0:
+        raise AppError(ErrorCode.AUDIO_LOAD_FAILED, "Decoded audio is empty.")
+    return waveform
 
 
-def _queue_processing(task_id: str, out_dir: Path, stem_list: list[str]) -> None:
-    pause_evt = controls.setdefault(task_id, {}).setdefault("pause", threading.Event())
-    stop_evt = controls.setdefault(task_id, {}).setdefault("stop", threading.Event())
-
-    def _mark_stopped() -> None:
-        progress[task_id] = {
-            "stage": "stopped",
-            "pct": 0,
-            "stems": tasks.get(task_id, {}).get("stems"),
-            "out_dir": tasks.get(task_id, {}).get("dir"),
-            "zip": tasks.get(task_id, {}).get("zip"),
-        }
-        tasks[task_id]["status"] = "stopped"
-
-    def _raise_if_stopped() -> None:
-        if stop_evt.is_set():
-            _mark_stopped()
-            raise TaskStopped()
-
-    def cb(stage: str, pct: int):
-        while pause_evt.is_set():
-            progress[task_id] = {
-                "stage": "paused",
-                "pct": pct,
-                "stems": tasks.get(task_id, {}).get("stems"),
-                "out_dir": tasks.get(task_id, {}).get("dir"),
-                "zip": tasks.get(task_id, {}).get("zip"),
-            }
-            time.sleep(0.5)
-        _raise_if_stopped()
-        logger.debug("task %s stage=%s pct=%s", task_id, stage, pct)
-        progress[task_id] = {
-            "stage": stage,
-            "pct": pct,
-            "stems": tasks.get(task_id, {}).get("stems"),
-            "out_dir": tasks.get(task_id, {}).get("dir"),
-            "zip": tasks.get(task_id, {}).get("zip"),
-        }
-
-    def run() -> None:
-        try:
-            _raise_if_stopped()
-            while not app_ready_event.is_set():
-                _raise_if_stopped()
-                tasks[task_id]["status"] = "preparing"
-                progress[task_id] = {
-                    "stage": "preparing",
-                    "pct": 0,
-                    "stems": tasks.get(task_id, {}).get("stems"),
-                    "out_dir": tasks.get(task_id, {}).get("dir"),
-                    "zip": tasks.get(task_id, {}).get("zip"),
-                }
-                time.sleep(0.5)
-            tasks[task_id]["status"] = "running"
-            manager = ModelManager()
-            cb("preparing", 0)
-            cb("prepare.complete", 1)
-            conv_src = tasks.get(task_id, {}).get("conv_src")
-            if conv_src:
-                audio_path = Path(conv_src)
-                if not audio_path.exists():
-                    raise AppError(ErrorCode.UPLOAD_FAILED, "Converted source missing; please re-upload.")
-            else:
-                orig_src = tasks.get(task_id, {}).get("orig_src")
-                if not orig_src:
-                    raise AppError(ErrorCode.UPLOAD_FAILED, "Missing source file for conversion")
-                audio_path = _stage_audio_copy(Path(orig_src), CONVERTED_DIR)
-                tasks[task_id]["conv_src"] = str(audio_path)
-            plan_mode = tasks.get(task_id, {}).get("structure_mode", settings.structure_mode)
-            staging_dir = Path(tasks.get(task_id, {}).get("staging_dir") or out_dir)
-            deliver_dir = Path(tasks.get(task_id, {}).get("dir") or out_dir)
-            zip_target = tasks.get(task_id, {}).get("zip_target")
-            stems_out = _separate_waveform(manager, audio_path, stem_list, cb, staging_dir, stop_check=_raise_if_stopped)
-
-            zip_path: Path | None = None
-            if plan_mode != "structured" and zip_target is not None and len(stems_out) > 1:
-                _raise_if_stopped()
-                zip_path = ensure_unique_path(Path(zip_target) if zip_target else deliver_dir / f"{audio_path.stem}.zip")
-                cb("zip.start", 99)
-                try:
-                    with zipfile.ZipFile(zip_path, "w") as zf:
-                        for name in stems_out:
-                            _raise_if_stopped()
-                            fp = staging_dir / name
-                            if fp.exists():
-                                zf.write(fp, arcname=name)
-                                logger.debug("added %s to %s", fp, zip_path)
-                            else:
-                                logger.warning("expected stem %s missing at %s", name, fp)
-                except Exception as exc:
-                    raise AppError(ErrorCode.ZIP_FAILED, f"Failed to create zip: {exc}") from exc
-                cb("zip.done", 99)
-                try:
-                    if staging_dir.exists():
-                        shutil.rmtree(staging_dir)
-                except Exception:
-                    logger.debug("failed to clean staging dir %s", staging_dir, exc_info=True)
-                tasks[task_id]["zip"] = str(zip_path)
-                deliver_dir = zip_path.parent
-            else:
-                tasks[task_id]["zip"] = None
-                if staging_dir != deliver_dir and stems_out:
-                    deliver_dir.mkdir(parents=True, exist_ok=True)
-                    for name in stems_out:
-                        src = staging_dir / name
-                        dest = deliver_dir / name
-                        try:
-                            if src.exists():
-                                shutil.move(str(src), str(dest))
-                                logger.debug("moved %s to %s", src, dest)
-                        except Exception:
-                            logger.debug("failed to move %s to %s", src, dest, exc_info=True)
-                    try:
-                        if staging_dir.exists():
-                            shutil.rmtree(staging_dir)
-                    except Exception:
-                        logger.debug("failed to clean staging dir %s", staging_dir, exc_info=True)
-
-            tasks[task_id]["stems"] = stems_out
-            tasks[task_id]["dir"] = str(deliver_dir)
-            cb("finalizing", 99)
-            progress[task_id] = {
-                "stage": "done",
-                "pct": 100,
-                "stems": stems_out,
-                "out_dir": str(deliver_dir),
-                "zip": tasks.get(task_id, {}).get("zip"),
-            }
-            tasks[task_id]["status"] = "done"
-            logger.info("task %s completed; stems=%s; zip=%s", task_id, stems_out, zip_path)
-        except TaskStopped:
-            _mark_stopped()
-        except AppError as exc:
-            progress[task_id] = {
-                "stage": "error",
-                "pct": -1,
-                "stems": tasks.get(task_id, {}).get("stems"),
-                "out_dir": tasks.get(task_id, {}).get("dir"),
-                "zip": tasks.get(task_id, {}).get("zip"),
-            }
-            errors[task_id] = json.dumps({"code": exc.code, "message": exc.message})
-            tasks[task_id]["status"] = "error"
-            logger.error("task %s failed with %s: %s", task_id, exc.code, exc.message)
-            logger.debug(
-                "task %s context dir=%s conv_src=%s stems=%s",
-                task_id,
-                out_dir,
-                tasks.get(task_id, {}).get("conv_src"),
-                stem_list,
-            )
-        except Exception as exc:  # pragma: no cover - safety net
-            logging.exception("processing failed")
-            progress[task_id] = {
-                "stage": "error",
-                "pct": -1,
-                "stems": tasks.get(task_id, {}).get("stems"),
-                "out_dir": tasks.get(task_id, {}).get("dir"),
-                "zip": tasks.get(task_id, {}).get("zip"),
-            }
-            errors[task_id] = json.dumps({"code": ErrorCode.SEPARATION_FAILED, "message": str(exc)})
-            tasks[task_id]["status"] = "error"
-            logger.exception("task %s crashed", task_id)
-
-    tasks[task_id]["status"] = "queued"
-    progress[task_id] = {
-        "stage": "queued",
-        "pct": 0,
-        "stems": tasks.get(task_id, {}).get("stems"),
-        "out_dir": tasks.get(task_id, {}).get("dir"),
-        "zip": tasks.get(task_id, {}).get("zip"),
-    }
-    process_queue.put(run)
-
-
-def convert_directory(input_dir: Path, output_dir: Path) -> list[Path]:
-    """Convert all supported audio files in ``input_dir`` to WAV under ``output_dir``."""
-
-    _ensure_ffmpeg()
-
-    if not input_dir.exists() or not input_dir.is_dir():
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Input directory not found: {input_dir}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    converted: list[Path] = []
-    supported = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".alac", ".opus", ".m4a"}
-
-    for src_path in input_dir.rglob("*"):
-        if src_path.suffix.lower() not in supported:
-            continue
-        relative_subpath = src_path.relative_to(input_dir)
-        staged_dest = output_dir / relative_subpath
-        staged_dest.parent.mkdir(parents=True, exist_ok=True)
-        if staged_dest != src_path:
-            logger.debug("copying %s to %s", src_path, staged_dest)
-            shutil.copy2(src_path, staged_dest)
-        wav_path = _convert_to_wav(staged_dest, remove_source=True)
-        converted.append(wav_path)
-    return converted
-
-
-def _write_wave(
-    out_dir: Path,
-    fname: str,
-    tensor: torch.Tensor,
-) -> Path:
+def _write_temp_wave(out_dir: Path, name: str, tensor: torch.Tensor) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    candidate = ensure_unique_path(out_dir / fname)
-    logger.info("writing stem %s to %s", candidate.name, candidate.parent)
+    candidate = out_dir / name
     data = tensor.detach().cpu()
     if not torch.isfinite(data).all():
         data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
@@ -2240,698 +1695,2190 @@ def _write_wave(
     return candidate
 
 
-def _separate_waveform(
-    manager: "ModelManager",
-    audio_path: Path,
-    stem_list: list[str],
-    cb: Callable[[str, int], None],
-    out_dir: Path,
-    *,
-    stop_check: Optional[Callable[[], None]] = None,
-) -> list[str]:
-    logger.info("starting separation for %s with stems %s", audio_path, stem_list)
-    waveform = _prepare_waveform(audio_path)
-    cb("load_audio.done", 1)
-    if stop_check:
-        stop_check()
-
-    stems_out: list[str] = []
-    remaining_stems = [s for s in stem_list if s != "deux"]
-    processing_started_at = time.time()
-    chunk_count = math.ceil(waveform.shape[1] / max(1, SEGMENT - OVERLAP))
-
-    def ensure_stereo(x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
-        if x.shape[0] >= 2:
-            return x
-        return x.repeat(2, 1)
-
-    def ensure_mono(x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 1:
-            return x.unsqueeze(0)
-        if x.shape[0] == 1:
-            return x
-        return x.mean(dim=0, keepdim=True)
-
-    if "deux" in stem_list:
-        cb("deux.start", 2)
-        deux_model = manager.deux
-
-        def _cb(frac: float) -> None:
-            cb("deux", 2 + int(frac * 94))
-
-        deux_wave = ensure_stereo(waveform)
-        if stop_check:
-            stop_check()
-        voc_d, inst_d = manager.split_pair_with_model(deux_model, deux_wave, DEUX_SEGMENT, OVERLAP, progress_cb=_cb)
-        fname_v = f"{audio_path.stem} - vocals (deux).wav"
-        fname_i = f"{audio_path.stem} - instrumental (deux).wav"
-        if stop_check:
-            stop_check()
-        path_v = _write_wave(out_dir, fname_v, voc_d)
-        cb("write.vocals_deux", 97)
-        if stop_check:
-            stop_check()
-        path_i = _write_wave(out_dir, fname_i, inst_d)
-        cb("write.instrumental_deux", 98)
-        stems_out.extend([path_v.name, path_i.name])
-
-    channel_count = waveform.shape[0]
-    channel_specs: list[tuple[int, str, int, int]] = []
-    if channel_count >= 2:
-        channel_specs = [(0, "left", 2, 49), (1, "right", 51, 99)]
-    else:
-        # mono: use most of the range so the bar still progresses smoothly
-        channel_specs = [(0, "left", 2, 99)]
-
-    need_vocal_pass = ("vocals" in remaining_stems) or any(s in remaining_stems for s in ["drums", "bass", "other", "guitar"])
-    need_instrumental_model = "instrumental" in remaining_stems
-
-    if remaining_stems:
-        channel_stems: dict[str, list[torch.Tensor]] = {}
-
-        def map_channel_pct(local_pct: float, start: int, end: int) -> int:
-            """
-            Convert a channel-local percent or fraction into an overall percent.
-
-            If ``local_pct`` is in [0, 1], treat it as a fraction; otherwise treat
-            it as a percent in [0, 100].
-            """
-            span = max(1, end - start)
-            if 0.0 <= local_pct <= 1.0:
-                scaled = local_pct
-            else:
-                scaled = max(0.0, min(100.0, local_pct)) / 100
-            return start + int(span * scaled)
-
-        def process_channel(idx: int, label: str, start: int, end: int) -> None:
-            if idx >= channel_count:
-                return
-            chan_wave = waveform[idx : idx + 1]
-            chan_outputs: dict[str, torch.Tensor] = {}
-
-            def ch(stage: str, local_pct: float) -> None:
-                overall = map_channel_pct(local_pct, start, end)
-                cb(f"{label}.{stage}", overall)
-
-            ch("start", 0)
-            inst_wave: Optional[torch.Tensor] = None
-            vocals_wave: Optional[torch.Tensor] = None
-
-            if need_vocal_pass:
-                ch("split_vocals.start", 2)
-
-                def _cb(frac: float) -> None:
-                    ch("vocals", 5 + (frac * 70))
-
-                if stop_check:
-                    stop_check()
-                voc, inst = manager.split_vocals(ensure_stereo(chan_wave), SEGMENT, OVERLAP, progress_cb=_cb)
-                vocals_wave = voc
-                inst_wave = inst
-                ch("split_vocals.done", 78)
-                if "vocals" in remaining_stems:
-                    chan_outputs["vocals"] = voc[:1]
-                    ch("write.vocals", 82)
-            else:
-                inst_wave = chan_wave
-
-            def _run_stem_model(
-                model: StemModel,
-                wave: torch.Tensor,
-                progress_cb: Optional[Callable[[float], None]] = None,
-            ) -> torch.Tensor:
-                """Normalize tensor shape/device for model expectations."""
-                prefer_stereo = getattr(model.net, "stereo", True) if model.net is not None else True
-
-                def _normalize_waveform_input(target_model: StemModel, tensor: torch.Tensor) -> torch.Tensor:
-                    prepared = ensure_stereo(tensor) if prefer_stereo else ensure_mono(tensor)
-                    if prepared.dim() == 2:
-                        prepared = prepared.unsqueeze(0)
-                    return prepared.to(target_model.device)
-
-                def _call_model(prepared: torch.Tensor) -> torch.Tensor:
-                    try:
-                        with torch.no_grad():
-                            pred_out = model(prepared)
-                    except RuntimeError as exc:
-                        if model.device.type == "mps" and ("MPSGaph" in str(exc) or "MPSGraph" in str(exc)):
-                            logger.error("MPSGraph failed and CPU fallback is disabled; aborting task")
-                            raise AppError(ErrorCode.MPS_UNAVAILABLE, "Metal execution failed; CPU fallback disabled.")
-                        raise
-
-                    pred_out = pred_out if pred_out is not None else prepared
-
-                    if pred_out.dim() == 2:
-                        pred_out = pred_out[:, None, :]
-                    elif pred_out.dim() == 3 and pred_out.shape[1] not in (1, prepared.shape[1]):
-                        pred_out = pred_out.permute(1, 0, 2)
-
-                    pred_out = pred_out[..., : prepared.shape[-1]]
-                    if pred_out.dim() == 3 and pred_out.shape[0] == 1:
-                        pred_out = pred_out[0]
-                    return pred_out
-
-                if model.expects_waveform:
-                    prepared = _normalize_waveform_input(model, wave)
-
-                    length = prepared.shape[-1]
-                    # The Roformer-based waveform models can exhaust memory on long tracks.
-                    # Run them in chunks to keep attention buffer sizes manageable.
-                    step = max(1, SEGMENT - OVERLAP)
-                    if length <= SEGMENT:
-                        if stop_check:
-                            stop_check()
-                        pred_full = _call_model(prepared)
-                        if progress_cb:
-                            progress_cb(1.0)
-                        return pred_full
-
-                    acc: Optional[torch.Tensor] = None
-                    counts = torch.zeros((1, length), device=model.device, dtype=prepared.dtype)
-
-                    for start_idx in range(0, length, step):
-                        if stop_check:
-                            stop_check()
-                        end_idx = min(start_idx + SEGMENT, length)
-                        seg = prepared[..., start_idx:end_idx]
-                        if seg.shape[-1] < SEGMENT:
-                            padded = torch.zeros(
-                                (prepared.shape[0], prepared.shape[1], SEGMENT),
-                                device=model.device,
-                                dtype=prepared.dtype,
-                            )
-                            padded[..., : seg.shape[-1]] = seg
-                        else:
-                            padded = seg
-
-                        pred_seg = _call_model(padded)
-                        trimmed = pred_seg[..., : seg.shape[-1]]
-
-                        if acc is None:
-                            acc = torch.zeros(
-                                (trimmed.shape[0], length),
-                                device=model.device,
-                                dtype=trimmed.dtype,
-                            )
-
-                        acc[:, start_idx : start_idx + trimmed.shape[-1]] += trimmed
-                        counts[:, start_idx : start_idx + trimmed.shape[-1]] += 1
-
-                        if progress_cb:
-                            progress_cb(min(1.0, end_idx / length))
-
-                    if acc is None:
-                        raise AppError(ErrorCode.MODEL_MISSING, "Model failed to produce output.")
-
-                    denom = counts.clamp_min(1)
-                    return acc / denom
-                prepared = ensure_stereo(wave).to(model.device)
-                return model(prepared)
-
-            if need_instrumental_model:
-                ch("instrumental.start", 0.0)
-                inst_model = manager.instrumental
-                use_wave = inst_wave if inst_wave is not None else chan_wave
-
-                def _inst_progress(frac: float) -> None:
-                    # map chunk progress across the full channel span
-                    ch("instrumental.progress", frac)
-
-                if stop_check:
-                    stop_check()
-                inst_pred = _run_stem_model(inst_model, use_wave, progress_cb=_inst_progress)
-                chan_outputs["instrumental"] = inst_pred[:1] if inst_pred.shape[0] > 1 else inst_pred
-                ch("instrumental.done", 1.0)
-
-            for stem_name in ["drums", "bass", "other", "guitar"]:
-                if stem_name not in remaining_stems:
-                    continue
-                ch(f"{stem_name}.start", 90)
-                inst_model = getattr(manager, stem_name)
-                use_wave = inst_wave if inst_wave is not None else chan_wave
-                if stop_check:
-                    stop_check()
-                if inst_model.expects_waveform:
-                    pred = _run_stem_model(inst_model, use_wave)
-                else:
-                    pred = inst_model(ensure_stereo(use_wave))
-                chan_outputs[stem_name] = pred[:1] if pred.shape[0] > 1 else pred
-                ch(f"{stem_name}.done", 96)
-
-            ch("channel.done", 100)
-            for stem_name, tensor in chan_outputs.items():
-                channel_stems.setdefault(stem_name, []).append(tensor)
-            # free channel-specific references promptly
-            del chan_outputs, inst_wave, vocals_wave
-
-        for idx, label, start, end in channel_specs:
-            process_channel(idx, label, start, end)
-
-        for stem_name in remaining_stems:
-            tensors = channel_stems.get(stem_name)
-            if not tensors:
-                continue
-            combined = torch.cat(tensors, dim=0)
-            fname = f"{audio_path.stem} - {stem_name}.wav"
-            if stop_check:
-                stop_check()
-            written = _write_wave(out_dir, fname, combined)
-            stems_out.append(written.name)
-            cb(f"write.{stem_name}", 98)
-
-    cb("merge.done", 99)
-    return stems_out
-
-
-# ── API endpoints ─────────────────────────────────────────────────────────--
-
-@app.post("/upload")
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), stems: str = Form("vocals")):
-    task_id = str(uuid.uuid4())
-    pause_evt = threading.Event()
-    stop_evt = threading.Event()
-    controls[task_id] = {"pause": pause_evt, "stop": stop_evt}
-    stem_list = [s for s in stems.split(",") if s]
-    logger.info("upload received task=%s filename=%s stems=%s", task_id, file.filename, stem_list)
-    try:
-        path = UPLOAD_DIR / file.filename
-        path.parent.mkdir(exist_ok=True, parents=True)
-        with path.open("wb") as f:
-            content = await file.read()
-            f.write(content)
-        logger.info("persisted upload %s (%s bytes) to %s", file.filename, len(content), path)
-        logger.debug("persisted upload bytes head=%s tail=%s", content[:32], content[-32:])
-    except Exception as exc:
-        logger.exception("failed to persist upload %s", file.filename)
-        raise AppError(ErrorCode.UPLOAD_FAILED, f"Failed to persist upload: {exc}").to_http()
-
-    expected: list[str] = []
-    for s in stem_list:
-        if s == "deux":
-            expected.append(f"{Path(file.filename).stem} - vocals (deux).wav")
-            expected.append(f"{Path(file.filename).stem} - instrumental (deux).wav")
+def _normalize_prediction(pred: torch.Tensor, input_channels: int, chunk_len: int) -> torch.Tensor:
+    if pred.dim() == 2:
+        if pred.shape[0] in (1, input_channels):
+            pred = pred.unsqueeze(0)
         else:
-            expected.append(f"{Path(file.filename).stem} - {s}.wav")
+            pred = pred[:, None, :]
+    elif pred.dim() == 3 and pred.shape[1] not in (1, input_channels):
+        pred = pred.permute(1, 0, 2)
+    pred = pred[..., :chunk_len]
+    if pred.shape[1] == 1 and input_channels == 2:
+        pred = pred.repeat(1, 2, 1)
+    return pred
 
-    progress[task_id] = {"stage": "ready", "pct": 0}
-    tasks[task_id] = {
-        "dir": None,
-        "stems": expected,
-        "controls": controls[task_id],
-        "conv_src": None,
-        "orig_src": str(path),
-        "orig_name": file.filename,
-        "stem_list": stem_list,
-        "status": "ready",
-        "structure_mode": settings.structure_mode,
-        "staging_dir": None,
-        "zip_target": None,
+
+def _prepare_model_input(waveform: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, int]:
+    original_channels = waveform.shape[0]
+    if original_channels == 1:
+        waveform = waveform.repeat(2, 1)
+    elif original_channels > 2:
+        waveform = waveform[:2]
+        original_channels = 2
+    return waveform.to(device=device, dtype=torch.float32), original_channels
+
+
+def _restore_output_channels(tensor: torch.Tensor, original_channels: int) -> torch.Tensor:
+    if original_channels <= 1 and tensor.shape[0] > 1:
+        return tensor.mean(dim=0, keepdim=True)
+    return tensor[: max(1, original_channels)]
+
+
+def _map_fraction(start_pct: int, end_pct: int, fraction: float) -> int:
+    fraction = max(0.0, min(1.0, fraction))
+    return int(round(start_pct + ((end_pct - start_pct) * fraction)))
+
+
+def _cleanup_path(path: Path | None) -> None:
+    if path is None or not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        with contextlib.suppress(Exception):
+            path.unlink()
+
+
+def _safe_mps_empty_cache() -> None:
+    if getattr(torch, "mps", None) and hasattr(torch.mps, "empty_cache"):
+        with contextlib.suppress(Exception):
+            torch.mps.empty_cache()
+
+
+def _physical_memory_bytes() -> int:
+    if sys.platform == "darwin":
+        with contextlib.suppress(Exception):
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return max(0, int((result.stdout or "").strip() or "0"))
+    for key in ("SC_PHYS_PAGES", "SC_PAGE_SIZE"):
+        if not hasattr(os, "sysconf") or key not in os.sysconf_names:
+            break
+    else:
+        with contextlib.suppress(Exception):
+            return int(os.sysconf("SC_PHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+    return 0
+
+
+def _process_rss_bytes() -> int:
+    with contextlib.suppress(Exception):
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return int((result.stdout or "0").strip() or "0") * 1024
+    with contextlib.suppress(Exception):
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if value > 0:
+            if sys.platform == "darwin":
+                return int(value)
+            return int(value) * 1024
+    return 0
+
+
+def _process_rss_limit_bytes() -> int:
+    physical = _physical_memory_bytes()
+    if physical > 0:
+        return max(2 * 1024 * 1024 * 1024, int(physical * PROCESS_RSS_HEADROOM_RATIO))
+    return PROCESS_RSS_LIMIT_FALLBACK_BYTES
+
+
+def _mps_memory_limit_bytes() -> int | None:
+    if not getattr(torch, "mps", None):
+        return None
+    with contextlib.suppress(Exception):
+        if hasattr(torch.mps, "recommended_max_memory"):
+            recommended = int(torch.mps.recommended_max_memory())
+            if recommended > 0:
+                return int(recommended * MPS_MEMORY_HEADROOM_RATIO)
+    return None
+
+
+def _mps_allocated_bytes() -> int:
+    if not getattr(torch, "mps", None):
+        return 0
+    with contextlib.suppress(Exception):
+        if hasattr(torch.mps, "current_allocated_memory"):
+            return int(torch.mps.current_allocated_memory())
+    with contextlib.suppress(Exception):
+        if hasattr(torch.mps, "driver_allocated_memory"):
+            return int(torch.mps.driver_allocated_memory())
+    return 0
+
+
+def _load_roformer_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
+    if MelBandRoformer is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Roformer import failed: {_model_import_error}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        cfg = yaml.unsafe_load(handle)
+    model = MelBandRoformer(**(cfg.get("model") or {}))
+    state = torch.load(model_path, map_location="cpu")
+    model.load_state_dict(state.get("state_dict", state), strict=False)
+    return model.to(device).eval()
+
+
+def select_device() -> torch.device:
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return torch.device("mps")
+    logger.warning("MPS unavailable; falling back to CPU")
+    return torch.device("cpu")
+
+
+class ModelManager:
+    def __init__(self) -> None:
+        self.device = select_device()
+        self.cache: dict[str, torch.nn.Module] = {}
+
+    def _resolve_model_path(self, filename: str) -> Path:
+        search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+        for base_dir in MODEL_SEARCH_DIRS:
+            for search_name in search_names:
+                match = _locate_case_insensitive(base_dir / search_name)
+                if match:
+                    return match
+        raise AppError(ErrorCode.MODEL_MISSING, f"Missing model file: {filename}")
+
+    def _resolve_config_path(self, filename: str) -> Path:
+        found = _locate_case_insensitive(CONFIG_DIR / filename)
+        if found:
+            return found
+        raise AppError(ErrorCode.CONFIG_MISSING, f"Missing config file: {filename}")
+
+    def get(self, name: str) -> torch.nn.Module:
+        if name in self.cache:
+            return self.cache[name]
+        if name not in MODEL_SPECS:
+            raise AppError(ErrorCode.INVALID_REQUEST, f"Unknown model: {name}")
+        spec = MODEL_SPECS[name]
+        model_path = self._resolve_model_path(spec.filename)
+        config_path = self._resolve_config_path(spec.config)
+        model = _load_roformer_model(model_path, config_path, self.device)
+        self.cache[name] = model
+        return model
+
+
+_model_manager: ModelManager | None = None
+_model_manager_lock = threading.Lock()
+
+
+def _get_model_manager() -> ModelManager:
+    global _model_manager
+    with _model_manager_lock:
+        if _model_manager is None:
+            _model_manager = ModelManager()
+        return _model_manager
+
+
+def _run_model_chunks(
+    model: torch.nn.Module,
+    waveform: torch.Tensor,
+    segment: int,
+    progress_cb: Callable[[float], None],
+    stop_check: Callable[[], None],
+) -> torch.Tensor:
+    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
+    input_channels = working.shape[0]
+    length = working.shape[1]
+    step = max(1, int(segment * (1.0 - OVERLAP_RATIO)))
+    acc: torch.Tensor | None = None
+    counts = torch.zeros((1, length), device=working.device, dtype=working.dtype)
+
+    progress_cb(0.0)
+    with torch.no_grad():
+        for start in range(0, length, step):
+            stop_check()
+            end = min(start + segment, length)
+            chunk = working[:, start:end]
+            if chunk.shape[1] < segment:
+                padded = torch.zeros((input_channels, segment), device=working.device, dtype=working.dtype)
+                padded[:, : chunk.shape[1]] = chunk
+            else:
+                padded = chunk
+            pred = model(padded.unsqueeze(0))[0]
+            pred = _normalize_prediction(pred, input_channels, chunk.shape[1])
+            if acc is None:
+                acc = torch.zeros(
+                    (pred.shape[0], pred.shape[1], length),
+                    device=working.device,
+                    dtype=pred.dtype,
+                )
+            acc[:, :, start : start + pred.shape[-1]] += pred
+            counts[:, start : start + pred.shape[-1]] += 1
+            progress_cb(end / max(1, length))
+
+    if acc is None:
+        raise AppError(ErrorCode.SEPARATION_FAILED, "Model produced no output.")
+
+    denom = counts.clamp_min(1).unsqueeze(0)
+    restored = acc / denom
+    outputs = []
+    for index in range(restored.shape[0]):
+        outputs.append(_restore_output_channels(restored[index], original_channels))
+    return torch.stack(outputs, dim=0)
+
+
+app = FastAPI()
+app.state.runtime_status_provider = None
+tasks_lock = threading.RLock()
+tasks: dict[str, dict[str, Any]] = {}
+task_queue: queue.Queue[str] = queue.Queue()
+model_download_lock = threading.RLock()
+model_download_state: dict[str, Any] = {
+    "status": "idle",
+    "pct": 0,
+    "step": "",
+    "current_model": "",
+    "downloaded_bytes": 0,
+    "total_bytes": 0,
+    "eta_seconds": None,
+    "started_at": None,
+    "error": "",
+}
+model_download_thread: threading.Thread | None = None
+
+
+def set_runtime_status_provider(provider: Callable[[], dict[str, Any]] | None) -> None:
+    app.state.runtime_status_provider = provider
+
+
+def _runtime_status_payload() -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "windowed": False,
+        "preferred_port": 8000,
+        "current_port": 8000,
+        "client_url": "http://127.0.0.1:8000/",
+        "lan_url": "",
+        "lan_local_url": "",
+        "lan_display": "",
+        "lan_local_display": "",
+        "network_name": "",
+        "port_conflict": False,
+        "show_port_notice": False,
+        "kill_command": "",
     }
-    return {"task_id": task_id, "stems": expected, "status": "ready"}
+    provider = getattr(app.state, "runtime_status_provider", None)
+    if callable(provider):
+        try:
+            raw = provider()
+        except Exception:
+            logger.debug("runtime status provider failed", exc_info=True)
+        else:
+            if isinstance(raw, dict):
+                payload.update(raw)
+    return payload
 
 
-@app.post("/start/{task_id}")
-async def start_task(task_id: str):
-    info = tasks.get(task_id)
-    if not info:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    if info.get("status") in {"queued", "running", "preparing"}:
-        return {"task_id": task_id, "status": info.get("status")}
-    orig_src = Path(info.get("orig_src", ""))
-    if not orig_src.exists():
-        raise AppError(ErrorCode.UPLOAD_FAILED, "Source missing; please re-upload.").to_http()
-    plan = resolve_output_plan(info, structure_mode=settings.structure_mode)
-    out_dir = plan["staging_dir"] or plan["deliver_dir"]
-    tasks[task_id]["dir"] = str(plan["deliver_dir"])
-    tasks[task_id]["structure_mode"] = plan["structure_mode"]
-    tasks[task_id]["staging_dir"] = str(plan["staging_dir"])
-    tasks[task_id]["zip_target"] = str(plan["zip_target"]) if plan.get("zip_target") else None
-    tasks[task_id]["status"] = "queued"
-    stem_list = info.get("stem_list") or []
-    logger.info("starting task %s on demand", task_id)
-    _queue_processing(task_id, Path(out_dir), stem_list)
-    return {"task_id": task_id, "status": "queued"}
+def _settings_response_payload(request: Request | None = None) -> dict[str, Any]:
+    payload = _compat_settings_payload()
+    if _is_remote_client(request):
+        payload["lan_passcode"] = ""
+    payload["runtime"] = _runtime_status_payload()
+    return payload
 
 
-@app.get("/progress/{task_id}")
-async def progress_stream(task_id: str):
-    async def event_generator():
-        def _json_safe(val: object) -> object:
-            return str(val) if isinstance(val, Path) else val
-
-        last = None
-        while True:
-            info = progress.get(task_id, {"stage": "queued", "pct": 0})
-            current = (info["stage"], info["pct"])
-            if current != last:
-                if info.get("stage") == "stopped":
-                    payload = {
-                        "stage": "stopped",
-                        "pct": 0,
-                        "stems": info.get("stems"),
-                        "out_dir": _json_safe(info.get("out_dir")),
-                        "zip": _json_safe(info.get("zip")),
-                    }
-                    yield {"event": "message", "data": json.dumps(payload)}
-                elif info.get("pct", 0) < 0:
-                    yield {"event": "error", "data": errors.get(task_id, "processing failed")}
-                else:
-                    payload = {
-                        "stage": info["stage"],
-                        "pct": info["pct"],
-                        "stems": info.get("stems"),
-                        "out_dir": _json_safe(info.get("out_dir")),
-                        "zip": _json_safe(info.get("zip")),
-                    }
-                    yield {"event": "message", "data": json.dumps(payload)}
-                last = current
-                if info.get("stage") == "stopped" or info.get("pct", 0) >= 100 or info.get("pct", 0) < 0:
-                    break
-            await asyncio.sleep(0.5)
-
-    return EventSourceResponse(event_generator())
+def _set_model_download_state(**patch: Any) -> None:
+    with model_download_lock:
+        model_download_state.update(patch)
 
 
-@app.get("/ready")
-async def ready_status():
+def _selected_missing_models(selection: list[str] | None = None) -> list[str]:
+    available = {key for key in MODEL_SPECS}
+    if selection:
+        requested = [item for item in selection if item in available]
+    else:
+        requested = list(MODEL_SPECS)
+    return [item for item in requested if not _model_file_exists(MODEL_SPECS[item].filename)]
+
+
+def _public_model_download_status() -> dict[str, Any]:
+    with model_download_lock:
+        payload = dict(model_download_state)
+    missing = sorted(_selected_missing_models())
+    prompt_state = str(_compat_settings_payload().get("model_prompt_state") or MODEL_PROMPT_PENDING)
+    payload.update(
+        {
+            "missing": missing,
+            "models_dir": str(MODEL_DIR),
+            "prompt_state": MODEL_PROMPT_COMPLETE if not missing else prompt_state,
+        }
+    )
+    return payload
+
+
+def _run_model_download(selection: list[str] | None = None) -> None:
+    missing = _selected_missing_models(selection)
+    if not missing:
+        _set_model_download_state(
+            status="done",
+            pct=100,
+            step="models ready",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=0,
+            error="",
+        )
+        _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
+        return
+
+    _set_model_download_state(
+        status="downloading",
+        pct=1,
+        step="preparing downloads",
+        current_model="",
+        downloaded_bytes=0,
+        total_bytes=0,
+        eta_seconds=None,
+        started_at=time.time(),
+        error="",
+    )
+    _set_compat_settings({"model_prompt_state": MODEL_PROMPT_ACCEPTED})
+
+    def _progress(update: dict[str, Any]) -> None:
+        tag = str(update.get("tag") or "")
+        filename = str(update.get("filename") or "")
+        pretty = tag or filename
+        downloaded_bytes = int(update.get("downloaded_bytes") or 0)
+        total_bytes = int(update.get("total_bytes") or 0)
+        with model_download_lock:
+            started_at = model_download_state.get("started_at")
+        eta_seconds: int | None = None
+        if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
+            elapsed = max(1.0, time.time() - float(started_at))
+            remaining = max(0, total_bytes - downloaded_bytes)
+            eta_seconds = int(round(remaining / max(downloaded_bytes / elapsed, 1)))
+        _set_model_download_state(
+            status="downloading",
+            pct=int(update.get("pct") or 0),
+            step=pretty,
+            current_model=pretty,
+            downloaded_bytes=downloaded_bytes,
+            total_bytes=total_bytes,
+            eta_seconds=eta_seconds,
+            error="",
+        )
+
+    try:
+        download_to(MODEL_DIR.parent, missing, progress_cb=_progress)
+    except Exception as exc:
+        logger.exception("model download failed")
+        _set_model_download_state(
+            status="error",
+            pct=-1,
+            step="download failed",
+            current_model="",
+            eta_seconds=None,
+            error=str(exc),
+        )
+        return
+
+    _set_model_download_state(
+        status="done",
+        pct=100,
+        step="models ready",
+        current_model="",
+        eta_seconds=0,
+        error="",
+    )
+    _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
+
+
+def _start_model_download(selection: list[str] | None = None) -> dict[str, Any]:
+    global model_download_thread
+    with model_download_lock:
+        if model_download_thread is not None and model_download_thread.is_alive():
+            return _public_model_download_status()
+        model_download_thread = threading.Thread(target=_run_model_download, args=(selection,), daemon=True)
+        model_download_thread.start()
+    return _public_model_download_status()
+
+
+def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     return {
-        "ready": app_ready_event.is_set(),
-        "checking": app_ready_state.get("checking", False),
-        "models_missing": app_ready_state.get("models_missing", []),
+        "id": task["id"],
+        "name": task["original_name"],
+        "mode": task["mode"],
+        "output_format": task["output_format"],
+        "video_handling": task["video_handling"],
+        "delivery": str(task.get("delivery") or "folder"),
+        "status": task["status"],
+        "stage": task["stage"],
+        "pct": task["pct"],
+        "eta_seconds": task["eta_seconds"],
+        "out_dir": task["out_dir"],
+        "outputs": list(task["outputs"]),
+        "error": task["error"],
+        "version": task["version"],
     }
 
 
-def _detect_output(out_dir: Path, stems: list[str], zip_hint: str | None = None) -> tuple[bool, str | None]:
-    """
-    Determine whether an export is complete based on output artifacts.
-
-    Returns a tuple of (is_complete, zip_path_if_found).
-    """
-
-    def _all_stems_present() -> bool:
-        if not stems:
-            return False
-        return all((out_dir / stem).exists() for stem in stems)
-
-    zip_path: Path | None = None
-    if zip_hint:
-        zp = Path(zip_hint)
-        if zp.exists():
-            zip_path = zp
-    if not out_dir.exists() and not zip_path:
-        return False, None
-
-    if out_dir.is_file() and out_dir.suffix.lower() == ".zip":
-        zip_path = out_dir
-        out_dir = out_dir.parent
-
-    if _all_stems_present():
-        return True, str(zip_path) if zip_path else None
-
-    if zip_path and Path(zip_path).exists():
-        return True, str(zip_path)
-
-    zips = list(out_dir.glob("*.zip"))
-    if len(zips) == 1 and zips[0].exists():
-        return True, str(zips[0])
-
-    return False, None
+def _require_task(task_id: str) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        return task
 
 
-@app.post("/rehydrate_tasks")
-async def rehydrate_tasks(request: Request):
-    """
-    Reconcile client-side tasks with on-disk outputs.
+def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
+    started_at = task.get("started_at")
+    if started_at is None or pct < 1 or pct >= 100:
+        return 0 if pct >= 100 else None
+    now = time.time()
+    elapsed = max(1.0, now - started_at)
+    mode = str(task.get("mode") or "")
+    stage_text = str(task.get("stage") or "").lower()
+    stage_started_at = task.get("stage_started_at")
+    stage_elapsed = max(0.0, now - float(stage_started_at or started_at))
+    audio_seconds = float(task.get("audio_seconds") or 0.0)
+    export_outputs = 2 if mode in {"both_deux", "both_separate"} else 1
+    export_budget = ETA_EXPORT_PER_OUTPUT_SECONDS * export_outputs
+    raw_estimate: float | None = None
 
-    Any task without completed outputs is omitted so abandoned/force-quit jobs
-    do not reappear as queued entries.
-    """
+    if "exporting" in stage_text:
+        export_progress = max(0.0, min(1.0, (pct - 92) / 7.0))
+        raw_estimate = max(1.0, export_budget * (1.0 - export_progress))
+        return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
 
-    payload: dict[str, Any] = await request.json()
-    incoming = payload.get("tasks", [])
-    if not isinstance(incoming, list):
-        raise AppError(ErrorCode.INVALID_REQUEST, "tasks payload must be a list").to_http()
+    if mode == "both_separate" and audio_seconds > 0:
+        vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
+        instrumental_total = _predict_model_runtime_seconds("instrumental", audio_seconds)
+        if vocals_total is not None or instrumental_total is not None:
+            vocals_total = float(vocals_total or 0.0)
+            instrumental_total = float(instrumental_total or 0.0)
+            if "instrumental" in stage_text and instrumental_total > 0:
+                raw_estimate = max(0.0, instrumental_total - stage_elapsed) + export_budget
+            elif "vocals" in stage_text and vocals_total > 0:
+                raw_estimate = max(0.0, vocals_total - stage_elapsed) + instrumental_total + export_budget
+            else:
+                raw_estimate = max(
+                    0.0,
+                    ETA_PREP_OVERHEAD_SECONDS + vocals_total + instrumental_total + export_budget - elapsed,
+                )
 
-    refreshed: list[dict[str, Any]] = []
-    for raw in incoming:
-        if not isinstance(raw, dict):
-            continue
-        out_dir = raw.get("out_dir")
-        stems = raw.get("stems") or []
-        zip_hint = raw.get("zip")
-        if not out_dir:
-            continue
-        complete, zip_path = _detect_output(Path(out_dir), stems, zip_hint)
-        if not complete:
-            continue
-        refreshed.append(
+    if audio_seconds > 0:
+        stage_model_key: str | None = None
+        if "running vocals model" in stage_text:
+            stage_model_key = "vocals"
+        elif "running instrumental model" in stage_text:
+            stage_model_key = "instrumental"
+        elif "running deux model" in stage_text:
+            stage_model_key = "deux"
+        if stage_model_key is not None:
+            stage_total = _predict_model_runtime_seconds(stage_model_key, audio_seconds)
+            if stage_total is not None:
+                stage_estimate = max(0.0, float(stage_total) - stage_elapsed) + export_budget
+                raw_estimate = stage_estimate if raw_estimate is None else ((raw_estimate * 0.72) + (stage_estimate * 0.28))
+
+    progress_fraction = _stage_progress_fraction(mode, stage_text, pct)
+    if progress_fraction is not None and progress_fraction >= 0.08 and stage_elapsed >= 4.0:
+        stage_progress_remaining = max(0.0, (stage_elapsed / progress_fraction) - stage_elapsed)
+        if mode == "both_separate" and "running vocals model" in stage_text:
+            next_stage_total = _predict_model_runtime_seconds("instrumental", audio_seconds) or stage_progress_remaining
+            progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
+        else:
+            progress_estimate = stage_progress_remaining + export_budget
+        raw_estimate = progress_estimate if raw_estimate is None else ((raw_estimate * 0.7) + (progress_estimate * 0.3))
+
+    predicted_total = task.get("predicted_total_seconds")
+    if isinstance(predicted_total, (int, float)) and float(predicted_total) > 0:
+        history_estimate = max(0.0, ETA_PREP_OVERHEAD_SECONDS + float(predicted_total) + export_budget - elapsed)
+        raw_estimate = history_estimate if raw_estimate is None else ((raw_estimate * 0.78) + (history_estimate * 0.22))
+
+    if raw_estimate is None and pct >= 8 and elapsed >= 6:
+        raw_estimate = max(0.0, (elapsed / max(pct / 100.0, 0.01)) - elapsed)
+
+    return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
+
+
+def _record_eta_sample(model_key: str, audio_seconds: float, elapsed_seconds: float) -> None:
+    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0 or elapsed_seconds <= 0:
+        return
+    with eta_history_lock:
+        entries = list(eta_history.get(model_key) or [])
+        entries.append(
             {
-                "id": raw.get("id"),
-                "name": raw.get("name"),
-                "stage": "done",
-                "pct": 100,
-                "stems": stems,
-                "out_dir": out_dir,
-                "zip": zip_path,
+                "audio_seconds": float(audio_seconds),
+                "elapsed_seconds": float(elapsed_seconds),
             }
         )
-    return {"tasks": refreshed}
+        eta_history[model_key] = entries[-ETA_HISTORY_LIMIT:]
+        _save_eta_history(eta_history)
 
 
-@app.post("/rerun/{task_id}")
-async def rerun(task_id: str):
-    old = tasks.get(task_id)
-    if not old:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    conv_src = Path(old.get("conv_src", ""))
-    stem_list = old.get("stem_list") or []
-    logger.info("rerun requested for task %s", task_id)
-    if not conv_src.exists() or not stem_list:
-        raise AppError(ErrorCode.RERUN_PREREQ_MISSING, "Missing source or stems for rerun").to_http(409)
-
-    new_id = str(uuid.uuid4())
-    controls[new_id] = {"pause": threading.Event(), "stop": threading.Event()}
-    plan = resolve_output_plan(old, structure_mode=settings.structure_mode)
-    out_dir = plan["staging_dir"] or plan["deliver_dir"]
-    expected: list[str] = []
-    for s in stem_list:
-        if s == "deux":
-            expected.append(f"{conv_src.stem} - vocals (deux).wav")
-            expected.append(f"{conv_src.stem} - instrumental (deux).wav")
-        else:
-            expected.append(f"{conv_src.stem} - {s}.wav")
-
-    progress[new_id] = {"stage": "queued", "pct": 0}
-    tasks[new_id] = {
-        "dir": str(plan["deliver_dir"]),
-        "stems": expected,
-        "controls": controls[new_id],
-        "conv_src": str(conv_src),
-        "orig_src": old.get("orig_src"),
-        "orig_name": old.get("orig_name"),
-        "stem_list": stem_list,
-        "zip": old.get("zip"),
-        "status": "queued",
-        "structure_mode": plan["structure_mode"],
-        "staging_dir": str(plan["staging_dir"]),
-        "zip_target": str(plan["zip_target"]) if plan.get("zip_target") else None,
-    }
-    _queue_processing(new_id, Path(out_dir), stem_list)
-    return {"task_id": new_id, "stems": expected}
+def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> float | None:
+    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0:
+        return None
+    with eta_history_lock:
+        entries = list(eta_history.get(model_key) or [])
+    if not entries:
+        return None
+    ranked = sorted(
+        entries,
+        key=lambda entry: abs(float(entry.get("audio_seconds") or 0.0) - audio_seconds),
+    )[: min(5, len(entries))]
+    if not ranked:
+        return None
+    weighted_total = 0.0
+    weight_sum = 0.0
+    scaled_predictions: list[float] = []
+    for entry in ranked:
+        sample_audio = max(1.0, float(entry.get("audio_seconds") or 0.0))
+        sample_elapsed = max(1.0, float(entry.get("elapsed_seconds") or 0.0))
+        distance = abs(sample_audio - audio_seconds)
+        weight = 1.0 / max(1.0, distance)
+        ratio = sample_elapsed / sample_audio
+        weighted_total += ratio * weight
+        weight_sum += weight
+        scaled_predictions.append(max(1.0, sample_elapsed * (audio_seconds / sample_audio)))
+    if weight_sum <= 0:
+        return None
+    weighted_prediction = max(1.0, audio_seconds * (weighted_total / weight_sum))
+    scaled_predictions.sort()
+    median_prediction = scaled_predictions[len(scaled_predictions) // 2]
+    return max(1.0, (median_prediction * 0.7) + (weighted_prediction * 0.3))
 
 
-@app.get("/settings")
-async def get_settings():
-    return settings.as_dict()
+def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
+    if audio_seconds <= 0:
+        return None
+    if mode == "vocals":
+        return _predict_model_runtime_seconds("vocals", audio_seconds)
+    if mode == "instrumental":
+        return _predict_model_runtime_seconds("instrumental", audio_seconds)
+    if mode == "both_deux":
+        return _predict_model_runtime_seconds("deux", audio_seconds)
+    if mode == "both_separate":
+        vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
+        instrumental = _predict_model_runtime_seconds("instrumental", audio_seconds)
+        if vocals is None and instrumental is None:
+            return None
+        return float(vocals or 0.0) + float(instrumental or 0.0)
+    return None
 
 
-@app.post("/settings")
-async def update_settings(request: Request):
-    payload = await request.json()
-    output_root = payload.get("output_root")
-    structure_mode = payload.get("structure_mode")
-    try:
-        settings.update(
-            output_root=output_root,
-            structure_mode=structure_mode,
-        )
-    except AppError as exc:
-        settings.output_root = DEFAULT_OUTPUT_ROOT
-        _ensure_dir(DEFAULT_OUTPUT_ROOT)
-        logger.warning("invalid settings update, resetting output root to default: %s", exc.message)
-        raise AppError(exc.code, "folder doesn't exist").to_http(400)
-    _ensure_dir(settings.output_root)
-    return settings.as_dict()
+def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | None:
+    stage = str(stage_text or "").lower()
+    clamped = max(0, min(100, int(pct)))
+    if "running vocals model" in stage:
+        if mode == "both_separate":
+            return max(0.0, min(1.0, (clamped - 6) / 42.0))
+        return max(0.0, min(1.0, (clamped - 6) / 82.0))
+    if "running instrumental model" in stage:
+        if mode == "both_separate":
+            return max(0.0, min(1.0, (clamped - 50) / 40.0))
+        return max(0.0, min(1.0, (clamped - 6) / 82.0))
+    if "running deux model" in stage:
+        return max(0.0, min(1.0, (clamped - 6) / 84.0))
+    if "exporting" in stage:
+        return max(0.0, min(1.0, (clamped - 92) / 7.0))
+    return None
 
 
-@app.post("/reveal/{task_id}")
-async def reveal_output(task_id: str):
-    info = tasks.get(task_id)
-    if not info:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    out_dir = info.get("dir")
+def _stabilize_eta(task: dict[str, Any], raw_seconds: float | None, *, now: float, stage_text: str) -> int | None:
+    if raw_seconds is None:
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
+        return None
+    raw_seconds = max(0.0, float(raw_seconds))
+    if raw_seconds <= 0:
+        task["eta_finish_at"] = now
+        task["eta_stage"] = stage_text
+        return 0
+    target_finish_at = now + raw_seconds
+    previous_finish_at = task.get("eta_finish_at")
+    previous_stage = str(task.get("eta_stage") or "")
+    if not isinstance(previous_finish_at, (int, float)) or previous_stage != stage_text:
+        finish_at = target_finish_at
+    else:
+        finish_at = float(previous_finish_at)
+        drift = target_finish_at - finish_at
+        if drift < -1.0:
+            finish_at += drift * 0.68
+        elif drift > 6.0:
+            finish_at += drift * 0.22
+        finish_at = max(now + 1.0, finish_at)
+    task["eta_finish_at"] = finish_at
+    task["eta_stage"] = stage_text
+    return max(1, int(round(finish_at - now)))
+
+
+def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
+    with tasks_lock:
+        task = tasks[task_id]
+        previous_pct = int(task.get("pct") or 0)
+        previous_stage = str(task.get("stage") or "")
+        now = time.time()
+        if task["started_at"] is None:
+            task["started_at"] = now
+        if task["status"] not in TERMINAL_STATUSES:
+            task["status"] = "running"
+        if stage != previous_stage or task.get("stage_started_at") is None:
+            task["stage_started_at"] = now
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+        task["stage"] = stage
+        task["pct"] = max(0, min(100, int(pct)))
+        task["eta_seconds"] = _estimate_eta(task, task["pct"])
+        if task["pct"] != previous_pct or stage != previous_stage:
+            task["last_progress_at"] = now
+            task["last_progress_pct"] = task["pct"]
+            task["last_progress_stage"] = stage
+        task["version"] += 1
+
+
+def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
+    with tasks_lock:
+        task = tasks[task_id]
+        task["status"] = "done"
+        task["stage"] = "Done"
+        task["pct"] = 100
+        task["eta_seconds"] = 0
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
+        task["out_dir"] = str(out_dir)
+        task["outputs"] = list(outputs)
+        task["error"] = None
+        task["guard_error"] = None
+        task["finished_at"] = time.time()
+        task["version"] += 1
+        if bool(task.get("cleared")):
+            cleanup_snapshot = dict(task)
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    _prune_terminal_tasks()
+
+
+def _mark_task_error(task_id: str, message: str) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
+    with tasks_lock:
+        task = tasks[task_id]
+        task["status"] = "error"
+        task["stage"] = "Error"
+        task["pct"] = max(0, int(task.get("pct", 0)))
+        task["eta_seconds"] = None
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
+        task["error"] = message
+        task["guard_error"] = None
+        task["finished_at"] = time.time()
+        task["version"] += 1
+        if bool(task.get("cleared")):
+            cleanup_snapshot = dict(task)
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    _prune_terminal_tasks()
+
+
+def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
+    out_dir = task.get("out_dir")
     if not out_dir:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Output not ready").to_http(409)
+        raise AppError(ErrorCode.INVALID_REQUEST, "Output is not ready.")
     out_path = Path(out_dir)
     if not out_path.exists():
-        raise AppError(ErrorCode.INVALID_REQUEST, "Output path missing").to_http(404)
-
-    def _pick_target() -> Path:
-        zip_path = info.get("zip")
-        if zip_path:
-            zp = Path(zip_path)
-            if zp.exists():
-                return zp
-        stems = info.get("stems") or []
-        for stem in stems:
-            candidate = out_path / stem
-            if candidate.exists():
-                return candidate
-        return out_path
-
-    target = _pick_target()
-    select_path = target if target.is_file() else target
-    reveal_dir = target.parent if target.is_file() else target
-    try:
-        if sys.platform.startswith("darwin"):
-            if select_path.is_file():
-                subprocess.Popen(["open", "-R", str(select_path)])
-            else:
-                subprocess.Popen(["open", str(reveal_dir)])
-        elif sys.platform.startswith("win"):
-            if select_path.is_file():
-                subprocess.Popen(["explorer", "/select,", str(select_path)])
-            else:
-                os.startfile(str(reveal_dir))  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", str(reveal_dir)])
-    except Exception as exc:
-        logger.warning("failed to reveal folder %s: %s", reveal_dir, exc)
-        raise AppError(ErrorCode.INVALID_REQUEST, "Unable to open folder").to_http(500)
-    return {"status": "opened", "path": str(select_path if select_path.exists() else reveal_dir)}
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    outputs = [out_path / str(name) for name in (task.get("outputs") or [])]
+    existing_outputs = [path for path in outputs if path.exists()]
+    if outputs and not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    return out_path, existing_outputs
 
 
-def _model_exists(filename: str) -> bool:
-    names: set[str] = {filename}
-    names.update(MODEL_ALIAS_MAP.get(filename, []))
-    for canon, alias_list in MODEL_ALIAS_MAP.items():
-        if filename in alias_list:
-            names.add(canon)
-            names.update(alias_list)
-    for name in names:
-        if _locate_case_insensitive(MODEL_DIR / name):
-            return True
-        if _locate_case_insensitive(Path.home() / "Library/Application Support/stems" / name):
-            return True
+def _download_label(task: dict[str, Any]) -> str:
+    return _safe_stem(str(task.get("original_name") or "stems"))
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    with contextlib.suppress(Exception):
+        return path.expanduser().resolve().is_relative_to(root.expanduser().resolve())
     return False
 
 
-@app.get("/models_status")
-async def models_status():
-    missing = []
-    for _, (fname, _) in MODEL_FILE_MAP.items():
-        if not _model_exists(fname):
-            missing.append(fname)
-    return {"missing": missing}
+def _cleanup_task_runtime(task_id: str, task: dict[str, Any]) -> None:
+    source_path_text = str(task.get("source_path") or "").strip()
+    if source_path_text:
+        source_path = Path(source_path_text).expanduser()
+        if _path_within(source_path, UPLOAD_DIR):
+            _cleanup_path(source_path)
+
+    if ARTWORK_DIR.exists():
+        for candidate in ARTWORK_DIR.glob(f"{task_id}.*"):
+            _cleanup_path(candidate)
+
+    if WORK_DIR.exists():
+        prefix = f"stemsplat_{task_id[:8]}_"
+        for candidate in WORK_DIR.iterdir():
+            if candidate.name.startswith(prefix):
+                _cleanup_path(candidate)
+
+    downloads_dir = RUNTIME_DIR / "downloads"
+    if downloads_dir.exists():
+        for candidate in downloads_dir.glob(f"{task_id}_*"):
+            _cleanup_path(candidate)
+
+    out_dir_text = str(task.get("out_dir") or "").strip()
+    if out_dir_text:
+        out_path = Path(out_dir_text).expanduser()
+        if _path_within(out_path, WORK_DIR) or _path_within(out_path, RUNTIME_DIR):
+            _cleanup_path(out_path)
 
 
-@app.get("/download/{task_id}")
-async def download(task_id: str):
-    info = tasks.get(task_id)
-    if not info:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id").to_http(404)
-    zip_path = info.get("zip")
-    if zip_path and Path(zip_path).exists():
-        logger.info("serving download for task %s at %s", task_id, zip_path)
-        return FileResponse(path=zip_path, media_type="application/zip", filename=Path(zip_path).name)
-    out_dir = info.get("dir")
-    stems = info.get("stems") or []
-    if out_dir:
-        out_path = Path(out_dir)
-        if out_path.exists() and out_path.is_file():
-            logger.info("serving single-file download for task %s at %s", task_id, out_path)
-            return FileResponse(path=out_path, filename=out_path.name)
-        if len(stems) == 1:
-            candidate = out_path / stems[0]
-            if candidate.exists():
-                logger.info("serving single-stem download for task %s at %s", task_id, candidate)
-                return FileResponse(path=candidate, filename=candidate.name)
-    raise AppError(ErrorCode.INVALID_REQUEST, "Files not ready").to_http(409)
+def _forget_task(task_id: str, task_snapshot: dict[str, Any] | None = None) -> None:
+    snapshot = task_snapshot
+    with tasks_lock:
+        current = tasks.pop(task_id, None)
+    if snapshot is None:
+        snapshot = current
+    if snapshot is not None:
+        _cleanup_task_runtime(task_id, snapshot)
 
 
-@app.post("/clear_all_uploads")
-async def clear_all_uploads():
-    # stop any running tasks
-    for ctrl in controls.values():
+def _forget_cleared_terminal_tasks(task_ids: list[str]) -> None:
+    removable: list[tuple[str, dict[str, Any]]] = []
+    with tasks_lock:
+        for task_id in task_ids:
+            task = tasks.get(task_id)
+            if task is None:
+                continue
+            if not bool(task.get("cleared")):
+                continue
+            if str(task.get("status") or "") not in TERMINAL_STATUSES:
+                continue
+            removable.append((task_id, dict(task)))
+            tasks.pop(task_id, None)
+    for task_id, snapshot in removable:
+        _cleanup_task_runtime(task_id, snapshot)
+
+
+def _prune_terminal_tasks(max_keep: int = TERMINAL_TASK_RETENTION_LIMIT) -> None:
+    removable: list[tuple[str, dict[str, Any]]] = []
+    with tasks_lock:
+        terminal = [
+            (task_id, dict(task))
+            for task_id, task in tasks.items()
+            if str(task.get("status") or "") in TERMINAL_STATUSES and not bool(task.get("cleared"))
+        ]
+        if len(terminal) <= max_keep:
+            return
+        terminal.sort(
+            key=lambda item: float(item[1].get("finished_at") or item[1].get("created_at") or 0.0),
+            reverse=True,
+        )
+        for task_id, snapshot in terminal[max_keep:]:
+            tasks.pop(task_id, None)
+            removable.append((task_id, snapshot))
+    for task_id, snapshot in removable:
+        _cleanup_task_runtime(task_id, snapshot)
+
+
+def _mark_task_stopped(task_id: str) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
+    with tasks_lock:
+        task = tasks[task_id]
+        guard_error = str(task.get("guard_error") or "").strip()
+        if guard_error:
+            task["status"] = "error"
+            task["stage"] = "Error"
+            task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+            task["error"] = guard_error
+            task["guard_error"] = None
+            task["finished_at"] = time.time()
+            task["version"] += 1
+        else:
+            task["status"] = "stopped"
+            task["stage"] = "Stopped"
+            task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+            task["finished_at"] = time.time()
+            task["version"] += 1
+        if bool(task.get("cleared")):
+            cleanup_snapshot = dict(task)
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    _prune_terminal_tasks()
+
+
+def _request_task_stop(task_id: str) -> None:
+    should_forget = False
+    should_prune = False
+    with tasks_lock:
+        task = tasks[task_id]
+        task["stop_event"].set()
+        if task["status"] == "queued":
+            task["status"] = "stopped"
+            task["stage"] = "Stopped"
+            task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+            task["finished_at"] = time.time()
+            should_forget = bool(task.get("cleared"))
+            should_prune = not should_forget
+        elif task["status"] == "running":
+            task["stage"] = "Stopping"
+            task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+        task["version"] += 1
+    if should_forget:
+        _forget_task(task_id)
+        return
+    if should_prune:
+        _prune_terminal_tasks()
+
+
+def _trip_task_guard(task_id: str, message: str) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
+    should_prune = False
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None or task["status"] in TERMINAL_STATUSES:
+            return
+        if task["stop_event"].is_set() and str(task.get("guard_error") or "").strip():
+            return
+        task["guard_error"] = message
+        task["stop_event"].set()
+        task["eta_seconds"] = None
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
+        if task["status"] == "queued":
+            task["status"] = "error"
+            task["stage"] = "Error"
+            task["error"] = message
+            task["finished_at"] = time.time()
+            task["guard_error"] = None
+            if bool(task.get("cleared")):
+                cleanup_snapshot = dict(task)
+            else:
+                should_prune = True
+        else:
+            task["stage"] = "Stopping"
+        task["version"] += 1
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    if should_prune:
+        _prune_terminal_tasks()
+
+
+def _stop_all_tasks() -> list[str]:
+    drained: list[str] = []
+    while True:
         try:
-            ctrl.get("pause", threading.Event()).set()
-            ctrl.get("stop", threading.Event()).set()
-        except Exception:
-            logger.debug("failed to signal stop for control %s", ctrl, exc_info=True)
+            drained.append(task_queue.get_nowait())
+        except queue.Empty:
+            break
+    for _task_id in drained:
+        task_queue.task_done()
 
-    # drain any queued items so they don't start after clearing
-    try:
-        while True:
-            fn = process_queue.get_nowait()
-            process_queue.task_done()
-            logger.debug("discarded queued task %s during clear_all_uploads", fn)
-    except queue.Empty:
-        pass
+    task_ids: list[str] = []
+    with tasks_lock:
+        task_ids = list(tasks.keys())
+        for task in tasks.values():
+            task["stop_event"].set()
+            task["cleared"] = True
+            if task["status"] == "queued":
+                task["status"] = "stopped"
+                task["stage"] = "Stopped"
+                task["eta_seconds"] = None
+                task["eta_finish_at"] = None
+                task["eta_stage"] = None
+                task["finished_at"] = time.time()
+            elif task["status"] == "running":
+                task["stage"] = "Stopping"
+                task["eta_seconds"] = None
+                task["eta_finish_at"] = None
+                task["eta_stage"] = None
+            task["version"] += 1
+    return task_ids
 
-    # reset in-memory state
-    progress.clear()
-    tasks.clear()
-    errors.clear()
-    controls.clear()
 
-    dirs = [UPLOAD_DIR, CONVERTED_DIR]
-    for dir_path in dirs:
-        if dir_path.exists():
-            for entry in dir_path.iterdir():
-                if entry.is_dir():
-                    shutil.rmtree(entry)
+def _restart_task_payload(
+    task_id: str,
+    *,
+    stems_raw: str | None = None,
+    output_format: str | None = None,
+    video_handling: str | None = None,
+) -> dict[str, Any]:
+    old_task = _require_task(task_id)
+    source_path = Path(old_task["source_path"])
+    if not source_path.exists():
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+
+    mode = old_task["mode"] if stems_raw is None else _stems_to_mode(stems_raw)
+    resolved_output_format = output_format or str(old_task["output_format"])
+    resolved_video_handling = _validate_video_handling(video_handling or str(old_task["video_handling"]))
+    _validate_mode_and_output_format(mode, resolved_output_format)
+
+    payload = _register_task(
+        original_name=old_task["original_name"],
+        source_path=source_path,
+        source_dir=old_task.get("source_dir"),
+        mode=mode,
+        output_format=resolved_output_format,
+        video_handling=resolved_video_handling,
+        delivery=str(old_task.get("delivery") or "folder"),
+        auto_start=True,
+    )
+    return payload
+
+
+def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]:
+    mode = _stems_to_mode(stems_raw)
+    _validate_models_for_mode(mode)
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if str(task.get("status") or "") != "ready":
+            raise AppError(ErrorCode.INVALID_REQUEST, "Task has already started.")
+        task["mode"] = mode
+        task["version"] += 1
+        return dict(task)
+
+
+def _watchdog_cleanup() -> None:
+    gc.collect()
+    _safe_mps_empty_cache()
+
+
+def _watchdog_loop() -> None:
+    rss_limit = _process_rss_limit_bytes()
+    mps_limit = _mps_memory_limit_bytes()
+    hard_timeout_hits: dict[str, int] = {}
+    stall_hits: dict[str, int] = {}
+    rss_breach_hits = 0
+    mps_breach_hits = 0
+    while True:
+        time.sleep(WATCHDOG_INTERVAL_SECONDS)
+        now = time.time()
+        running_ids: list[str] = []
+        with tasks_lock:
+            snapshot = [
+                (
+                    task_id,
+                    str(task.get("status") or ""),
+                    float(task.get("started_at") or 0.0),
+                    float(task.get("last_progress_at") or task.get("started_at") or 0.0),
+                    str(task.get("original_name") or "song"),
+                )
+                for task_id, task in tasks.items()
+            ]
+        active_set = {task_id for task_id, status, *_rest in snapshot if status == "running"}
+        hard_timeout_hits = {task_id: count for task_id, count in hard_timeout_hits.items() if task_id in active_set}
+        stall_hits = {task_id: count for task_id, count in stall_hits.items() if task_id in active_set}
+        for task_id, status, started_at, last_progress_at, original_name in snapshot:
+            if status != "running":
+                continue
+            running_ids.append(task_id)
+            if started_at and (now - started_at) > TASK_HARD_TIMEOUT_SECONDS:
+                hard_timeout_hits[task_id] = hard_timeout_hits.get(task_id, 0) + 1
+                if hard_timeout_hits[task_id] >= WATCHDOG_CONFIRM_SAMPLES:
+                    logger.error("watchdog stopping task %s after hard timeout", task_id)
+                    _trip_task_guard(
+                        task_id,
+                        f"safety stop: {original_name} exceeded the maximum processing time.",
+                    )
+                continue
+            hard_timeout_hits.pop(task_id, None)
+            if last_progress_at and (now - last_progress_at) > TASK_STALL_TIMEOUT_SECONDS:
+                stall_hits[task_id] = stall_hits.get(task_id, 0) + 1
+                if stall_hits[task_id] >= WATCHDOG_CONFIRM_SAMPLES:
+                    logger.error("watchdog stopping task %s after progress stall", task_id)
+                    _trip_task_guard(
+                        task_id,
+                        f"safety stop: {original_name} stopped making progress.",
+                    )
+                continue
+            stall_hits.pop(task_id, None)
+
+        if not running_ids:
+            rss_breach_hits = 0
+            if mps_limit:
+                mps_allocated = _mps_allocated_bytes()
+                if mps_allocated and mps_allocated > mps_limit:
+                    mps_breach_hits += 1
+                    if mps_breach_hits >= WATCHDOG_CONFIRM_SAMPLES:
+                        logger.warning(
+                            "watchdog clearing idle gpu cache due to mps_allocated=%s over limit=%s",
+                            mps_allocated,
+                            mps_limit,
+                        )
+                        _watchdog_cleanup()
+                        mps_breach_hits = 0
                 else:
-                    entry.unlink()
-    logger.info("cleared upload directories and reset task state")
-    return {"status": "cleared"}
+                    mps_breach_hits = 0
+            continue
+
+        rss_bytes = _process_rss_bytes()
+        if rss_bytes and rss_bytes > rss_limit:
+            rss_breach_hits += 1
+            if rss_breach_hits >= WATCHDOG_CONFIRM_SAMPLES:
+                logger.error("watchdog stopping active tasks due to rss=%s over limit=%s", rss_bytes, rss_limit)
+                for task_id in running_ids:
+                    _trip_task_guard(
+                        task_id,
+                        "safety stop: stemsplat hit its memory protection limit.",
+                    )
+                _watchdog_cleanup()
+                rss_breach_hits = 0
+                continue
+        else:
+            rss_breach_hits = 0
+
+        mps_breach_hits = 0
 
 
-@app.post("/pause/{task_id}")
-async def pause_task(task_id: str):
-    ctrl = controls.get(task_id)
-    if not ctrl:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
-    ctrl["pause"].set()
-    logger.info("paused task %s", task_id)
-    return {"status": "paused"}
+def _stop_check(task_id: str) -> None:
+    with tasks_lock:
+        if tasks[task_id]["stop_event"].is_set():
+            raise TaskStopped()
 
 
-@app.post("/resume/{task_id}")
-async def resume_task(task_id: str):
-    ctrl = controls.get(task_id)
-    if not ctrl:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
-    ctrl["pause"].clear()
-    logger.info("resumed task %s", task_id)
-    return {"status": "resumed"}
+def _build_task_payload(
+    *,
+    task_id: str,
+    original_name: str,
+    source_path: Path,
+    source_dir: str | None,
+    mode: str,
+    output_format: str,
+    video_handling: str,
+    delivery: str = "folder",
+    auto_start: bool = True,
+) -> dict[str, Any]:
+    return {
+        "id": task_id,
+        "original_name": original_name,
+        "source_path": str(source_path),
+        "source_dir": source_dir,
+        "mode": mode,
+        "output_format": output_format,
+        "video_handling": video_handling,
+        "delivery": delivery,
+        "status": "queued" if auto_start else "ready",
+        "stage": "Waiting in queue" if auto_start else "Ready",
+        "pct": 0,
+        "eta_seconds": None,
+        "out_dir": None,
+        "outputs": [],
+        "error": None,
+        "version": 0,
+        "created_at": time.time(),
+        "started_at": None,
+        "stage_started_at": None,
+        "eta_finish_at": None,
+        "eta_stage": None,
+        "audio_seconds": None,
+        "predicted_total_seconds": None,
+        "last_progress_at": time.time(),
+        "last_progress_pct": 0,
+        "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
+        "finished_at": None,
+        "guard_error": None,
+        "cleared": False,
+        "stop_event": threading.Event(),
+    }
+
+
+def _create_output_dir(task: dict[str, Any]) -> Path:
+    if str(task.get("delivery") or "") == "browser_download":
+        return _ensure_dir(WORK_DIR / "exports" / str(task["id"]))
+    settings = _compat_settings_payload()
+    if bool(settings.get("output_same_as_input")):
+        source_dir = task.get("source_dir")
+        if isinstance(source_dir, str) and source_dir:
+            candidate = Path(source_dir).expanduser()
+            if candidate.exists() and candidate.is_dir():
+                return _ensure_dir(candidate)
+    return _current_output_root()
+
+
+def _validate_mode_and_output_format(mode: str, output_format: str) -> None:
+    if mode not in MODE_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
+    if output_format not in OUTPUT_FORMAT_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.")
+    _validate_models_for_mode(mode)
+
+
+def _validate_video_handling(video_handling: str) -> str:
+    if video_handling not in VIDEO_HANDLING_CHOICES:
+        return "audio_only"
+    return "audio_only"
+
+
+def _validate_media_type(name: str, content_type: str | None = None) -> str:
+    suffix = Path(name).suffix.lower()
+    kind = (content_type or "").lower()
+    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
+    if not suffix and not (kind.startswith("audio/") or kind.startswith("video/")):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio or video file.")
+    return suffix
+
+
+async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
+    original_name = Path(file.filename or "upload").name
+    _validate_media_type(original_name, file.content_type or "")
+
+    task_id = str(uuid.uuid4())
+    stored_name = f"{task_id}_{original_name}"
+    source_path = UPLOAD_DIR / stored_name
+    bytes_written = 0
+    try:
+        with source_path.open("wb") as handle:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                bytes_written += len(chunk)
+    except Exception as exc:
+        _cleanup_path(source_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}") from exc
+    finally:
+        with contextlib.suppress(Exception):
+            await file.close()
+
+    if bytes_written <= 0:
+        _cleanup_path(source_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is empty.")
+    return original_name, source_path
+
+
+def _store_local_media_file(path: Path) -> tuple[str, Path]:
+    source = path.expanduser()
+    if not source.exists() or not source.is_file():
+        raise AppError(ErrorCode.INVALID_REQUEST, f"file doesn't exist: {source}")
+    original_name = source.name
+    _validate_media_type(original_name)
+    task_id = str(uuid.uuid4())
+    stored_name = f"{task_id}_{original_name}"
+    stored_path = UPLOAD_DIR / stored_name
+    try:
+        shutil.copy2(source, stored_path)
+    except Exception as exc:
+        _cleanup_path(stored_path)
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not import file: {exc}") from exc
+    return original_name, stored_path
+
+
+def _register_task(
+    *,
+    original_name: str,
+    source_path: Path,
+    source_dir: str | None,
+    mode: str,
+    output_format: str,
+    video_handling: str,
+    delivery: str = "folder",
+    auto_start: bool,
+) -> dict[str, Any]:
+    task_id = str(uuid.uuid4())
+    payload = _build_task_payload(
+        task_id=task_id,
+        original_name=original_name,
+        source_path=source_path,
+        source_dir=source_dir,
+        mode=mode,
+        output_format=output_format,
+        video_handling=video_handling,
+        delivery=delivery,
+        auto_start=auto_start,
+    )
+    with tasks_lock:
+        tasks[task_id] = payload
+    threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
+    if auto_start:
+        task_queue.put(task_id)
+    return payload
+
+
+def _enqueue_task(task_id: str) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if task["status"] in {"queued", "running"}:
+            return task
+        if task["status"] in TERMINAL_STATUSES:
+            return task
+        task["status"] = "queued"
+        task["stage"] = "Waiting in queue"
+        task["eta_seconds"] = None
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
+        task["started_at"] = None
+        task["stage_started_at"] = None
+        task["last_progress_at"] = time.time()
+        task["last_progress_pct"] = 0
+        task["last_progress_stage"] = task["stage"]
+        task["guard_error"] = None
+        task["version"] += 1
+    task_queue.put(task_id)
+    return task
+
+
+def _compat_stage(task: dict[str, Any]) -> str:
+    status = str(task.get("status") or "").lower()
+    if status == "ready":
+        return "ready"
+    if status == "queued":
+        return "queued"
+    if status == "done":
+        return "done"
+    if status == "stopped":
+        return "stopped"
+    if status == "error":
+        return "error"
+    return str(task.get("stage") or "queued")
+
+
+def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
+    public = _public_task(task)
+    stage = _compat_stage(public)
+    pct = -1 if public["status"] == "error" else public["pct"]
+    return {
+        "task_id": public["id"],
+        "id": public["id"],
+        "name": public["name"],
+        "stage": stage,
+        "pct": pct,
+        "eta_seconds": public["eta_seconds"],
+        "stems": _mode_to_stems(public["mode"]),
+        "video_handling": public["video_handling"],
+        "out_dir": public["out_dir"],
+        "delivery": public["delivery"],
+        "error": public["error"],
+        "outputs": public["outputs"],
+        "artwork_url": f"/api/tasks/{public['id']}/artwork",
+    }
+
+
+def _extract_task_artwork(task_id: str) -> Path | None:
+    task = _require_task(task_id)
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    if not source_path.exists():
+        return None
+    cached_path = ARTWORK_DIR / f"{task_id}.jpg"
+    if cached_path.exists() and cached_path.stat().st_size > 0:
+        return cached_path
+
+    embedded = _extract_embedded_artwork(source_path)
+    if embedded is not None:
+        payload, suffix = embedded
+        cached_path = ARTWORK_DIR / f"{task_id}{suffix}"
+        cached_path.write_bytes(payload)
+        return cached_path
+
+    temp_path = ARTWORK_DIR / f"{task_id}.tmp.jpg"
+    if temp_path.exists():
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+    try:
+        subprocess.run(
+            [
+                _ffmpeg_path(),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source_path),
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:-1:force_original_aspect_ratio=decrease",
+                str(temp_path),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+        return None
+
+    if not temp_path.exists() or temp_path.stat().st_size <= 0:
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+        return None
+
+    temp_path.replace(cached_path)
+    return cached_path
+
+
+def _extract_embedded_artwork(source_path: Path) -> tuple[bytes, str] | None:
+    if MutagenFile is None:
+        return None
+    try:
+        tagged = MutagenFile(source_path)
+    except Exception:
+        return None
+    if tagged is None:
+        return None
+    tags = getattr(tagged, "tags", None)
+    if not tags:
+        return None
+
+    def _resolve_suffix(data: bytes, mime: str | None = None) -> str:
+        mime_text = (mime or "").lower()
+        if "png" in mime_text:
+            return ".png"
+        if "jpeg" in mime_text or "jpg" in mime_text:
+            return ".jpg"
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ".png"
+        return ".jpg"
+
+    with contextlib.suppress(Exception):
+        covers = tags.get("covr")
+        if covers:
+            raw = bytes(covers[0])
+            if raw:
+                return raw, _resolve_suffix(raw)
+
+    values: list[Any]
+    if hasattr(tags, "values"):
+        values = list(tags.values())
+    else:
+        values = []
+    for value in values:
+        frames = value if isinstance(value, list) else [value]
+        for frame in frames:
+            data = getattr(frame, "data", None)
+            if isinstance(data, (bytes, bytearray)) and data:
+                return bytes(data), _resolve_suffix(bytes(data), getattr(frame, "mime", None))
+    return None
+
+
+def _process_task(task_id: str) -> None:
+    work_dir: Path | None = None
+    output_dir: Path | None = None
+    manager: ModelManager | None = None
+    written_outputs: list[Path] = []
+    try:
+        task = _require_task(task_id)
+        if task["stop_event"].is_set():
+            raise TaskStopped()
+
+        source_path = Path(task["source_path"])
+        if not source_path.exists():
+            raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded source file is missing.")
+
+        _set_task_progress(task_id, "Loading models", 1)
+        manager = ModelManager()
+        source_info = _probe_source(source_path)
+        output_dir = _create_output_dir(task)
+        with tasks_lock:
+            tasks[task_id]["out_dir"] = str(output_dir)
+            tasks[task_id]["version"] += 1
+
+        work_dir = Path(tempfile.mkdtemp(prefix=f"stemsplat_{task_id[:8]}_", dir=str(WORK_DIR)))
+        _set_task_progress(task_id, "Preparing audio", 4)
+        decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
+        _stop_check(task_id)
+        waveform = _load_waveform(decoded_path)
+        mode = task["mode"]
+        audio_seconds = waveform.shape[1] / 44100.0 if waveform.shape[1] > 0 else 0.0
+        with tasks_lock:
+            tasks[task_id]["audio_seconds"] = audio_seconds
+            tasks[task_id]["predicted_total_seconds"] = _predict_task_runtime_seconds(mode, audio_seconds)
+            tasks[task_id]["version"] += 1
+
+        temp_outputs: list[tuple[str, Path]] = []
+
+        if mode == "vocals":
+            vocals_model = manager.get("vocals")
+            vocals_started_at = time.time()
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 88, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
+        elif mode == "instrumental":
+            instrumental_model = manager.get("instrumental")
+            instrumental_started_at = time.time()
+            instrumental_pred = _run_model_chunks(
+                instrumental_model,
+                waveform,
+                MODEL_SPECS["instrumental"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(6, 88, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
+        elif mode == "both_deux":
+            deux_model = manager.get("deux")
+            deux_started_at = time.time()
+            pair_pred = _run_model_chunks(
+                deux_model,
+                waveform,
+                MODEL_SPECS["deux"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running deux model", _map_fraction(6, 90, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("deux", audio_seconds, time.time() - deux_started_at)
+            vocals_tensor = pair_pred[0]
+            instrumental_tensor = (
+                pair_pred[1]
+                if pair_pred.shape[0] > 1
+                else waveform[: vocals_tensor.shape[0], : vocals_tensor.shape[1]] - vocals_tensor
+            )
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_tensor)))
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_tensor)))
+        elif mode == "both_separate":
+            vocals_model = manager.get("vocals")
+            instrumental_model = manager.get("instrumental")
+            vocals_started_at = time.time()
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 48, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
+            instrumental_started_at = time.time()
+            instrumental_pred = _run_model_chunks(
+                instrumental_model,
+                waveform,
+                MODEL_SPECS["instrumental"].segment,
+                progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(50, 90, frac)),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
+        else:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
+
+        _stop_check(task_id)
+        export_video = False
+        export_plan = None if export_video else _resolve_export_plan(source_info, task["output_format"])
+        exported_files: list[str] = []
+        total_exports = len(temp_outputs)
+        for index, (label, temp_path) in enumerate(temp_outputs, start=1):
+            start_pct = _map_fraction(92, 98, (index - 1) / max(1, total_exports))
+            _set_task_progress(task_id, f"Exporting {label}", start_pct)
+            export_label = f"{label} - deux" if mode == "both_deux" else label
+            if export_video:
+                video_suffix, _audio_args = _resolve_video_output(source_info)
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
+                exported = _export_video_stem(temp_path, source_path, final_path, source_info)
+            else:
+                assert export_plan is not None
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
+                exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
+            written_outputs.append(exported)
+            exported_files.append(exported.name)
+            _set_task_progress(task_id, f"Exporting {label}", _map_fraction(92, 99, index / max(1, total_exports)))
+
+        _mark_task_done(task_id, output_dir, exported_files)
+    except TaskStopped:
+        for output_path in written_outputs:
+            _cleanup_path(output_path)
+        _mark_task_stopped(task_id)
+    except AppError as exc:
+        for output_path in written_outputs:
+            _cleanup_path(output_path)
+        _mark_task_error(task_id, f"{exc.code}: {exc.message}")
+    except Exception as exc:  # pragma: no cover - safety net
+        logger.exception("task %s crashed", task_id)
+        for output_path in written_outputs:
+            _cleanup_path(output_path)
+        _mark_task_error(task_id, f"{ErrorCode.SEPARATION_FAILED}: {exc}")
+    finally:
+        if manager is not None:
+            del manager
+        _cleanup_path(work_dir)
+        gc.collect()
+        _safe_mps_empty_cache()
+
+
+def _task_worker() -> None:
+    while True:
+        task_id = task_queue.get()
+        try:
+            _process_task(task_id)
+        finally:
+            task_queue.task_done()
+
+
+threading.Thread(target=_task_worker, daemon=True).start()
+threading.Thread(target=_watchdog_loop, daemon=True).start()
+
+
+@app.on_event("startup")
+async def _startup_cleanup() -> None:
+    _close_installer_ui()
+    _cleanup_old_runtime_entries(WORK_DIR)
+    _cleanup_old_runtime_entries(UPLOAD_DIR)
+    if _selected_missing_models():
+        _set_model_download_state(
+            status="idle",
+            pct=0,
+            step="",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=0,
+            eta_seconds=None,
+            started_at=None,
+            error="",
+        )
+    else:
+        _set_model_download_state(
+            status="done",
+            pct=100,
+            step="models ready",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=0,
+            eta_seconds=0,
+            started_at=None,
+            error="",
+        )
+        _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
+
+
+@app.exception_handler(AppError)
+async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
+    logger.error("app error for %s %s: %s %s", request.method, request.url.path, exc.code, exc.message)
+    return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
+
+
+@app.middleware("http")
+async def _log_requests(request: Request, call_next):
+    started = time.time()
+    if _lan_passcode_required(request):
+        path = request.url.path
+        allowed = path in LAN_AUTH_ALLOWED_PATHS
+        authorized = _request_has_valid_lan_session(request)
+        if not authorized and not allowed:
+            response = _lan_unauthorized_response(request)
+        elif not authorized and path == "/" and request.method in {"GET", "HEAD"}:
+            response = _lan_unauthorized_response(request)
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+    elapsed_ms = (time.time() - started) * 1000
+    logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
+
+
+def _pick_directory_dialog() -> Path | None:
+    if sys.platform != "darwin":
+        raise AppError(ErrorCode.INVALID_REQUEST, "Folder picking is only supported on macOS in this build.")
+    script = 'POSIX path of (choose folder with prompt "choose output folder")'
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").lower()
+        if "user canceled" in stderr or exc.returncode == 1:
+            return None
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not choose folder: {exc.stderr or exc}") from exc
+    chosen = (result.stdout or "").strip()
+    return Path(chosen).expanduser() if chosen else None
+
+
+def _open_path_in_finder(path: Path) -> None:
+    target = _ensure_dir(path.expanduser())
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+        return
+    if os.name == "nt":
+        subprocess.Popen(["explorer", str(target)])
+        return
+    subprocess.Popen(["xdg-open", str(target)])
+
+
+@app.get("/api/models_status")
+async def models_status() -> dict[str, Any]:
+    missing = sorted({item for mode in MODE_CHOICES for item in _find_missing_models_for_mode(mode)})
+    return {"missing": missing, "models_dir": str(MODEL_DIR)}
+
+
+@app.post("/api/open_models_folder")
+async def open_models_folder(request: Request) -> dict[str, str]:
+    _require_local_request(request, "LAN clients cannot control the host machine.")
+    _ensure_dir(MODEL_DIR)
+    try:
+        _open_path_in_finder(MODEL_DIR)
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open models folder: {exc}").to_http(500) from exc
+    return {"status": "opened", "path": str(MODEL_DIR)}
+
+
+@app.get("/api/release_status")
+async def release_status() -> dict[str, Any]:
+    return _release_status_payload()
+
+
+@app.get("/api/runtime_status")
+async def runtime_status() -> dict[str, Any]:
+    return _runtime_status_payload()
+
+
+@app.post("/api/lan_auth")
+async def lan_auth(request: Request) -> JSONResponse:
+    if not _lan_passcode_required(request):
+        return JSONResponse({"ok": True, "required": False})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    submitted = str(body.get("passcode") or "")
+    settings = _compat_settings_payload()
+    expected = str(settings.get("lan_passcode") or "")
+    if not expected or not secrets.compare_digest(submitted, expected):
+        return JSONResponse(status_code=401, content={"ok": False, "error": "incorrect passcode"})
+    ttl_seconds = _lan_auth_ttl_seconds(str(settings.get("lan_passcode_ttl") or "1d"))
+    token = secrets.token_urlsafe(32)
+    expires_at = None if ttl_seconds is None else time.time() + ttl_seconds
+    with lan_auth_lock:
+        _prune_lan_auth_sessions_locked()
+        lan_auth_sessions[token] = {
+            "host": _request_client_host(request),
+            "expires_at": expires_at,
+            "created_at": time.time(),
+        }
+    response = JSONResponse(
+        {
+            "ok": True,
+            "required": True,
+            "ttl": str(settings.get("lan_passcode_ttl") or "1d"),
+        }
+    )
+    response.set_cookie(
+        key=LAN_AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=ttl_seconds,
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/release_status/ack")
+async def ack_release_status(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
+    status = _release_status_payload()
+    latest = str(status.get("latest_version") or "")
+    if latest:
+        _set_compat_settings({"update_last_notified_version": latest})
+    return _release_status_payload()
+
+
+@app.post("/api/release_status/skip")
+async def skip_release_status(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
+    status = _release_status_payload()
+    latest = str(status.get("latest_version") or "")
+    if latest:
+        _set_compat_settings(
+            {
+                "update_last_notified_version": latest,
+                "update_skipped_version": latest,
+            }
+        )
+    return _release_status_payload()
+
+
+@app.get("/api/model_download_status")
+async def model_download_status() -> dict[str, Any]:
+    return _public_model_download_status()
+
+
+@app.post("/api/model_downloads/start")
+async def start_model_download(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
+    selection: list[str] | None = None
+    with contextlib.suppress(Exception):
+        body = await request.json()
+        if isinstance(body, dict) and isinstance(body.get("models"), list):
+            selection = [str(item) for item in body["models"]]
+    return _start_model_download(selection)
+
+
+@app.post("/api/model_download_prompt/dismiss")
+async def dismiss_model_download_prompt(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
+    _set_compat_settings({"model_prompt_state": MODEL_PROMPT_DISMISSED})
+    return _public_model_download_status()
+
+
+@app.post("/api/settings/output_root/pick")
+async def pick_output_root(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
+    chosen = _pick_directory_dialog()
+    if chosen is None:
+        return {"cancelled": True, "output_root": str(_current_output_root())}
+    chosen = _ensure_dir(chosen)
+    _set_compat_settings({"output_root": str(chosen)})
+    return {"cancelled": False, "output_root": str(chosen)}
+
+
+@app.post("/api/settings/output_root/open")
+async def open_output_root(request: Request) -> dict[str, str]:
+    _require_local_request(request, "LAN clients cannot control the host machine.")
+    path = _current_output_root()
+    try:
+        _open_path_in_finder(path)
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open output folder: {exc}").to_http(500) from exc
+    return {"status": "opened", "path": str(path)}
+
+
+@app.post("/api/import_paths")
+async def import_paths(request: Request) -> dict[str, Any]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid import payload.").to_http()
+    raw_paths = body.get("paths")
+    raw_stems = body.get("stems")
+    output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
+    video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise AppError(ErrorCode.INVALID_REQUEST, "No files selected.").to_http()
+    if not isinstance(raw_stems, str):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
+    mode = _stems_to_mode(raw_stems)
+    _validate_mode_and_output_format(mode, output_format)
+    delivery = "browser_download" if _is_remote_client(request) else "folder"
+    created: list[dict[str, Any]] = []
+    for item in raw_paths:
+        path_text = str(item or "").strip()
+        if not path_text:
+            continue
+        source_original = Path(path_text).expanduser()
+        original_name, source_path = _store_local_media_file(source_original)
+        payload = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            source_dir=str(source_original.parent),
+            mode=mode,
+            output_format=output_format,
+            video_handling=video_handling,
+            delivery=delivery,
+            auto_start=False,
+        )
+        created.append(_compat_public_task(payload))
+    return {"tasks": created}
+
+
+@app.post("/api/tasks")
+async def create_task(
+    request: Request,
+    file: UploadFile = File(...),
+    mode: str = Form("vocals"),
+    output_format: str = Form("same_as_input"),
+    video_handling: str = Form("audio_only"),
+    source_dir: str | None = Form(None),
+):
+    try:
+        _validate_mode_and_output_format(mode, output_format)
+        video_handling = _validate_video_handling(video_handling)
+        original_name, source_path = await _store_uploaded_file(file)
+        payload = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            source_dir=source_dir,
+            mode=mode,
+            output_format=output_format,
+            video_handling=video_handling,
+            delivery="browser_download" if _is_remote_client(request) else "folder",
+            auto_start=True,
+        )
+        return _public_task(payload)
+    except AppError as exc:
+        raise exc.to_http()
+
+
+@app.get("/api/tasks/{task_id}/events")
+async def task_events(task_id: str):
+    _require_task(task_id)
+
+    async def _event_stream():
+        last_version = -1
+        last_ping_at = time.time()
+        while True:
+            with tasks_lock:
+                task = tasks.get(task_id)
+                if task is None:
+                    break
+                snapshot = _public_task(task)
+            if snapshot["version"] != last_version:
+                yield f"data: {json.dumps(snapshot)}\n\n"
+                last_version = snapshot["version"]
+                last_ping_at = time.time()
+                if snapshot["status"] in TERMINAL_STATUSES:
+                    break
+            elif time.time() - last_ping_at >= 10:
+                yield ": ping\n\n"
+                last_ping_at = time.time()
+            await asyncio.sleep(0.35)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/tasks/{task_id}/artwork")
+async def task_artwork(task_id: str):
+    _require_task(task_id)
+    try:
+        artwork_path = _extract_task_artwork(task_id)
+    except AppError:
+        artwork_path = None
+    if artwork_path is None:
+        raise HTTPException(status_code=404, detail="artwork not found")
+    media_type = "image/png" if artwork_path.suffix.lower() == ".png" else "image/jpeg"
+    return FileResponse(
+        artwork_path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.post("/api/tasks/{task_id}/stop")
+async def stop_task(task_id: str):
+    _require_task(task_id)
+    _request_task_stop(task_id)
+    return _public_task(_require_task(task_id))
+
+
+@app.post("/api/tasks/{task_id}/retry")
+async def retry_task(task_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stems_raw = body.get("stems")
+    output_format = body.get("output_format")
+    video_handling = body.get("video_handling")
+    try:
+        payload = _restart_task_payload(
+            task_id,
+            stems_raw=stems_raw if isinstance(stems_raw, str) and stems_raw.strip() else None,
+            output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
+            video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+        )
+    except AppError as exc:
+        raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
+    return _public_task(payload)
+
+
+@app.post("/api/tasks/{task_id}/selection")
+async def update_task_selection(task_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stems_raw = body.get("stems")
+    if not isinstance(stems_raw, str) or not stems_raw.strip():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
+    try:
+        task = _update_ready_task_selection(task_id, stems_raw.strip())
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    return _public_task(task)
+
+
+@app.post("/api/tasks/{task_id}/reveal")
+async def reveal_output(task_id: str, request: Request):
+    _require_local_request(request, "LAN clients cannot control the host machine.")
+    task = _require_task(task_id)
+    try:
+        out_path, existing_outputs = _task_output_paths(task)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
+    single_output = existing_outputs[0] if len(existing_outputs) == 1 else None
+
+    try:
+        if sys.platform.startswith("darwin"):
+            if single_output is not None:
+                subprocess.Popen(["open", "-R", str(single_output)])
+            else:
+                subprocess.Popen(["open", str(out_path)])
+        elif sys.platform.startswith("win"):
+            if single_output is not None:
+                subprocess.Popen(["explorer", "/select,", str(single_output)])
+            else:
+                os.startfile(str(out_path))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(single_output.parent if single_output is not None else out_path)])
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not reveal output: {exc}").to_http(500) from exc
+
+    return {"status": "opened", "path": str(single_output or out_path)}
+
+
+@app.get("/api/tasks/{task_id}/download")
+async def download_output(task_id: str):
+    task = _require_task(task_id)
+    try:
+        _out_path, existing_outputs = _task_output_paths(task)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
+    if not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
+    if len(existing_outputs) == 1:
+        output = existing_outputs[0]
+        return FileResponse(output, filename=output.name)
+
+    archive_dir = _ensure_dir(RUNTIME_DIR / "downloads")
+    archive_name = f"{_download_label(task)}.zip"
+    archive_path = archive_dir / f"{task_id}_{archive_name}"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for output in existing_outputs:
+            zf.write(output, arcname=output.name)
+    return FileResponse(
+        archive_path,
+        filename=archive_name,
+        background=BackgroundTask(lambda: _cleanup_path(archive_path)),
+    )
+
+
+@app.get("/settings")
+async def get_settings(request: Request) -> dict[str, Any]:
+    return _settings_response_payload(request)
+
+
+@app.post("/settings")
+async def update_settings(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid settings payload.").to_http()
+    patch: dict[str, Any] = {}
+    output_format = body.get("output_format")
+    if isinstance(output_format, str):
+        if output_format not in OUTPUT_FORMAT_CHOICES:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
+        patch["output_format"] = output_format
+    output_root = body.get("output_root")
+    if isinstance(output_root, str):
+        try:
+            resolved = _ensure_dir(Path(output_root).expanduser())
+        except Exception as exc:
+            raise AppError(ErrorCode.INVALID_REQUEST, f"Invalid output folder: {exc}").to_http() from exc
+        patch["output_root"] = str(resolved)
+    if "output_same_as_input" in body:
+        patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
+    if "video_handling" in body:
+        patch["video_handling"] = _validate_video_handling(str(body.get("video_handling") or "audio_only"))
+    if not _is_remote_client(request):
+        if "lan_passcode_enabled" in body:
+            patch["lan_passcode_enabled"] = bool(body.get("lan_passcode_enabled"))
+        if "lan_passcode" in body:
+            patch["lan_passcode"] = str(body.get("lan_passcode") or "")
+        if "lan_passcode_ttl" in body:
+            ttl_value = str(body.get("lan_passcode_ttl") or "")
+            if ttl_value not in LAN_AUTH_TTL_CHOICES:
+                raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN passcode ttl.").to_http()
+            patch["lan_passcode_ttl"] = ttl_value
+    _set_compat_settings(patch)
+    return _settings_response_payload(request)
+
+
+@app.post("/upload")
+async def compat_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    stems: str = Form("vocals"),
+    output_format: str | None = Form(None),
+    video_handling: str | None = Form(None),
+    source_dir: str | None = Form(None),
+):
+    try:
+        mode = _stems_to_mode(stems)
+        resolved_output_format = output_format or _compat_settings_payload()["output_format"]
+        resolved_video_handling = _validate_video_handling(video_handling or _compat_settings_payload()["video_handling"])
+        _validate_mode_and_output_format(mode, resolved_output_format)
+        original_name, source_path = await _store_uploaded_file(file)
+        payload = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            source_dir=source_dir,
+            mode=mode,
+            output_format=resolved_output_format,
+            video_handling=resolved_video_handling,
+            delivery="browser_download" if _is_remote_client(request) else "folder",
+            auto_start=False,
+        )
+        return {"task_id": payload["id"], "stems": _mode_to_stems(mode), "delivery": payload["delivery"]}
+    except AppError as exc:
+        raise exc.to_http()
+
+
+@app.post("/start/{task_id}")
+async def compat_start(task_id: str) -> dict[str, Any]:
+    try:
+        task = _enqueue_task(task_id)
+        return _compat_public_task(task)
+    except AppError as exc:
+        raise exc.to_http(404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400)
+
+
+@app.get("/progress/{task_id}")
+async def compat_progress(task_id: str):
+    _require_task(task_id)
+
+    async def _event_stream():
+        last_version = -1
+        last_ping_at = time.time()
+        last_emit_at = 0.0
+        while True:
+            now = time.time()
+            with tasks_lock:
+                task = tasks.get(task_id)
+                if task is None:
+                    break
+                snapshot = _compat_public_task(task)
+                if task["status"] == "running" and 0 < int(task.get("pct") or 0) < 100:
+                    snapshot["eta_seconds"] = _estimate_eta(task, int(task.get("pct") or 0))
+            if snapshot["pct"] != -1 and snapshot["stage"] == "error":
+                snapshot["pct"] = -1
+            should_emit = task["version"] != last_version
+            if not should_emit and task["status"] == "running" and 0 < int(snapshot["pct"]) < 100:
+                should_emit = (now - last_emit_at) >= 1.0
+            if should_emit:
+                yield f"data: {json.dumps(snapshot)}\n\n"
+                last_version = task["version"]
+                last_ping_at = now
+                last_emit_at = now
+                if task["status"] in TERMINAL_STATUSES:
+                    break
+            elif now - last_ping_at >= 10:
+                yield ": ping\n\n"
+                last_ping_at = now
+            await asyncio.sleep(0.35)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/stop/{task_id}")
-async def stop_task(task_id: str):
-    ctrl = controls.get(task_id)
-    if not ctrl:
-        raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task").to_http(404)
-    ctrl["stop"].set()
-    logger.info("stopped task %s", task_id)
-    return {"status": "stopped"}
+async def compat_stop(task_id: str) -> dict[str, Any]:
+    _require_task(task_id)
+    _request_task_stop(task_id)
+    return _compat_public_task(_require_task(task_id))
+
+
+@app.post("/rerun/{task_id}")
+async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stems_raw = body.get("stems")
+    output_format = body.get("output_format")
+    video_handling = body.get("video_handling")
+    try:
+        payload = _restart_task_payload(
+            task_id,
+            stems_raw=stems_raw if isinstance(stems_raw, str) and stems_raw.strip() else None,
+            output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
+            video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+        )
+    except AppError as exc:
+        raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
+    return {"task_id": payload["id"], "stems": _mode_to_stems(payload["mode"]), "delivery": payload["delivery"]}
+
+
+@app.post("/reveal/{task_id}")
+async def compat_reveal(task_id: str, request: Request):
+    return await reveal_output(task_id, request)
+
+
+@app.get("/download/{task_id}")
+async def compat_download(task_id: str):
+    return await download_output(task_id)
+
+
+@app.post("/clear_all_uploads")
+async def compat_clear_all_uploads() -> dict[str, str]:
+    cleared_task_ids = _stop_all_tasks()
+    _forget_cleared_terminal_tasks(cleared_task_ids)
+    return {"status": "cleared"}
+
+
+@app.post("/rehydrate_tasks")
+async def compat_rehydrate_tasks(request: Request) -> dict[str, list[dict[str, Any]]]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        return {"tasks": []}
+    requested = body.get("tasks")
+    if not isinstance(requested, list):
+        return {"tasks": []}
+    hydrated: list[dict[str, Any]] = []
+    with tasks_lock:
+        for item in requested:
+            if not isinstance(item, dict):
+                continue
+            task_id = item.get("id")
+            if not isinstance(task_id, str):
+                continue
+            task = tasks.get(task_id)
+            if task is not None:
+                hydrated.append(_compat_public_task(task))
+    return {"tasks": hydrated}
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    html_path = BASE_DIR / "web" / "index.html"
-    return HTMLResponse(html_path.read_text())
+async def index(request: Request) -> HTMLResponse:
+    candidate = "mobile.html" if _should_use_mobile_ui(request) else "index.html"
+    index_path = WEB_DIR / candidate
+    if index_path.exists():
+        return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    fallback_path = WEB_DIR / "index.html"
+    if fallback_path.exists():
+        return HTMLResponse(fallback_path.read_text(encoding="utf-8"))
+    return HTMLResponse(INDEX_HTML)
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -2940,79 +3887,1404 @@ async def favicon():
         return FileResponse(icon_path, media_type="image/x-icon")
     raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
 
+@app.get("/favicon.ico")
+async def favicon():
+    icon_path = WEB_DIR / "favicon.ico"
+    if icon_path.exists():
+        return FileResponse(icon_path, media_type="image/x-icon")
+    raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
+
 
 @app.api_route("/shutdown", methods=["POST", "GET"])
-async def shutdown():
-    logger.warning("shutdown requested via api; terminating process")
-    try:
-        _close_installer_ui()
-    except Exception:
-        logger.debug("installer ui shutdown during close failed", exc_info=True)
+async def shutdown(request: Request):
+    _require_local_request(request, "LAN clients cannot control the host machine.")
+    logger.warning("shutdown requested; exiting process")
+    _close_installer_ui()
 
-    def _stop():
-        logger.debug("shutdown thread armed; sleeping briefly to flush logs")
+    def _exit_soon() -> None:
         time.sleep(0.25)
         os._exit(0)
 
-    threading.Thread(target=_stop, daemon=True).start()
+    threading.Thread(target=_exit_soon, daemon=True).start()
     return {"status": "shutting down"}
 
 
-# ── CLI entrypoint ─────────────────────────────────────────────────────────-
-
-
-def _process_local_file(path: Path, stem_list: list[str]) -> list[str]:
-    conv_dir = CONVERTED_DIR
-    conv_path = _stage_audio_copy(path, conv_dir)
-    out_dir = conv_dir / f"{conv_path.stem}—stems"
-
-    def cb(stage: str, pct: int) -> None:
-        logging.info("%s: %s%%", stage, pct)
-
-    manager = ModelManager()
-    stems_out = _separate_waveform(manager, conv_path, stem_list, cb, out_dir)
-    return [str(out_dir / stem) for stem in stems_out]
-
 def cli_main(argv: Optional[list[str]] = None) -> None:
-    if argv is None:
-        argv = sys.argv[1:]
-    if "--split" in argv:
-        split_args = [arg for arg in argv if arg != "--split"]
-        split_main(split_args)
-        return
-    parser = argparse.ArgumentParser(description="Run stemsplat server or process a file")
-    parser.add_argument("--serve", action="store_true", help="Start the FastAPI server with uvicorn")
-    parser.add_argument("--install", action="store_true", help="Run the installer UI")
-    parser.add_argument("files", nargs="*", help="Optional list of audio files to process locally")
-    parser.add_argument("--stems", default="vocals", help="Comma-separated stems when processing locally")
+    parser = argparse.ArgumentParser(description="Run the stemsplat server.")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
 
-    if args.install:
-        run_installer_ui()
-        return
+    import uvicorn
 
-    if args.serve:
-        import uvicorn
+    _close_installer_ui()
+    if not _port_available(args.port):
+        raise SystemExit(f"Port {args.port} is already in use.")
+    uvicorn.run("main:app", host=args.host, port=args.port, reload=False)
 
-        _close_installer_ui()
-        if not _port_available(8000):
-            logger.error("Port 8000 is already in use; aborting startup")
-            raise SystemExit("Port 8000 is already in use. Please free the port and try again.")
-        threading.Thread(target=_launch_main_page, daemon=True).start()
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
-        return
 
-    if not args.files:
-        parser.error("No files provided and --serve not set")
+INDEX_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stemsplat</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-1: #0F2027;
+      --bg-2: #2C5364;
+      --text: #E7ECEF;
+      --muted: #B8C4CC;
+      --accent: #8ED8FF;
+      --accent-strong: #b5ffd8;
+      --accent-soft: #96c5d6;
+      --icon: #9BB6C2;
+      --card: rgba(23, 35, 41, 0.55);
+      --card-done: rgba(40, 66, 77, 0.7);
+      --border: rgba(255,255,255,0.06);
+      --danger: #f57a6d;
+    }
 
-    stem_list = [s for s in args.stems.split(",") if s]
-    for file_path in args.files:
-        path = Path(file_path)
-        if not path.exists():
-            raise AppError(ErrorCode.UPLOAD_FAILED, f"File not found: {file_path}")
-        outputs = _process_local_file(path, stem_list)
-        for out in outputs:
-            print(out)
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-family: "Nunito Sans", sans-serif;
+      color: var(--text);
+      text-transform: lowercase;
+      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
+      padding: 56px 0;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat;
+      opacity: .18;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.022) 0 1px, transparent 1px 2px),
+        repeating-linear-gradient(90deg, rgba(0,0,0,0.024) 0 1px, transparent 1px 2px);
+      opacity: .14;
+      mix-blend-mode: soft-light;
+    }
+
+    @keyframes fadeUpIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-in {
+      opacity: 0;
+      animation: fadeUpIn 0.55s ease forwards;
+    }
+
+    .delay-1 { animation-delay: 0.04s; }
+    .delay-2 { animation-delay: 0.12s; }
+    .delay-3 { animation-delay: 0.2s; }
+    .delay-4 { animation-delay: 0.28s; }
+
+    @keyframes overlayBlurIn {
+      from {
+        backdrop-filter: blur(0px);
+        -webkit-backdrop-filter: blur(0px);
+        background-color: rgba(4, 10, 13, 0);
+      }
+      to {
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        background-color: rgba(4, 10, 13, 0.56);
+      }
+    }
+
+    @keyframes overlayBlurOut {
+      from {
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        background-color: rgba(4, 10, 13, 0.56);
+      }
+      to {
+        backdrop-filter: blur(0px);
+        -webkit-backdrop-filter: blur(0px);
+        background-color: rgba(4, 10, 13, 0);
+      }
+    }
+
+    @keyframes settingsCardIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes settingsCardOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(6px) scale(0.98); }
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(980px, calc(100vw - 28px));
+      margin: auto;
+      padding: 0;
+    }
+
+    .shade {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: rgba(0,0,0,0.24);
+      z-index: -1;
+    }
+
+    .title {
+      margin: 0 0 26px;
+      text-align: center;
+      font-size: clamp(2.7rem, 5vw, 4.6rem);
+      font-weight: 300;
+      letter-spacing: 0.5px;
+      text-shadow: 0 8px 40px rgba(0,0,0,.45);
+    }
+
+    .close-button {
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.14);
+      color: var(--text);
+      font-size: 18px;
+      margin: 0;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      backdrop-filter: blur(10px) saturate(120%);
+      -webkit-backdrop-filter: blur(10px) saturate(120%);
+      z-index: 20;
+    }
+
+    .close-button:hover {
+      background: rgba(255,255,255,0.22);
+    }
+
+    .controls {
+      display: flex;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .glass {
+      background: var(--card);
+      backdrop-filter: blur(12px) saturate(110%);
+      -webkit-backdrop-filter: blur(12px) saturate(110%);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 26px rgba(0,0,0,.28);
+    }
+
+    .glass-light {
+      background: rgba(255,255,255,0.12);
+      backdrop-filter: blur(10px) saturate(110%);
+      -webkit-backdrop-filter: blur(10px) saturate(110%);
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow: 0 8px 26px rgba(0,0,0,.28);
+    }
+
+    .dropzone {
+      flex: 1 1 auto;
+      min-height: 292px;
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      border-radius: 28px;
+      text-align: center;
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .dropzone:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(0,0,0,.32);
+    }
+
+    .dropzone.dragging {
+      transform: translateY(-2px);
+      border-color: rgba(255,255,255,.16);
+    }
+
+    .dropzone svg {
+      width: 54px;
+      height: 54px;
+      color: var(--icon);
+    }
+
+    .dropzone h3 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+
+    .dropzone p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 1rem;
+    }
+
+    .dropzone .note {
+      font-size: 0.88rem;
+    }
+
+    .hidden-input {
+      display: none;
+    }
+
+    .controls-side {
+      width: 270px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .split-card {
+      position: relative;
+      border-radius: 28px;
+      padding: 20px 18px 18px;
+      color: var(--text);
+    }
+
+    .split-head {
+      display: flex;
+      justify-content: flex-end;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 12px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .icon-button:hover {
+      background: rgba(255,255,255,0.08);
+    }
+
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .modes {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mode-card {
+      position: relative;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      cursor: pointer;
+      padding: 2px 0;
+    }
+
+    .mode-card input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .mode-card:hover {
+      opacity: 0.92;
+    }
+
+    .mode-card .checkbox {
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      border: 1.5px solid rgba(255,255,255,.35);
+      margin-top: 2px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+
+    .mode-card.active .checkbox {
+      background: linear-gradient(135deg, var(--accent-soft), #5fa3b5);
+      border-color: transparent;
+    }
+
+    .mode-card.active .checkbox::after {
+      content: "";
+      width: 6px;
+      height: 10px;
+      border: 2px solid #0F2027;
+      border-top: 0;
+      border-left: 0;
+      transform: rotate(45deg);
+    }
+
+    .mode-card strong {
+      display: block;
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }
+
+    .mode-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+
+    .small-note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    .small-note strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .warning {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: rgba(245,122,109,0.12);
+      border: 1px solid rgba(245,122,109,0.16);
+      color: #ffd7d2;
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+
+    .warning.show {
+      display: flex;
+    }
+
+    .warning-text {
+      flex: 1 1 280px;
+    }
+
+    .warning-action {
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.08);
+      color: inherit;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .warning-action:hover {
+      background: rgba(255,255,255,0.14);
+    }
+
+    .start-button {
+      border-radius: 28px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: white;
+      text-align: center;
+      min-height: 88px;
+    }
+
+    .start-button .start-icon {
+      font-size: 1.15rem;
+      line-height: 1;
+    }
+
+    .start-button .start-text {
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    .queue-panel {
+      margin-top: 18px;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+
+    .queue-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .queue-head h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    .queue-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
+    .queue-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .queue-item {
+      padding: 16px 18px;
+      border-radius: 22px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 26px rgba(0,0,0,.28);
+      backdrop-filter: blur(12px) saturate(110%);
+      -webkit-backdrop-filter: blur(12px) saturate(110%);
+    }
+
+    .queue-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .queue-main {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .queue-name {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      word-break: break-word;
+    }
+
+    .queue-subline {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(255,255,255,0.1);
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    .status-badge.status-running,
+    .status-badge.status-queued,
+    .status-badge.status-uploading {
+      color: var(--accent-strong);
+      border: 1px solid rgba(181,255,216,0.18);
+    }
+
+    .status-badge.status-done {
+      color: #dfffe5;
+      background: rgba(106, 189, 128, 0.12);
+    }
+
+    .status-badge.status-error,
+    .status-badge.status-stopped {
+      color: #ffd7d2;
+      background: rgba(245,122,109,0.12);
+    }
+
+    .queue-stage {
+      margin-top: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+
+    .queue-stage.progress-only {
+      justify-content: flex-end;
+    }
+
+    .queue-stage strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .progress-shell {
+      margin-top: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      width: 100%;
+      transform: scaleX(0);
+      transform-origin: left center;
+      transition: transform 0.52s cubic-bezier(.22,.61,.36,1);
+      will-change: transform;
+      background: linear-gradient(90deg, #76cfba 0%, #baf7d8 55%, #e0fff3 100%);
+      box-shadow: inset 0 0 16px rgba(255,255,255,0.22);
+    }
+
+    .queue-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      min-width: 160px;
+    }
+
+    .button {
+      border-radius: 14px;
+      padding: 10px 14px;
+      font-weight: 700;
+    }
+
+    .button:hover { transform: translateY(-1px); }
+    .button:disabled { cursor: not-allowed; opacity: 0.5; transform: none; }
+
+    .button.primary {
+      background: linear-gradient(135deg, #89dbc2, #baffde);
+      color: #081116;
+      box-shadow: 0 14px 34px rgba(132, 213, 191, 0.22);
+    }
+
+    .button.secondary {
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .button.ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .button.danger {
+      background: rgba(245,122,109,0.12);
+      color: #ffd7d2;
+      border: 1px solid rgba(245,122,109,0.16);
+    }
+
+    .empty {
+      padding: 34px 20px;
+      text-align: center;
+      color: var(--muted);
+      border-radius: 20px;
+      border: 1px dashed rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .modal-shell {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(4, 10, 13, 0.56);
+      backdrop-filter: blur(10px);
+      padding: 24px;
+    }
+
+    .modal-shell.open {
+      display: grid;
+      animation: overlayBlurIn .28s ease both;
+    }
+
+    .modal-shell.closing {
+      display: grid;
+      animation: overlayBlurOut .18s ease both;
+    }
+
+    .modal {
+      width: min(460px, 100%);
+      padding: 24px;
+    }
+
+    .settings-card-in {
+      animation: settingsCardIn .28s cubic-bezier(.2,.7,.2,1) both;
+    }
+
+    .settings-card-out {
+      animation: settingsCardOut .18s ease both;
+    }
+
+    .modal h3 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: -0.04em;
+    }
+
+    .modal p {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .field label {
+      font-size: 0.88rem;
+      color: var(--muted);
+      text-transform: lowercase;
+      letter-spacing: 0.08em;
+    }
+
+    .field select {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      padding: 14px;
+    }
+
+    .modal-actions {
+      margin-top: 22px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    @media (max-width: 900px) {
+      .controls {
+        flex-direction: column;
+      }
+      .controls-side {
+        width: 100%;
+      }
+      .queue-row {
+        flex-direction: column;
+      }
+      .queue-actions {
+        width: 100%;
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .shell {
+        width: min(100vw, calc(100vw - 18px));
+      }
+      body {
+        padding: 40px 0;
+      }
+      .button {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shade"></div>
+  <button id="close-button" class="close-button" type="button" aria-label="Quit">×</button>
+
+  <main class="shell">
+    <h1 class="title fade-in delay-1">stemsplat</h1>
+
+    <section class="controls">
+      <label id="dropzone" class="dropzone glass fade-in delay-2" for="file-input" role="button" tabindex="0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z"></path>
+        </svg>
+        <div>
+          <h3>drop songs here</h3>
+          <p>or click to choose files</p>
+        </div>
+        <input id="file-input" class="hidden-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,audio/*" multiple>
+      </label>
+
+      <div class="controls-side">
+        <section class="split-card glass fade-in delay-3">
+          <div class="split-head">
+            <button id="settings-button" class="icon-button" type="button" aria-label="Open settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
+              </svg>
+            </button>
+          </div>
+
+          <div class="modes" id="mode-picker">
+            <label class="mode-card active" data-mode="vocals">
+              <input type="radio" name="split-mode" value="vocals" checked>
+              <div class="checkbox"></div>
+              <div>
+                <strong>vocals</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="instrumental">
+              <input type="radio" name="split-mode" value="instrumental">
+              <div class="checkbox"></div>
+              <div>
+                <strong>instrumental</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="both_deux">
+              <input type="radio" name="split-mode" value="both_deux">
+              <div class="checkbox"></div>
+              <div>
+                <strong>both (deux)</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="both_separate">
+              <input type="radio" name="split-mode" value="both_separate">
+              <div class="checkbox"></div>
+              <div>
+                <strong>both (separate)</strong>
+              </div>
+            </label>
+          </div>
+
+        </section>
+
+        <button id="start-button" class="start-button glass-light fade-in delay-4" type="button" disabled>start</button>
+        <div id="models-warning" class="warning">
+          <span id="models-warning-text" class="warning-text"></span>
+          <button id="models-folder-button" class="warning-action" type="button" hidden>open models folder</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="queue-panel" class="queue-panel fade-in delay-4">
+      <div id="empty-state" class="empty">nothing queued yet.</div>
+      <div id="queue" class="queue-list"></div>
+    </section>
+  </main>
+
+  <div id="settings-modal" class="modal-shell" aria-hidden="true">
+    <div class="modal glass" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h3 id="settings-title">settings</h3>
+      <p>Choose the format for exported stems.</p>
+      <div class="field">
+        <label for="output-format">output format</label>
+        <select id="output-format">
+          <option value="same_as_input">same as input</option>
+          <option value="mp3_320">320kb mp3</option>
+          <option value="mp3_128">128kb mp3</option>
+          <option value="wav">wav</option>
+          <option value="m4a">m4a</option>
+          <option value="flac">flac</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="settings-cancel" class="button ghost" type="button">cancel</button>
+        <button id="settings-save" class="button primary" type="button">save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MODE_LABELS = {
+      vocals: 'vocals',
+      instrumental: 'instrumental',
+      both_deux: 'both (deux)',
+      both_separate: 'both (separate)',
+    };
+
+    const OUTPUT_LABELS = {
+      same_as_input: 'same as input',
+      mp3_320: '320kb mp3',
+      mp3_128: '128kb mp3',
+      wav: 'wav',
+      m4a: 'm4a',
+      flac: 'flac',
+    };
+
+    const queueEl = document.getElementById('queue');
+    const queuePanelEl = document.getElementById('queue-panel');
+    const emptyStateEl = document.getElementById('empty-state');
+    const startButton = document.getElementById('start-button');
+    const fileInput = document.getElementById('file-input');
+    const dropzone = document.getElementById('dropzone');
+    const settingsButton = document.getElementById('settings-button');
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsCancel = document.getElementById('settings-cancel');
+    const settingsSave = document.getElementById('settings-save');
+    const outputFormatSelect = document.getElementById('output-format');
+    const closeButton = document.getElementById('close-button');
+    const modelsWarning = document.getElementById('models-warning');
+    const modelsWarningText = document.getElementById('models-warning-text');
+    const modelsFolderButton = document.getElementById('models-folder-button');
+    const settingsCard = settingsModal.querySelector('.modal');
+
+    const settings = {
+      output_format: localStorage.getItem('stemsplat.output_format') || 'same_as_input',
+    };
+
+    let selectedMode = 'vocals';
+    let tasks = [];
+    let startBusy = false;
+    let settingsCloseTimer = null;
+    let missingModels = [];
+    let modelsDir = '';
+
+    function missingForMode(mode) {
+      if (mode === 'vocals') return missingModels.includes('vocals') ? ['vocals'] : [];
+      if (mode === 'instrumental') return missingModels.includes('instrumental') ? ['instrumental'] : [];
+      if (mode === 'both_deux') return missingModels.includes('deux') ? ['deux'] : [];
+      if (mode === 'both_separate') {
+        return ['vocals', 'instrumental'].filter((name) => missingModels.includes(name));
+      }
+      return [];
+    }
+
+    function pendingMissingModels() {
+      const missing = new Set();
+      tasks
+        .filter((task) => task.status === 'pending')
+        .forEach((task) => missingForMode(task.mode).forEach((name) => missing.add(name)));
+      return Array.from(missing);
+    }
+
+    function updateOutputSummary() {
+      outputFormatSelect.value = settings.output_format;
+    }
+
+    function setMode(mode) {
+      selectedMode = mode;
+      document.querySelectorAll('.mode-card').forEach((card) => {
+        const active = card.dataset.mode === mode;
+        card.classList.toggle('active', active);
+        const input = card.querySelector('input');
+        if (input) input.checked = active;
+      });
+      showModelsWarning(missingModels);
+    }
+
+    function humanEta(seconds) {
+      if (!Number.isFinite(seconds) || seconds <= 0) return '';
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      if (mins >= 60) {
+        const hours = Math.floor(mins / 60);
+        const remMins = mins % 60;
+        return `${hours}h ${remMins}m remaining`;
+      }
+      if (mins > 0) return `${mins}m ${secs}s remaining`;
+      return `${secs}s remaining`;
+    }
+
+    function statusLabel(status) {
+      if (status === 'queued') return 'queued';
+      if (status === 'running') return 'running';
+      if (status === 'done') return 'done';
+      if (status === 'error') return 'error';
+      if (status === 'stopped') return 'stopped';
+      if (status === 'uploading') return 'uploading';
+      return 'ready';
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function isTerminal(task) {
+      return ['done', 'error', 'stopped'].includes(task.status);
+    }
+
+    function makeLocalTask(file) {
+      return {
+        localId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        id: null,
+        file,
+        name: file.name,
+        mode: selectedMode,
+        output_format: settings.output_format,
+        status: 'pending',
+        stage: 'ready',
+        pct: 0,
+        eta_seconds: null,
+        out_dir: null,
+        outputs: [],
+        error: null,
+        eventSource: null,
+        abortController: null,
+        removed: false,
+      };
+    }
+
+    function updateStartButton() {
+      const pendingCount = tasks.filter((task) => task.status === 'pending').length;
+      startButton.disabled = startBusy || pendingCount === 0 || pendingMissingModels().length > 0;
+      startButton.textContent = startBusy ? 'starting...' : 'start';
+    }
+
+    function updateQueueSummary() {
+      const queueSummaryEl = document.getElementById('queue-summary');
+      if (!queueSummaryEl) {
+        return;
+      }
+      if (tasks.length === 0) {
+        queueSummaryEl.textContent = 'add songs, then press start.';
+        return;
+      }
+      const pending = tasks.filter((task) => task.status === 'pending').length;
+      const active = tasks.filter((task) => ['queued', 'running', 'uploading'].includes(task.status)).length;
+      const done = tasks.filter((task) => task.status === 'done').length;
+      queueSummaryEl.textContent = `${tasks.length} song${tasks.length === 1 ? '' : 's'} • ${pending} waiting • ${active} working • ${done} done`;
+    }
+
+    function renderQueue() {
+      queueEl.innerHTML = '';
+      if (queuePanelEl) {
+        queuePanelEl.style.display = tasks.length === 0 ? 'none' : 'block';
+      }
+      emptyStateEl.style.display = 'none';
+
+      tasks.forEach((task) => {
+        const item = document.createElement('article');
+        item.className = 'queue-item';
+
+        const pct = Math.max(0, Math.min(100, task.pct || 0));
+        const eta = humanEta(task.eta_seconds);
+        const stageText = task.error ? task.error : '';
+        const modeLabel = MODE_LABELS[task.mode] || task.mode;
+        const outputLabel = task.output_format === 'same_as_input'
+          ? ''
+          : (OUTPUT_LABELS[task.output_format] || task.output_format);
+        const queueMeta = outputLabel ? `${modeLabel} • ${outputLabel}` : modeLabel;
+        const progressSide = `${pct}%${eta ? ` • ${eta}` : ''}`;
+        const badgeText = statusLabel(task.status);
+        const showStatusBadge = ['error', 'stopped'].includes(task.status)
+          || (task.status === 'done' && stageText.trim().toLowerCase() !== badgeText);
+        const statusBadgeHtml = showStatusBadge
+          ? `<div class="status-badge status-${task.status}">${badgeText}</div>`
+          : '';
+        const stageHtml = stageText
+          ? `
+              <div class="queue-stage">
+                <strong>${escapeHtml(stageText)}</strong>
+                <span>${escapeHtml(progressSide)}</span>
+              </div>
+            `
+          : `
+              <div class="queue-stage progress-only">
+                <span>${escapeHtml(progressSide)}</span>
+              </div>
+            `;
+
+        item.innerHTML = `
+          <div class="queue-row">
+            <div class="queue-main">
+              <p class="queue-name">${escapeHtml(task.name)}</p>
+              <div class="queue-subline">${escapeHtml(queueMeta)}</div>
+              ${statusBadgeHtml}
+              ${stageHtml}
+              <div class="progress-shell">
+                <div class="progress-fill" style="transform:scaleX(${pct / 100})"></div>
+              </div>
+            </div>
+            <div class="queue-actions" data-actions="${task.localId}">
+            </div>
+          </div>
+        `;
+
+        const actions = item.querySelector('.queue-actions');
+        if (task.status === 'pending') {
+          const remove = document.createElement('button');
+          remove.className = 'button ghost';
+          remove.textContent = 'remove';
+          remove.addEventListener('click', () => {
+            task.removed = true;
+            tasks = tasks.filter((entry) => entry.localId !== task.localId);
+            renderQueue();
+          });
+          actions.appendChild(remove);
+        } else {
+          if (!task.id) {
+            const remove = document.createElement('button');
+            remove.className = 'button ghost';
+            remove.textContent = 'remove';
+            remove.addEventListener('click', () => {
+              task.removed = true;
+              if (task.abortController) {
+                task.abortController.abort();
+                task.abortController = null;
+              }
+              tasks = tasks.filter((entry) => entry.localId !== task.localId);
+              renderQueue();
+            });
+            actions.appendChild(remove);
+          }
+
+          if (['queued', 'running', 'uploading'].includes(task.status) && task.id) {
+            const stop = document.createElement('button');
+            stop.className = 'button danger';
+            stop.textContent = 'stop';
+            stop.disabled = task.status === 'uploading';
+            stop.addEventListener('click', async () => {
+              try {
+                await fetch(`/api/tasks/${task.id}/stop`, { method: 'POST' });
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            actions.appendChild(stop);
+          }
+
+          if (task.status === 'done' && task.id) {
+            const reveal = document.createElement('button');
+            reveal.className = 'button secondary';
+            reveal.textContent = (task.outputs || []).length === 1 ? 'show song' : 'show files';
+            reveal.addEventListener('click', async () => {
+              try {
+                await fetch(`/api/tasks/${task.id}/reveal`, { method: 'POST' });
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            actions.appendChild(reveal);
+          }
+
+          if (task.id && isTerminal(task)) {
+            const retry = document.createElement('button');
+            retry.className = 'button ghost';
+            retry.textContent = 'retry';
+            retry.addEventListener('click', async () => {
+              try {
+                const res = await fetch(`/api/tasks/${task.id}/retry`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || data.detail?.message || 'Retry failed');
+                if (task.eventSource) task.eventSource.close();
+                Object.assign(task, {
+                  id: data.id,
+                  status: data.status,
+                  stage: data.stage,
+                  pct: data.pct,
+                  eta_seconds: data.eta_seconds,
+                  out_dir: data.out_dir,
+                  outputs: data.outputs,
+                  error: data.error,
+                });
+                subscribeToTask(task);
+                renderQueue();
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            actions.appendChild(retry);
+          }
+        }
+
+        queueEl.appendChild(item);
+      });
+
+      showModelsWarning(missingModels);
+      updateQueueSummary();
+      updateStartButton();
+    }
+
+    function subscribeToTask(task) {
+      if (!task.id) return;
+      if (task.eventSource) task.eventSource.close();
+      const source = new EventSource(`/api/tasks/${task.id}/events`);
+      task.eventSource = source;
+      source.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        Object.assign(task, {
+          id: data.id,
+          status: data.status,
+          stage: data.stage,
+          pct: data.pct,
+          eta_seconds: data.eta_seconds,
+          out_dir: data.out_dir,
+          outputs: data.outputs || [],
+          error: data.error,
+        });
+        renderQueue();
+        if (isTerminal(task)) {
+          source.close();
+          task.eventSource = null;
+        }
+      };
+      source.onerror = () => {
+        if (isTerminal(task)) {
+          source.close();
+          task.eventSource = null;
+        }
+      };
+    }
+
+    async function addFiles(fileList) {
+      const incoming = Array.from(fileList || []).filter(Boolean);
+      fileInput.value = '';
+      if (incoming.length === 0) return;
+      incoming.forEach((file) => tasks.push(makeLocalTask(file)));
+      renderQueue();
+    }
+
+    async function startPending() {
+      const pending = tasks.filter((task) => task.status === 'pending' && task.file);
+      if (pending.length === 0) return;
+      if (pendingMissingModels().length > 0) {
+        renderQueue();
+        return;
+      }
+      startBusy = true;
+      updateStartButton();
+      try {
+        for (const task of pending) {
+          if (task.removed || !tasks.includes(task)) {
+            continue;
+          }
+          try {
+            task.status = 'uploading';
+            task.stage = 'uploading';
+            task.pct = 0;
+            task.error = null;
+            renderQueue();
+
+            const body = new FormData();
+            body.append('file', task.file);
+            body.append('mode', task.mode);
+            body.append('output_format', task.output_format);
+            task.abortController = new AbortController();
+
+            const res = await fetch('/api/tasks', { method: 'POST', body, signal: task.abortController.signal });
+            const data = await res.json();
+            task.abortController = null;
+            if (!res.ok) {
+              throw new Error(data.message || data.detail?.message || 'Upload failed');
+            }
+            if (task.removed || !tasks.includes(task)) {
+              if (data.id) {
+                fetch(`/api/tasks/${data.id}/stop`, { method: 'POST' }).catch(() => {});
+              }
+              continue;
+            }
+
+            task.file = null;
+            task.id = data.id;
+            task.status = data.status;
+            task.stage = data.stage;
+            task.pct = data.pct;
+            task.eta_seconds = data.eta_seconds;
+            task.out_dir = data.out_dir;
+            task.outputs = data.outputs || [];
+            task.error = data.error;
+            subscribeToTask(task);
+            renderQueue();
+          } catch (error) {
+            task.abortController = null;
+            if (error?.name === 'AbortError' || task.removed) {
+              continue;
+            }
+            task.status = 'error';
+            task.stage = 'error';
+            task.error = error?.message || 'Upload failed';
+            renderQueue();
+          }
+        }
+      } finally {
+        startBusy = false;
+        updateStartButton();
+      }
+    }
+
+    function openSettings() {
+      if (settingsCloseTimer) {
+        clearTimeout(settingsCloseTimer);
+        settingsCloseTimer = null;
+      }
+      settingsModal.classList.add('open');
+      settingsModal.classList.remove('closing');
+      settingsModal.setAttribute('aria-hidden', 'false');
+      if (settingsCard) {
+        settingsCard.classList.remove('settings-card-out');
+        void settingsCard.offsetWidth;
+        settingsCard.classList.add('settings-card-in');
+      }
+      outputFormatSelect.value = settings.output_format;
+    }
+
+    function closeSettings() {
+      if (!settingsModal.classList.contains('open')) return;
+      settingsModal.classList.add('closing');
+      settingsModal.setAttribute('aria-hidden', 'true');
+      if (settingsCard) {
+        settingsCard.classList.remove('settings-card-in');
+        settingsCard.classList.add('settings-card-out');
+      }
+      settingsCloseTimer = window.setTimeout(() => {
+        settingsModal.classList.remove('open', 'closing');
+        if (settingsCard) {
+          settingsCard.classList.remove('settings-card-out');
+        }
+        settingsCloseTimer = null;
+      }, 180);
+    }
+
+    function showModelsWarning(missing, nextModelsDir = modelsDir) {
+      missingModels = Array.isArray(missing) ? [...missing] : [];
+      modelsDir = nextModelsDir || modelsDir || '';
+      const relevantMissing = pendingMissingModels().length > 0 ? pendingMissingModels() : missingForMode(selectedMode);
+      if (relevantMissing.length === 0) {
+        modelsWarning.classList.remove('show');
+        modelsWarningText.textContent = '';
+        modelsFolderButton.hidden = true;
+        updateStartButton();
+        return;
+      }
+      modelsWarning.classList.add('show');
+      modelsWarningText.textContent = modelsDir
+        ? `missing models: ${relevantMissing.join(', ')}. add them to ${modelsDir} before starting.`
+        : `missing models: ${relevantMissing.join(', ')}. add them to the models folder before starting.`;
+      modelsFolderButton.hidden = !modelsDir;
+      updateStartButton();
+    }
+
+    async function loadModelsWarning() {
+      try {
+        const res = await fetch('/api/models_status');
+        if (!res.ok) return;
+        const data = await res.json();
+        showModelsWarning(data.missing || [], data.models_dir || '');
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    fileInput.addEventListener('change', (event) => addFiles(event.target.files));
+    dropzone.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        fileInput.click();
+      }
+    });
+    dropzone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      dropzone.classList.add('dragging');
+    });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragging'));
+    dropzone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      dropzone.classList.remove('dragging');
+      addFiles(event.dataTransfer.files);
+    });
+
+    document.querySelectorAll('.mode-card').forEach((card) => {
+      card.addEventListener('click', () => setMode(card.dataset.mode));
+    });
+
+    modelsFolderButton.addEventListener('click', async () => {
+      try {
+        await fetch('/api/open_models_folder', { method: 'POST' });
+      } catch (error) {
+        console.error(error);
+      }
+    });
+    document.querySelectorAll('.mode-card input').forEach((input) => {
+      input.addEventListener('change', (event) => setMode(event.target.value));
+    });
+
+    startButton.addEventListener('click', startPending);
+
+    settingsButton.addEventListener('click', openSettings);
+    settingsCancel.addEventListener('click', closeSettings);
+    settingsSave.addEventListener('click', () => {
+      settings.output_format = outputFormatSelect.value;
+      localStorage.setItem('stemsplat.output_format', settings.output_format);
+      updateOutputSummary();
+      closeSettings();
+    });
+
+    settingsModal.addEventListener('click', (event) => {
+      if (event.target === settingsModal) closeSettings();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && settingsModal.classList.contains('open')) {
+        closeSettings();
+      }
+    });
+
+    closeButton.addEventListener('click', async () => {
+      try {
+        await fetch('/shutdown', { method: 'POST', keepalive: true });
+      } catch (error) {
+        console.error(error);
+      }
+      setTimeout(() => {
+        try { window.close(); } catch (_) {}
+        window.location.replace('about:blank');
+      }, 250);
+    });
+
+    updateOutputSummary();
+    setMode(selectedMode);
+    renderQueue();
+    loadModelsWarning();
+  </script>
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":  # pragma: no cover

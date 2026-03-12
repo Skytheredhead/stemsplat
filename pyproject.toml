@@ -7,16 +7,23 @@ authors = ["Your Name <you@example.com>"]
 [tool.poetry.dependencies]
 python = "^3.10"
 torch = "*"
-torchaudio = "*"
 fastapi = "*"
 uvicorn = {extras = ["standard"], version = "*"}
-click = "*"
-sse-starlette = "*"
+python-multipart = "*"
 numpy = "*"
+pyyaml = "*"
 soundfile = "*"
-tqdm = "*"
 einops = "*"
 rotary_embedding_torch = "*"
+packaging = "*"
+beartype = ">=0.17"
+imageio-ffmpeg = "*"
+certifi = "*"
+mutagen = "*"
+pywebview = "*"
+pyobjc-core = "*"
+pyobjc-framework-Cocoa = "*"
+pyobjc-framework-WebKit = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"
