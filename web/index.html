@@ -99,6 +99,7 @@
       z-index: 24;
       align-items: flex-start;
       pointer-events: none;
+      transition: opacity .28s ease;
     }
     .window-dragbar {
       width: 100%;
@@ -189,6 +190,13 @@
     .app-shell.resetting-in {
       opacity: 0;
       transform: translateY(18px);
+    }
+    body.desktop-shell.app-launch-pre .window-chrome,
+    body.desktop-shell.app-launch-pre #app-shell,
+    body.desktop-shell.app-launch-pre .bg-gradient-shell,
+    body.desktop-shell.app-launch-pre .noise::before,
+    body.desktop-shell.app-launch-pre .shade {
+      opacity: 0;
     }
     body.fullscreen-transition .window-chrome,
     body.fullscreen-transition #app-shell,
@@ -663,7 +671,7 @@
   </script>
 </head>
 
-<body style="font-family: 'Nunito Sans', sans-serif;">
+<body class="app-launch-pre" style="font-family: 'Nunito Sans', sans-serif;">
   <div class="window-chrome">
     <div class="window-dragbar pywebview-drag-region">
       <div class="window-controls-shell">
@@ -895,6 +903,7 @@
     };
     let defaultOutputPath = '';
     let dirPickerInput = null;
+    let desktopLaunchAnimated = false;
 
     function applyDesktopShellState(){
       const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
@@ -902,6 +911,14 @@
       if(settingsBtn){
         settingsBtn.disabled = isLanClient;
         settingsBtn.classList.toggle('dimmed-control', isLanClient);
+      }
+      if(hasDesktopApi && !desktopLaunchAnimated){
+        desktopLaunchAnimated = true;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            document.body.classList.remove('app-launch-pre');
+          });
+        });
       }
     }
 

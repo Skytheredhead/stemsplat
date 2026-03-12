@@ -407,6 +407,7 @@ def _run_windowed_app(controller: ServerController) -> int:
         easy_drag=False,
         text_select=False,
         background_color="#0B1A1F",
+        transparent=True,
         hidden=True,
     )
 

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 import gc
+import importlib
 import json
 import logging
 import math
@@ -24,16 +25,21 @@ import urllib.request
 import uuid
 import webbrowser
 import zipfile
+from collections import namedtuple
 from dataclasses import dataclass
 from enum import Enum
+from functools import partial, wraps
 from pathlib import Path
+from packaging import version
 from typing import Any, Callable, Optional
 
 import numpy as np
 import soundfile as sf
 import torch
 import yaml
+from beartype import beartype
 from downloader import SSL_CONTEXT, download_to
+from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
     CONFIG_DIR,
@@ -52,7 +58,11 @@ from app_paths import (
 )
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from rotary_embedding_torch import RotaryEmbedding
 from starlette.background import BackgroundTask
+from torch import einsum, nn
+from torch.nn import Module, ModuleList
+import torch.nn.functional as F
 
 try:
     from mutagen import File as MutagenFile
@@ -68,6 +78,13 @@ except Exception as exc:  # pragma: no cover - keep app importable for syntax ch
     _model_import_error = exc
 else:
     _model_import_error = None
+
+
+def _optional_import(module_name: str) -> Any | None:
+    with contextlib.suppress(Exception):
+        return importlib.import_module(module_name)
+    return None
+
 
 certifi = _optional_import("certifi")
 ort = _optional_import("onnxruntime")
@@ -1236,19 +1253,30 @@ lan_auth_sessions: dict[str, dict[str, Any]] = {}
 
 
 ensure_app_dirs()
-file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 stream_handler = logging.StreamHandler()
+file_handler: logging.Handler | None
+try:
+    file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+except Exception:
+    file_handler = None
+
+handlers = [stream_handler]
+if file_handler is not None:
+    handlers.append(file_handler)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s",
-    handlers=[stream_handler, file_handler],
+    handlers=handlers,
 )
 logger = logging.getLogger("stemsplat")
+if file_handler is None:
+    logger.warning("file logging unavailable at %s; continuing with console logging only", LOG_PATH)
 logging.getLogger("python_multipart").setLevel(logging.INFO)
 for uvicorn_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     uvicorn_logger = logging.getLogger(uvicorn_name)
     uvicorn_logger.setLevel(logging.INFO)
-    if file_handler not in uvicorn_logger.handlers:
+    if file_handler is not None and file_handler not in uvicorn_logger.handlers:
         uvicorn_logger.addHandler(file_handler)
 
 for path in (MODEL_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, OUTPUT_ROOT):
