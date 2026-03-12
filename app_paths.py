@@ -43,6 +43,7 @@ WORK_DIR = RUNTIME_DIR / "work"
 ARTWORK_DIR = RUNTIME_DIR / "artwork"
 OUTPUT_ROOT = (Path.home() / "Downloads").expanduser()
 SETTINGS_PATH = APP_SUPPORT_DIR / "settings.json"
+ETA_HISTORY_PATH = APP_SUPPORT_DIR / "eta_history.json"
 
 
 def ensure_app_dirs() -> None:

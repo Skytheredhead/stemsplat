@@ -3,6 +3,8 @@
 <head>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#163642" />
   <title>stemsplat</title>
 
   <!-- nunito sans -->
@@ -64,7 +66,7 @@
     body {
       padding: 0;
       overscroll-behavior: none;
-      background: transparent;
+      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
       overflow: hidden;
       scrollbar-width: none;
       -ms-overflow-style: none;
@@ -85,8 +87,6 @@
       pointer-events: none;
       z-index: -3;
       background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
-      transform: scale(1);
-      transition: top .32s ease, bottom .32s ease, left .32s ease, right .32s ease, transform .32s ease, opacity .32s ease;
     }
     .window-chrome {
       display: none;
@@ -151,8 +151,8 @@
     .window-control.fullscreen { background: #28c840; }
 
     .noise::before { content: ""; position: fixed; inset: -22vh 0; pointer-events: none;
-      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; transition: inset .32s ease, opacity .32s ease, transform .32s ease; transform: scale(1); }
-    .shade { position: fixed; inset: -22vh 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; transition: inset .32s ease, opacity .32s ease, transform .32s ease; transform: scale(1); }
+      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; }
+    .shade { position: fixed; inset: -22vh 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; }
     .app-shell {
       min-height: 100vh;
       max-height: 100vh;
@@ -189,25 +189,6 @@
     .app-shell.resetting-in {
       opacity: 0;
       transform: translateY(18px);
-    }
-    body.fullscreen-transition .window-chrome,
-    body.fullscreen-transition #app-shell,
-    body.fullscreen-transition #settings-overlay,
-    body.fullscreen-transition #toast-wrap {
-      opacity: 0;
-      transition: opacity .18s ease;
-    }
-    body.fullscreen-transition .bg-gradient-shell {
-      top: -34vh;
-      bottom: -34vh;
-      left: -8vw;
-      right: -8vw;
-      transform: scale(1.04);
-    }
-    body.fullscreen-transition .noise::before,
-    body.fullscreen-transition .shade {
-      inset: -34vh -8vw;
-      transform: scale(1.04);
     }
 
     .glass { background: var(--card); backdrop-filter: blur(12px) saturate(110%); -webkit-backdrop-filter: blur(12px) saturate(110%); border: 1px solid var(--border); box-shadow: 0 8px 26px rgba(0,0,0,.28); }
@@ -291,44 +272,6 @@
     .dimmed-control { opacity:.45; pointer-events:none; }
     .copy-button { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.10); display: inline-flex; align-items: center; justify-content: center; color: var(--txt-main); transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
     .copy-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.16); box-shadow: 0 8px 18px rgba(0,0,0,.2); }
-    #settings-card {
-      max-height: 50vh;
-      overflow: hidden;
-      padding-right: 18px;
-    }
-    .settings-card-scroll {
-      max-height: calc(50vh - 48px);
-      overflow-y: auto;
-      scrollbar-width: none;
-      -ms-overflow-style: none;
-      padding-right: 10px;
-    }
-    .settings-card-scroll::-webkit-scrollbar { display: none; }
-    .settings-scroll-indicator {
-      position: absolute;
-      top: 52px;
-      right: 10px;
-      bottom: 20px;
-      width: 4px;
-      border-radius: 999px;
-      background: rgba(255,255,255,.08);
-      overflow: hidden;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity .16s ease;
-    }
-    .settings-scroll-indicator.visible { opacity: 1; }
-    .settings-scroll-thumb {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 56px;
-      border-radius: 999px;
-      background: rgba(255,255,255,.72);
-      transform: translateY(0);
-      transition: transform .1s ease-out, height .14s ease-out, opacity .12s ease;
-    }
     .copy-button svg { position:absolute; inset:0; margin:auto; width:16px; height:16px; transition: opacity .18s ease; }
     .copy-button .icon-wrap { position:relative; width:16px; height:16px; display:block; }
     .copy-button .icon-check { opacity:0; }
@@ -340,97 +283,6 @@
     .model-state { width:18px; height:18px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); display:flex; align-items:center; justify-content:center; color:#b9f4d7; }
     .model-state svg { width:12px; height:12px; opacity:0; transition: opacity .18s ease; }
     .model-item.ready .model-state svg { opacity:1; }
-    .passcode-indicator {
-      appearance: none;
-      padding: 0;
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.16);
-      background: rgba(255,255,255,.08);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: rgba(236,248,255,.82);
-      flex: 0 0 auto;
-      cursor: default;
-      transition: background .18s ease, border-color .18s ease, opacity .18s ease, box-shadow .18s ease, color .18s ease, transform .18s ease;
-      opacity: .5;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-    }
-    .passcode-indicator svg {
-      width: 16px;
-      height: 16px;
-      opacity: .34;
-      transition: opacity .18s ease, transform .18s ease;
-    }
-    .passcode-indicator.pending {
-      opacity: 1;
-      cursor: pointer;
-      background: linear-gradient(135deg, rgba(194,231,245,.34), rgba(122,179,198,.20));
-      border-color: rgba(184,227,242,.72);
-      color: #f5fcff;
-      box-shadow: 0 10px 22px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.18);
-      transform: translateY(-1px);
-    }
-    .passcode-indicator.pending svg {
-      opacity: 1;
-      transform: scale(1.04);
-    }
-    .passcode-indicator.confirmed {
-      opacity: 1;
-      background: linear-gradient(135deg, rgba(255,255,255,.14), rgba(255,255,255,.09));
-      border-color: rgba(255,255,255,.26);
-      color: rgba(220,229,235,.92);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
-    }
-    .passcode-indicator.confirmed svg {
-      opacity: .9;
-      transform: scale(1);
-    }
-    .passcode-indicator:disabled {
-      cursor: default;
-      transform: none;
-    }
-    .passcode-visibility {
-      appearance: none;
-      padding: 0;
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(255,255,255,.08);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: rgba(236,248,255,.82);
-      flex: 0 0 auto;
-      transition: background .18s ease, border-color .18s ease, opacity .18s ease, box-shadow .18s ease, color .18s ease;
-      opacity: .88;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-    }
-    .passcode-visibility:hover:not(:disabled) {
-      background: rgba(255,255,255,.12);
-      border-color: rgba(255,255,255,.22);
-      color: #f5fcff;
-    }
-    .passcode-visibility:disabled {
-      opacity: .38;
-      cursor: default;
-    }
-    .passcode-visibility svg {
-      width: 16px;
-      height: 16px;
-    }
-    .passcode-visibility .icon-eye-off {
-      display: none;
-    }
-    .passcode-visibility.visible .icon-eye {
-      display: none;
-    }
-    .passcode-visibility.visible .icon-eye-off {
-      display: block;
-    }
     .model-note { font-size:12px; opacity:.65; }
     .models-cta-wrap { position:relative; display:flex; gap:8px; }
     .models-cta-wrap > * { position:relative; z-index:1; }
@@ -462,91 +314,6 @@
     }
     .settings-disclosure[aria-expanded="true"] .settings-disclosure-caret {
       transform: rotate(90deg);
-    }
-    .fancy-select {
-      position: relative;
-    }
-    .fancy-select-btn {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 11px 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,.12);
-      background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.04));
-      color: var(--txt-main);
-      font-size: 14px;
-      transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
-    }
-    .fancy-select-btn:hover {
-      transform: translateY(-1px);
-      border-color: rgba(255,255,255,.2);
-      background: linear-gradient(135deg, rgba(255,255,255,.13), rgba(255,255,255,.06));
-      box-shadow: 0 10px 24px rgba(0,0,0,.18);
-    }
-    .fancy-select-btn[aria-expanded="true"] {
-      border-color: rgba(142,216,255,.45);
-      box-shadow: 0 0 0 1px rgba(142,216,255,.22), 0 14px 30px rgba(0,0,0,.22);
-    }
-    .fancy-select-btn svg {
-      width: 16px;
-      height: 16px;
-      opacity: .78;
-      transition: transform .18s ease, opacity .18s ease;
-      flex: 0 0 auto;
-    }
-    .fancy-select-btn[aria-expanded="true"] svg {
-      transform: rotate(180deg);
-      opacity: 1;
-    }
-    .fancy-select-menu {
-      position: absolute;
-      left: 0;
-      right: 0;
-      top: calc(100% + 8px);
-      z-index: 30;
-      padding: 8px;
-      border-radius: 18px;
-      border: 1px solid rgba(255,255,255,.1);
-      background: rgba(16, 28, 34, .92);
-      backdrop-filter: blur(14px) saturate(110%);
-      -webkit-backdrop-filter: blur(14px) saturate(110%);
-      box-shadow: 0 18px 42px rgba(0,0,0,.34);
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      opacity: 0;
-      transform: translateY(-4px);
-      pointer-events: none;
-      transition: opacity .18s ease, transform .18s ease;
-    }
-    .fancy-select-menu.open {
-      opacity: 1;
-      transform: translateY(0);
-      pointer-events: auto;
-    }
-    .fancy-select-option {
-      width: 100%;
-      text-align: left;
-      padding: 10px 12px;
-      border-radius: 12px;
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--txt-main);
-      font-size: 13px;
-      transition: background .16s ease, border-color .16s ease, transform .16s ease;
-    }
-    .fancy-select-option:hover {
-      transform: translateX(1px);
-      background: rgba(255,255,255,.06);
-      border-color: rgba(255,255,255,.08);
-    }
-    .fancy-select-option[data-selected="true"] {
-      background: linear-gradient(135deg, rgba(150,197,214,.28), rgba(95,163,181,.18));
-      border-color: rgba(150,197,214,.48);
-      color: #f5fbff;
     }
     .nerd-stuff-wrap {
       overflow: hidden;
@@ -632,25 +399,155 @@
     
     .page-mask { position:fixed; inset:0; background: rgba(0,0,0,0.0); pointer-events:none; opacity:0; transition: opacity .28s ease; }
     .page-mask.show { opacity:1; }
-    .model-overlay-progress {
-      overflow: hidden;
-      max-height: 0;
-      opacity: 0;
-      transform: translateY(-6px);
-      transition: max-height .24s cubic-bezier(.22,.61,.36,1), opacity .2s ease, transform .2s ease, margin-top .2s ease;
-      margin-top: 0;
-    }
-    .model-overlay-progress.open {
-      max-height: 140px;
-      opacity: 1;
-      transform: translateY(0);
-      margin-top: 8px;
-    }
-    .model-overlay-note {
-      font-size: 13px;
-      opacity: .84;
-    }
 @media (prefers-reduced-motion: reduce){ .fade-in{ animation:none; } .btn:hover{ transform:none; } .card:hover{ transform:none; } .micro{ animation:none; } }
+    body.mobile-lan .window-chrome { display: none !important; }
+    body.mobile-lan {
+      min-height: 100svh;
+      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
+    }
+    body.mobile-lan .noise::before,
+    body.mobile-lan .shade,
+    body.mobile-lan .bg-gradient-shell { inset: -28vh 0; }
+    body.mobile-lan .app-shell {
+      width: 100%;
+      gap: 18px;
+    }
+    body.mobile-lan .app-shell.compact {
+      min-height: 100svh;
+      justify-content: center;
+      padding: max(32px, env(safe-area-inset-top, 0px) + 14px) 0 max(38px, env(safe-area-inset-bottom, 0px) + 18px);
+    }
+    body.mobile-lan .app-shell.expanded {
+      min-height: 100svh;
+      justify-content: flex-start;
+      padding: max(28px, env(safe-area-inset-top, 0px) + 12px) 0 max(34px, env(safe-area-inset-bottom, 0px) + 16px);
+    }
+    body.mobile-lan #title {
+      font-size: clamp(34px, 10vw, 52px);
+      line-height: .96;
+      text-align: center;
+      width: min(92vw, 440px);
+      margin: 0 auto;
+    }
+    body.mobile-lan #primary-controls {
+      width: min(92vw, 440px);
+      max-width: none;
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      gap: 12px;
+    }
+    body.mobile-lan #dropzone {
+      flex: 1.15;
+      min-height: 184px;
+      padding: 18px 14px;
+      border-radius: 24px;
+      gap: 10px;
+      transform: none !important;
+    }
+    body.mobile-lan #dropzone svg {
+      width: 42px;
+      height: 42px;
+    }
+    body.mobile-lan #dropzone p {
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    body.mobile-lan #action-column,
+    body.mobile-lan #stems-card,
+    body.mobile-lan #start-btn {
+      width: 100% !important;
+      max-width: none;
+    }
+    body.mobile-lan #action-column {
+      flex: 0 0 38%;
+      gap: 10px;
+    }
+    body.mobile-lan #stems-card {
+      padding: 14px;
+      border-radius: 24px;
+    }
+    body.mobile-lan .stem-choice {
+      min-height: 42px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    body.mobile-lan #start-btn {
+      min-height: 86px;
+      border-radius: 24px;
+      font-size: 16px;
+      padding: 12px;
+    }
+    body.mobile-lan #start-btn svg {
+      width: 22px;
+      height: 22px;
+    }
+    body.mobile-lan #queue,
+    body.mobile-lan #queue-spacer,
+    body.mobile-lan #queue-bottom-pad {
+      width: min(92vw, 440px);
+      max-width: none;
+    }
+    body.mobile-lan .item-row {
+      padding-right: 64px;
+    }
+    body.mobile-lan .card {
+      border-radius: 22px;
+    }
+    body.mobile-lan .card-body {
+      align-items: flex-start;
+      gap: 12px;
+    }
+    body.mobile-lan .artwork-shell {
+      width: 52px;
+      height: 52px;
+      flex-basis: 52px;
+      border-radius: 14px;
+    }
+    body.mobile-lan .filename-wrap {
+      align-items: flex-start;
+      gap: 6px;
+      flex-direction: column;
+    }
+    body.mobile-lan .status-wrap {
+      align-self: flex-start;
+    }
+    body.mobile-lan .dl-pad,
+    body.mobile-lan .stop-pad {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      right: 8px;
+    }
+    body.mobile-lan #clear-btn {
+      margin-top: 0;
+      margin-bottom: 0;
+      font-size: 16px;
+    }
+    body.mobile-lan #settings-btn {
+      opacity: .34;
+      pointer-events: none;
+      filter: grayscale(.18);
+    }
+    body.mobile-lan #settings-card {
+      width: min(94vw, 680px);
+      padding: 26px 20px;
+      border-radius: 26px;
+      max-height: min(88vh, 820px);
+      overflow-y: auto;
+    }
+    body.mobile-lan .settings-row {
+      align-items: flex-start;
+    }
+    body.mobile-lan .models-cta-wrap,
+    body.mobile-lan #settings-card .flex.gap-2,
+    body.mobile-lan #settings-card .flex.gap-3 {
+      flex-wrap: wrap;
+    }
+    body.mobile-lan #settings-card .btn {
+      min-height: 42px;
+      padding-inline: 14px;
+    }
     /* Prevent flashing UI before intro animation */
     .intro .pre-hide{ opacity: 0; }
     @view-transition { navigation: auto; }
@@ -663,7 +560,7 @@
   </script>
 </head>
 
-<body style="font-family: 'Nunito Sans', sans-serif;">
+<body class="mobile-lan" style="font-family: 'Nunito Sans', sans-serif;">
   <div class="window-chrome">
     <div class="window-dragbar pywebview-drag-region">
       <div class="window-controls-shell">
@@ -682,22 +579,16 @@
   <!-- header -->
   <h1 id="title" class="text-6xl md:text-7xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
   <!-- controls -->
-  <div class="w-11/12 max-w-3xl flex gap-6">
+  <div id="primary-controls" class="w-11/12 max-w-3xl flex gap-6">
     <div id="dropzone" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
       </svg>
-      <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
+      <p class="text-lg text-[var(--txt-main)]">tap to choose audio or video<br>or drag files here</p>
       <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,.mp4,.m4v,.mov,.webm,.mkv,.avi,audio/*,video/*" multiple aria-label="choose media files" class="sr-only" />
     </div>
-    <div class="flex flex-col gap-4 w-64">
+    <div id="action-column" class="flex flex-col gap-4 w-64">
       <div id="stems-card" class="glass pre-hide w-64 p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
-        <button id="settings-btn" title="settings" class="absolute top-3 right-3 z-10 p-2 rounded-lg hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
-          <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82h0c.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
-          </svg>
-        </button>
         <p class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <div id="stem-choices" class="flex flex-col gap-2">
           <button id="vocals-box" type="button" class="stem-choice active" data-mode="vocals" aria-pressed="true">vocals</button>
@@ -799,39 +690,17 @@
     let nerdStuffToggle = null;
     let nerdStuffWrap = null;
     let lanAccessHeading = null;
-    let lanCopyLocalBtn = null;
-    let lanCopyIpBtn = null;
-    let lanLocalText = null;
-    let lanIpText = null;
-    let lanPasscodeEnabled = null;
-    let lanPasscodeInput = null;
-    let lanPasscodeIndicator = null;
-    let lanPasscodeVisibilityBtn = null;
-    let lanPasscodeDirty = false;
-    let lanPasscodeDraft = '';
-    let lanPasscodeVisible = false;
-    let lanPasscodeTtl = null;
-    let lanPasscodeTtlButton = null;
-    let lanPasscodeTtlMenu = null;
-    let lanPasscodeTtlLabel = null;
-    let lanPasscodeWrap = null;
-    let lanPasscodeTtlWrap = null;
+    let lanAccessText = null;
+    let lanCopyBtn = null;
     let portStatusText = null;
     let modelsList = null;
     let modelsNote = null;
     let modelsDownloadBtn = null;
     let modelsCtaWrap = null;
     let modelsFolderBtn = null;
-    let modelsFirstOpenTestBtn = null;
     let modelsProgressWrap = null;
     let modelsProgressBar = null;
     let modelsProgressMeta = null;
-    let outputFormatButton = null;
-    let outputFormatMenu = null;
-    let outputFormatLabel = null;
-    let settingsScrollIndicator = null;
-    let settingsScrollBody = null;
-    let settingsScrollThumb = null;
     const structureCheck = null;
     const structurelessCheck = null;
     let storageBlocked = false;
@@ -842,67 +711,30 @@
     let modelStatusPoll = null;
     let activeReleaseOverlay = null;
     let activePortOverlay = null;
-    let activeModelOverlay = null;
     let lastModelStatus = null;
     let modelPreviewActive = false;
     let modelPreviewTimer = null;
     let nerdStuffExpanded = false;
     let copyResetTimers = new WeakMap();
-    let activeModelOverlayUi = null;
-    let fullscreenTransitionTimer = null;
-    let fullscreenResizeTimer = null;
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
       deux: 'both - deux model',
     };
-    const OUTPUT_FORMAT_LABELS = {
-      same_as_input: 'same as input',
-      mp3_320: '320kb mp3',
-      mp3_128: '128kb mp3',
-      wav: 'wav',
-      m4a: 'm4a',
-      flac: 'flac',
-    };
-    const TTL_LABELS = {
-      '15m': '15m',
-      '1d': '1d',
-      '1w': '1w',
-      never: 'never',
-    };
-    const MODEL_SOURCE_URLS = {
-      vocals: 'https://huggingface.co/becruily/mel-band-roformer-vocals/tree/main',
-      instrumental: 'https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main',
-      deux: 'https://huggingface.co/becruily/mel-band-roformer-deux/tree/main',
-    };
     const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
-    const isLanClient = !['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
 
     let startPressed = false;
     let startGeneration = 0;
     let startLock = false;
     let queueStarted = false;
     let selectedStemModes = new Set(['vocals']);
-    let settingsState = {
-      output_root: '',
-      structure_mode: 'flat',
-      output_format: 'same_as_input',
-      video_handling: 'audio_only',
-      lan_passcode_enabled: false,
-      lan_passcode: '',
-      lan_passcode_ttl: '1d',
-      runtime: null,
-    };
+    let settingsState = { output_root: '', structure_mode: 'flat', output_format: 'same_as_input', video_handling: 'audio_only', runtime: null };
     let defaultOutputPath = '';
     let dirPickerInput = null;
 
     function applyDesktopShellState(){
       const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
       document.body.classList.toggle('desktop-shell', hasDesktopApi);
-      if(settingsBtn){
-        settingsBtn.disabled = isLanClient;
-        settingsBtn.classList.toggle('dimmed-control', isLanClient);
-      }
     }
 
     function updateStemChoiceUI(){
@@ -926,30 +758,6 @@
       return false;
     }
 
-    function beginFullscreenTransition(){
-      document.body.classList.add('fullscreen-transition');
-      if(fullscreenTransitionTimer){
-        clearTimeout(fullscreenTransitionTimer);
-      }
-      fullscreenTransitionTimer = setTimeout(() => {
-        document.body.classList.remove('fullscreen-transition');
-        fullscreenTransitionTimer = null;
-      }, 560);
-    }
-
-    function settleFullscreenTransition(){
-      if(fullscreenResizeTimer){
-        clearTimeout(fullscreenResizeTimer);
-      }
-      fullscreenResizeTimer = setTimeout(() => {
-        if(fullscreenTransitionTimer){
-          clearTimeout(fullscreenTransitionTimer);
-          fullscreenTransitionTimer = null;
-        }
-        document.body.classList.remove('fullscreen-transition');
-      }, 180);
-    }
-
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
@@ -969,15 +777,6 @@
       if(outputFormatSelect){
         outputFormatSelect.value = settingsState.output_format || 'same_as_input';
       }
-      if(outputFormatLabel){
-        outputFormatLabel.textContent = OUTPUT_FORMAT_LABELS[settingsState.output_format || 'same_as_input'] || 'same as input';
-      }
-      if(outputFormatMenu){
-        outputFormatMenu.querySelectorAll('.fancy-select-option').forEach((option) => {
-          const selected = option.dataset.value === (settingsState.output_format || 'same_as_input');
-          option.dataset.selected = selected ? 'true' : 'false';
-        });
-      }
       if(videoAudioOnly){
         videoAudioOnly.checked = true;
       }
@@ -994,103 +793,7 @@
       if(outputFolderOpen){
         outputFolderOpen.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
       }
-      if(lanPasscodeEnabled){
-        lanPasscodeEnabled.checked = !!settingsState.lan_passcode_enabled;
-      }
-      if(lanPasscodeInput){
-        if(!lanPasscodeDirty){
-          lanPasscodeDraft = String(settingsState.lan_passcode || '');
-        }
-        lanPasscodeInput.value = lanPasscodeDirty ? lanPasscodeDraft : String(settingsState.lan_passcode || '');
-        lanPasscodeInput.type = lanPasscodeVisible ? 'text' : 'password';
-        lanPasscodeInput.disabled = !settingsState.lan_passcode_enabled;
-        lanPasscodeInput.classList.toggle('dimmed-control', !settingsState.lan_passcode_enabled);
-      }
-      if(lanPasscodeVisibilityBtn){
-        lanPasscodeVisibilityBtn.disabled = !settingsState.lan_passcode_enabled || !(lanPasscodeDirty ? lanPasscodeDraft : String(settingsState.lan_passcode || '')).trim();
-        lanPasscodeVisibilityBtn.classList.toggle('visible', lanPasscodeVisible);
-      }
-      if(lanPasscodeIndicator){
-        const enabled = !!settingsState.lan_passcode_enabled;
-        const savedPasscode = String(settingsState.lan_passcode || '').trim();
-        const draftPasscode = String(lanPasscodeDirty ? lanPasscodeDraft : (lanPasscodeInput ? lanPasscodeInput.value || '' : savedPasscode)).trim();
-        const hasDraft = !!draftPasscode;
-        const isPending = enabled && hasDraft && lanPasscodeDirty;
-        const isConfirmed = enabled && hasDraft && !lanPasscodeDirty && draftPasscode === savedPasscode;
-        lanPasscodeIndicator.disabled = !enabled || !hasDraft;
-        lanPasscodeIndicator.classList.toggle('pending', isPending);
-        lanPasscodeIndicator.classList.toggle('confirmed', isConfirmed);
-      }
-      if(lanPasscodeWrap){
-        lanPasscodeWrap.classList.toggle('dimmed-control', !settingsState.lan_passcode_enabled);
-      }
-      if(lanPasscodeTtl){
-        lanPasscodeTtl.value = settingsState.lan_passcode_ttl || '1d';
-        lanPasscodeTtl.disabled = !settingsState.lan_passcode_enabled;
-      }
-      if(lanPasscodeTtlLabel){
-        lanPasscodeTtlLabel.textContent = TTL_LABELS[settingsState.lan_passcode_ttl || '1d'] || '1d';
-      }
-      if(lanPasscodeTtlMenu){
-        lanPasscodeTtlMenu.querySelectorAll('.fancy-select-option').forEach((option) => {
-          const selected = option.dataset.value === (settingsState.lan_passcode_ttl || '1d');
-          option.dataset.selected = selected ? 'true' : 'false';
-        });
-      }
-      if(lanPasscodeTtlButton){
-        lanPasscodeTtlButton.disabled = !settingsState.lan_passcode_enabled;
-        lanPasscodeTtlButton.classList.toggle('dimmed-control', !settingsState.lan_passcode_enabled);
-      }
-      if(lanPasscodeTtlWrap){
-        lanPasscodeTtlWrap.classList.toggle('dimmed-control', !settingsState.lan_passcode_enabled);
-      }
-      if(settingsBtn){
-        settingsBtn.disabled = isLanClient;
-        settingsBtn.classList.toggle('dimmed-control', isLanClient);
-      }
       applyRuntimeUI(settingsState.runtime || null);
-    }
-
-    function closeOutputFormatMenu(){
-      if(outputFormatButton){
-        outputFormatButton.setAttribute('aria-expanded', 'false');
-      }
-      if(outputFormatMenu){
-        outputFormatMenu.classList.remove('open');
-      }
-    }
-
-    function closeLanTtlMenu(){
-      if(lanPasscodeTtlButton){
-        lanPasscodeTtlButton.setAttribute('aria-expanded', 'false');
-      }
-      if(lanPasscodeTtlMenu){
-        lanPasscodeTtlMenu.classList.remove('open');
-      }
-    }
-
-    function toggleOutputFormatMenu(forceOpen = null){
-      if(!outputFormatButton || !outputFormatMenu) return;
-      const shouldOpen = forceOpen === null
-        ? outputFormatButton.getAttribute('aria-expanded') !== 'true'
-        : !!forceOpen;
-      if(shouldOpen){
-        closeLanTtlMenu();
-      }
-      outputFormatButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
-      outputFormatMenu.classList.toggle('open', shouldOpen);
-    }
-
-    function toggleLanTtlMenu(forceOpen = null){
-      if(!lanPasscodeTtlButton || !lanPasscodeTtlMenu || lanPasscodeTtlButton.disabled) return;
-      const shouldOpen = forceOpen === null
-        ? lanPasscodeTtlButton.getAttribute('aria-expanded') !== 'true'
-        : !!forceOpen;
-      if(shouldOpen){
-        closeOutputFormatMenu();
-      }
-      lanPasscodeTtlButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
-      lanPasscodeTtlMenu.classList.toggle('open', shouldOpen);
     }
 
     function setNerdStuffExpanded(expanded, { immediate = false } = {}){
@@ -1152,8 +855,6 @@
         if(!res.ok) return;
         const data = await res.json();
         settingsState = { ...settingsState, ...data };
-        lanPasscodeDirty = false;
-        lanPasscodeDraft = String(settingsState.lan_passcode || '');
         defaultOutputPath = data.output_root || defaultOutputPath;
         applySettingsUI();
       }catch(err){
@@ -1298,38 +999,12 @@
           card.classList.remove('opacity-0');
           void card.offsetWidth;
           card.classList.add('settings-card-in'); // IN
-          if(settingsScrollBody){
-            settingsScrollBody.scrollTop = 0;
-          }
-          requestAnimationFrame(updateSettingsScrollIndicator);
         }
         if(nerdStuffWrap){
           setNerdStuffExpanded(nerdStuffExpanded, { immediate: true });
         }
       }
     }
-
-    function updateSettingsScrollIndicator(){
-      const scrollBody = settingsScrollBody || document.getElementById('settings-card-scroll');
-      if(!scrollBody || !settingsScrollIndicator || !settingsScrollThumb) return;
-      const clientHeight = scrollBody.clientHeight || 0;
-      const scrollHeight = scrollBody.scrollHeight || 0;
-      const maxScroll = Math.max(0, scrollHeight - clientHeight);
-      const visible = maxScroll > 4;
-      settingsScrollIndicator.classList.toggle('visible', visible);
-      if(!visible){
-        settingsScrollThumb.style.height = '0px';
-        settingsScrollThumb.style.transform = 'translateY(0)';
-        return;
-      }
-      const trackHeight = settingsScrollIndicator.clientHeight || Math.max(0, clientHeight - 40);
-      const thumbHeight = Math.max(40, Math.round((clientHeight / scrollHeight) * trackHeight));
-      const thumbTravel = Math.max(0, trackHeight - thumbHeight);
-      const thumbOffset = maxScroll > 0 ? (scrollBody.scrollTop / maxScroll) * thumbTravel : 0;
-      settingsScrollThumb.style.height = `${thumbHeight}px`;
-      settingsScrollThumb.style.transform = `translateY(${thumbOffset}px)`;
-    }
-
     function closeSettings(){
       if(!settingsOverlay) settingsOverlay = document.getElementById('settings-overlay');
       const bg = document.getElementById('overlay-bg');
@@ -2115,41 +1790,22 @@
       applyDesktopShellState();
       settingsOverlay = document.getElementById('settings-overlay');
       outputFormatSelect = document.getElementById('output-format');
-      outputFormatButton = document.getElementById('output-format-button');
-      outputFormatMenu = document.getElementById('output-format-menu');
-      outputFormatLabel = document.getElementById('output-format-label');
       outputFolderInput = document.getElementById('output-folder-path');
       outputSameAsInput = document.getElementById('output-same-as-input');
       outputFolderChoose = document.getElementById('output-folder-choose');
       outputFolderOpen = document.getElementById('output-folder-open');
-      settingsScrollIndicator = document.getElementById('settings-scroll-indicator');
-      settingsScrollBody = document.getElementById('settings-card-scroll');
-      settingsScrollThumb = document.getElementById('settings-scroll-thumb');
       videoAudioOnly = document.getElementById('video-audio-only');
       nerdStuffToggle = document.getElementById('nerd-stuff-toggle');
       nerdStuffWrap = document.getElementById('nerd-stuff-wrap');
       lanAccessHeading = document.getElementById('lan-access-heading');
-      lanLocalText = document.getElementById('lan-local-text');
-      lanIpText = document.getElementById('lan-ip-text');
-      lanCopyLocalBtn = document.getElementById('lan-copy-local-btn');
-      lanCopyIpBtn = document.getElementById('lan-copy-ip-btn');
-      lanPasscodeEnabled = document.getElementById('lan-passcode-enabled');
-      lanPasscodeInput = document.getElementById('lan-passcode-input');
-      lanPasscodeIndicator = document.getElementById('lan-passcode-indicator');
-      lanPasscodeVisibilityBtn = document.getElementById('lan-passcode-visibility');
-      lanPasscodeTtl = document.getElementById('lan-passcode-ttl');
-      lanPasscodeTtlButton = document.getElementById('lan-passcode-ttl-button');
-      lanPasscodeTtlMenu = document.getElementById('lan-passcode-ttl-menu');
-      lanPasscodeTtlLabel = document.getElementById('lan-passcode-ttl-label');
-      lanPasscodeWrap = document.getElementById('lan-passcode-wrap');
-      lanPasscodeTtlWrap = document.getElementById('lan-passcode-ttl-wrap');
+      lanAccessText = document.getElementById('lan-access-text');
+      lanCopyBtn = document.getElementById('lan-copy-btn');
       portStatusText = document.getElementById('port-status-text');
       modelsList = document.getElementById('models-list');
       modelsNote = document.getElementById('models-note');
       modelsDownloadBtn = document.getElementById('models-download');
       modelsCtaWrap = document.getElementById('models-cta-wrap');
       modelsFolderBtn = document.getElementById('models-folder-open');
-      modelsFirstOpenTestBtn = document.getElementById('models-first-open-test');
       modelsProgressWrap = document.getElementById('models-progress-wrap');
       modelsProgressBar = document.getElementById('models-progress-bar');
       modelsProgressMeta = document.getElementById('models-progress-meta');
@@ -2166,18 +1822,11 @@
           if(nerdStuffExpanded){
             nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
           }
-          updateSettingsScrollIndicator();
         });
         setNerdStuffExpanded(false, { immediate: true });
       }
       if(closeBtn) closeBtn.addEventListener('click', closeSettings);
       if(settingsOverlay) settingsOverlay.addEventListener('click', (e)=>{ if(e.target === settingsOverlay) closeSettings(); });
-      if(settingsOverlay){
-        const settingsCardEl = document.getElementById('settings-card');
-        if(settingsCardEl && settingsScrollBody){
-          settingsScrollBody.addEventListener('scroll', updateSettingsScrollIndicator, { passive: true });
-        }
-      }
       if(forceBtn) forceBtn.addEventListener('click', async ()=>{
         try{
           await clearAllTasks({ showToast: true });
@@ -2189,7 +1838,6 @@
       setInterval(checkStorage, 15000);
       setInterval(checkMemory, 12000);
       await loadSettings();
-      updateSettingsScrollIndicator();
       await refreshRuntimeStatus({ showPortNotice: true });
       await refreshModelStatus();
       await checkForReleaseUpdate();
@@ -2199,43 +1847,6 @@
           persistSettings({ output_format: outputFormatSelect.value }, { showMissingPopup:false });
         });
       }
-      if(outputFormatButton){
-        outputFormatButton.addEventListener('click', () => {
-          toggleOutputFormatMenu();
-        });
-      }
-      if(outputFormatMenu){
-        outputFormatMenu.querySelectorAll('.fancy-select-option').forEach((option) => {
-          option.addEventListener('click', () => {
-            const nextValue = option.dataset.value || 'same_as_input';
-            if(outputFormatSelect){
-              outputFormatSelect.value = nextValue;
-            }
-            settingsState = { ...settingsState, output_format: nextValue };
-            applySettingsUI();
-            closeOutputFormatMenu();
-            persistSettings({ output_format: nextValue }, { showMissingPopup:false });
-          });
-        });
-      }
-      document.addEventListener('click', (event) => {
-        if(outputFormatButton && outputFormatMenu){
-          if(!(outputFormatButton.contains(event.target) || outputFormatMenu.contains(event.target))){
-            closeOutputFormatMenu();
-          }
-        }
-        if(lanPasscodeTtlButton && lanPasscodeTtlMenu){
-          if(!(lanPasscodeTtlButton.contains(event.target) || lanPasscodeTtlMenu.contains(event.target))){
-            closeLanTtlMenu();
-          }
-        }
-      });
-      document.addEventListener('keydown', (event) => {
-        if(event.key === 'Escape'){
-          closeOutputFormatMenu();
-          closeLanTtlMenu();
-        }
-      });
       if(outputSameAsInput){
         outputSameAsInput.addEventListener('change', () => {
           persistSettings({ output_same_as_input: outputSameAsInput.checked }, { showMissingPopup:false });
@@ -2274,99 +1885,17 @@
           }
         });
       }
-      if(lanCopyLocalBtn){
-        lanCopyLocalBtn.innerHTML = createCopyIconMarkup();
-        lanCopyLocalBtn.dataset.copied = '0';
-        lanCopyLocalBtn.addEventListener('click', async () => {
+      if(lanCopyBtn){
+        lanCopyBtn.innerHTML = createCopyIconMarkup();
+        lanCopyBtn.dataset.copied = '0';
+        lanCopyBtn.addEventListener('click', async () => {
           const runtime = settingsState.runtime || {};
-          const target = runtime.lan_local_display || '';
+          const target = runtime.lan_local_display || runtime.lan_display || '';
           if(!target) return;
           const ok = await copyText(target);
           if(ok){
-            pulseCopiedState(lanCopyLocalBtn);
+            pulseCopiedState(lanCopyBtn);
           }
-        });
-      }
-      if(lanCopyIpBtn){
-        lanCopyIpBtn.innerHTML = createCopyIconMarkup();
-        lanCopyIpBtn.dataset.copied = '0';
-        lanCopyIpBtn.addEventListener('click', async () => {
-          const runtime = settingsState.runtime || {};
-          const target = runtime.lan_display || '';
-          if(!target) return;
-          const ok = await copyText(target);
-          if(ok){
-            pulseCopiedState(lanCopyIpBtn);
-          }
-        });
-      }
-      if(lanPasscodeEnabled){
-        lanPasscodeEnabled.addEventListener('change', () => {
-          lanPasscodeDirty = false;
-          lanPasscodeVisible = false;
-          lanPasscodeDraft = String(settingsState.lan_passcode || '');
-          persistSettings({ lan_passcode_enabled: lanPasscodeEnabled.checked }, { showMissingPopup:false });
-        });
-      }
-      if(lanPasscodeInput){
-        lanPasscodeInput.maxLength = 24;
-        lanPasscodeInput.addEventListener('input', () => {
-          if(lanPasscodeInput.value.length > 24){
-            lanPasscodeInput.value = lanPasscodeInput.value.slice(0, 24);
-          }
-          lanPasscodeDraft = String(lanPasscodeInput.value || '');
-          lanPasscodeDirty = lanPasscodeDraft !== String(settingsState.lan_passcode || '');
-          applySettingsUI();
-        });
-        lanPasscodeInput.addEventListener('keydown', (event) => {
-          if(event.key === 'Enter' && lanPasscodeIndicator && !lanPasscodeIndicator.disabled){
-            event.preventDefault();
-            lanPasscodeIndicator.click();
-          }
-        });
-      }
-      if(lanPasscodeIndicator){
-        lanPasscodeIndicator.addEventListener('click', async () => {
-          if(lanPasscodeIndicator.disabled || !lanPasscodeInput || !settingsState.lan_passcode_enabled){
-            return;
-          }
-          lanPasscodeDirty = false;
-          lanPasscodeDraft = String(lanPasscodeInput.value || '');
-          await persistSettings({ lan_passcode: lanPasscodeDraft }, { showMissingPopup:false });
-          applySettingsUI();
-        });
-      }
-      if(lanPasscodeVisibilityBtn){
-        lanPasscodeVisibilityBtn.addEventListener('click', () => {
-          if(lanPasscodeVisibilityBtn.disabled){
-            return;
-          }
-          lanPasscodeVisible = !lanPasscodeVisible;
-          applySettingsUI();
-        });
-      }
-      if(lanPasscodeTtl){
-        lanPasscodeTtl.addEventListener('change', () => {
-          persistSettings({ lan_passcode_ttl: lanPasscodeTtl.value }, { showMissingPopup:false });
-        });
-      }
-      if(lanPasscodeTtlButton){
-        lanPasscodeTtlButton.addEventListener('click', () => {
-          toggleLanTtlMenu();
-        });
-      }
-      if(lanPasscodeTtlMenu){
-        lanPasscodeTtlMenu.querySelectorAll('.fancy-select-option').forEach((option) => {
-          option.addEventListener('click', () => {
-            const nextValue = option.dataset.value || '1d';
-            if(lanPasscodeTtl){
-              lanPasscodeTtl.value = nextValue;
-            }
-            settingsState = { ...settingsState, lan_passcode_ttl: nextValue };
-            applySettingsUI();
-            closeLanTtlMenu();
-            persistSettings({ lan_passcode_ttl: nextValue }, { showMissingPopup:false });
-          });
         });
       }
       if(modelsDownloadBtn){
@@ -2383,9 +1912,6 @@
       if(modelsFolderBtn){
         modelsFolderBtn.addEventListener('click', () => openModelsFolderAction());
       }
-      if(modelsFirstOpenTestBtn){
-        modelsFirstOpenTestBtn.addEventListener('click', () => beginModelPreview());
-      }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
           if(structureCheck.checked){
@@ -2400,10 +1926,6 @@
           }
         });
       }
-      window.addEventListener('resize', () => {
-        updateSettingsScrollIndicator();
-        settleFullscreenTransition();
-      });
     });
     window.addEventListener('pywebviewready', applyDesktopShellState);
     if(windowCloseBtn){
@@ -2419,7 +1941,6 @@
     }
     if(windowFullscreenBtn){
       windowFullscreenBtn.addEventListener('click', () => {
-        beginFullscreenTransition();
         callDesktopAction('toggle_fullscreen_window');
       });
     }
@@ -2542,10 +2063,6 @@
 
     function closeOverlay(overlay){
       if(!overlay || !overlay.parentNode) return;
-      if(overlay === activeModelOverlay){
-        activeModelOverlay = null;
-        activeModelOverlayUi = null;
-      }
       const bg = overlay.querySelector('.overlay-bg');
       const card = overlay.querySelector('.overlay-card');
       if(bg){
@@ -2631,7 +2148,6 @@
           closeOverlay(overlay);
           if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
           if(activePortOverlay === overlay) activePortOverlay = null;
-          if(activeModelOverlay === overlay) activeModelOverlay = null;
         }
       });
       overlay.addEventListener('keydown', (e) => {
@@ -2639,7 +2155,6 @@
           closeOverlay(overlay);
           if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
           if(activePortOverlay === overlay) activePortOverlay = null;
-          if(activeModelOverlay === overlay) activeModelOverlay = null;
         }
       });
       overlay.tabIndex = 0;
@@ -2693,19 +2208,26 @@
           ? `lan access - connect from other devices on the '${networkName}' network`
           : 'lan access - connect from other devices on the local network';
       }
-      if(lanLocalText){
-        lanLocalText.textContent = lanLocalDisplay || 'unavailable';
+      if(lanAccessText){
+        lanAccessText.innerHTML = '';
+        if(lanLocalDisplay){
+          const preferred = document.createElement('div');
+          preferred.textContent = `${lanLocalDisplay} (recommended)`;
+          lanAccessText.appendChild(preferred);
+        }
+        if(lanDisplay){
+          const fallback = document.createElement('div');
+          fallback.textContent = lanDisplay;
+          lanAccessText.appendChild(fallback);
+        }
+        if(!lanLocalDisplay && !lanDisplay){
+          lanAccessText.textContent = 'unavailable';
+        }
       }
-      if(lanIpText){
-        lanIpText.textContent = lanDisplay ? `${lanDisplay} (not recommended)` : 'unavailable';
-      }
-      if(lanCopyLocalBtn){
-        lanCopyLocalBtn.disabled = !lanLocalDisplay;
-        lanCopyLocalBtn.classList.toggle('dimmed-control', !lanLocalDisplay);
-      }
-      if(lanCopyIpBtn){
-        lanCopyIpBtn.disabled = !lanDisplay;
-        lanCopyIpBtn.classList.toggle('dimmed-control', !lanDisplay);
+      if(lanCopyBtn){
+        const copyTarget = lanLocalDisplay || lanDisplay;
+        lanCopyBtn.disabled = !copyTarget;
+        lanCopyBtn.classList.toggle('dimmed-control', !copyTarget);
       }
       if(portStatusText){
         if(data.port_conflict){
@@ -2923,6 +2445,8 @@
     function beginModelPreview(){
       clearModelPreviewTimer();
       modelPreviewActive = true;
+      openSettings();
+      setNerdStuffExpanded(true);
       updateModelSettings({
         status: 'idle',
         pct: 0,
@@ -2933,14 +2457,14 @@
         error: '',
         missing: ['vocals', 'instrumental', 'deux'],
       });
-      showModelMissingOverlay({
-        missing: ['vocals', 'instrumental', 'deux'],
-      }, { preview: true });
+      flashModelDownloadCTA();
     }
 
     function simulateModelPreviewDownload(){
       clearModelPreviewTimer();
       modelPreviewActive = true;
+      openSettings();
+      setNerdStuffExpanded(true);
       const totalBytes = 2.1 * 1024 * 1024 * 1024;
       let pct = 0;
       const tick = () => {
@@ -2965,92 +2489,6 @@
         modelPreviewTimer = setTimeout(tick, 170);
       };
       tick();
-    }
-
-    function showModelMissingOverlay(status, { preview = false } = {}){
-      closeOverlay(activeModelOverlay);
-      activeModelOverlayUi = null;
-      const missing = Array.isArray(status && status.missing) ? status.missing : ['vocals', 'instrumental', 'deux'];
-      const { overlay, card } = createOverlayCard('models not downloaded');
-      activeModelOverlay = overlay;
-
-      const body = document.createElement('div');
-      body.className = 'text-sm opacity-90 leading-relaxed';
-      const label = document.createElement('span');
-      label.textContent = 'models: ';
-      body.appendChild(label);
-      missing.forEach((key, index) => {
-        const anchor = document.createElement('a');
-        anchor.href = MODEL_SOURCE_URLS[key] || '#';
-        anchor.target = '_blank';
-        anchor.rel = 'noopener noreferrer';
-        anchor.className = 'underline';
-        anchor.textContent = key === 'deux' ? 'deux' : (MODEL_LABELS[key] || key);
-        body.appendChild(anchor);
-        if(index < missing.length - 1){
-          body.appendChild(document.createTextNode(', '));
-        }
-      });
-      card.appendChild(body);
-
-      const row = document.createElement('div');
-      row.className = 'flex gap-3 justify-end flex-wrap';
-      const folderBtn = makeActionButton('open models folder', 'bg-white/10 text-white');
-      const downloadBtn = makeActionButton('download automatically', 'bg-white text-black attention-sequence');
-
-      folderBtn.onclick = async () => {
-        if(!preview){
-          await dismissModelPrompt();
-        }
-        await openModelsFolderAction();
-        closeOverlay(activeModelOverlay);
-        activeModelOverlay = null;
-        activeModelOverlayUi = null;
-      };
-
-      downloadBtn.onclick = async () => {
-        if(preview){
-          simulateModelPreviewDownload();
-          return;
-        }
-        await dismissModelPrompt();
-        if(activeModelOverlayUi && activeModelOverlayUi.overlay === activeModelOverlay){
-          activeModelOverlayUi.progressWrap.classList.add('open');
-          activeModelOverlayUi.progressNote.textContent = 'starting download…';
-          activeModelOverlayUi.progressMeta.textContent = '';
-          activeModelOverlayUi.progressFill.style.width = '0%';
-          activeModelOverlayUi.downloadBtn.hidden = true;
-        }
-        await startModelDownload(missing);
-      };
-
-      row.append(folderBtn, downloadBtn);
-      card.appendChild(row);
-
-      const progressWrap = document.createElement('div');
-      progressWrap.className = 'model-overlay-progress space-y-2';
-      const progressNote = document.createElement('div');
-      progressNote.className = 'model-overlay-note';
-      const progressBar = document.createElement('div');
-      progressBar.className = 'bar';
-      const progressFill = document.createElement('div');
-      progressFill.className = 'bar-fill';
-      progressBar.appendChild(progressFill);
-      const progressMeta = document.createElement('div');
-      progressMeta.className = 'text-xs opacity-70';
-      progressWrap.append(progressNote, progressBar, progressMeta);
-      card.appendChild(progressWrap);
-
-      activeModelOverlayUi = {
-        overlay,
-        folderBtn,
-        downloadBtn,
-        progressWrap,
-        progressFill,
-        progressMeta,
-        progressNote,
-      };
-      updateModelSettings(status || { missing });
     }
 
     function startModelStatusPolling(){
@@ -3119,34 +2557,6 @@
       }else if(nerdStuffExpanded && nerdStuffWrap){
         nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
       }
-      if(activeModelOverlayUi && activeModelOverlayUi.overlay === activeModelOverlay){
-        const overlayMissing = Array.isArray(status && status.missing) ? status.missing : [];
-        const showOverlayProgress = isDownloading || isError || (status && status.status === 'done' && overlayMissing.length === 0);
-        activeModelOverlayUi.progressWrap.classList.toggle('open', !!showOverlayProgress);
-        activeModelOverlayUi.progressFill.style.width = `${Math.max(0, status && status.pct ? status.pct : 0)}%`;
-        if(isDownloading){
-          activeModelOverlayUi.progressNote.textContent = `downloading ${status.current_model || 'models'}`;
-          const bits = [
-            `${Math.max(0, status.pct || 0)}%`,
-            `${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`,
-          ];
-          const eta = formatDuration(status.eta_seconds);
-          if(eta) bits.push(eta);
-          activeModelOverlayUi.progressMeta.textContent = bits.join(' · ');
-        }else if(isError){
-          activeModelOverlayUi.progressNote.textContent = 'download failed';
-          activeModelOverlayUi.progressMeta.textContent = status.error || 'could not download models';
-        }else if(status && status.status === 'done' && overlayMissing.length === 0){
-          activeModelOverlayUi.progressNote.textContent = 'models downloaded';
-          activeModelOverlayUi.progressMeta.textContent = 'all required models are ready';
-        }else{
-          activeModelOverlayUi.progressNote.textContent = '';
-          activeModelOverlayUi.progressMeta.textContent = '';
-        }
-        activeModelOverlayUi.downloadBtn.hidden = overlayMissing.length === 0 || isDownloading;
-        activeModelOverlayUi.downloadBtn.disabled = isDownloading;
-        activeModelOverlayUi.downloadBtn.classList.toggle('attention-sequence', !activeModelOverlayUi.downloadBtn.hidden);
-      }
       updateUI();
     }
 
@@ -3205,7 +2615,7 @@
           if(data.status === 'done' && (!data.missing || data.missing.length === 0)){
             if(modelsProgressWrap) modelsProgressWrap.hidden = true;
           }else if(allowPrompt && data.missing && data.missing.length && data.prompt_state === 'pending'){
-            showModelMissingOverlay(data);
+            flashModelDownloadCTA();
           }
         }
         return data;
@@ -4162,11 +3572,7 @@
     <div id="settings-card"
          class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
          style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
-      <div id="settings-scroll-indicator" class="settings-scroll-indicator" aria-hidden="true">
-        <div id="settings-scroll-thumb" class="settings-scroll-thumb"></div>
-      </div>
       <button id="settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
-      <div id="settings-card-scroll" class="settings-card-scroll">
       <h2 class="text-2xl font-light mb-3 select-none">settings</h2>
 
       <div class="flex flex-col gap-3">
@@ -4179,27 +3585,17 @@
             <button id="output-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open</button>
           </div>
           <label for="output-format" class="text-sm opacity-80 block">output format</label>
-          <div class="fancy-select">
-            <button id="output-format-button" type="button" class="fancy-select-btn" aria-haspopup="listbox" aria-expanded="false">
-              <span id="output-format-label">same as input</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
-            </button>
-            <div id="output-format-menu" class="fancy-select-menu" role="listbox" aria-label="output format">
-              <button type="button" class="fancy-select-option" data-value="same_as_input">same as input</button>
-              <button type="button" class="fancy-select-option" data-value="mp3_320">320kb mp3</button>
-              <button type="button" class="fancy-select-option" data-value="mp3_128">128kb mp3</button>
-              <button type="button" class="fancy-select-option" data-value="wav">wav</button>
-              <button type="button" class="fancy-select-option" data-value="m4a">m4a</button>
-              <button type="button" class="fancy-select-option" data-value="flac">flac</button>
-            </div>
-            <select id="output-format" class="sr-only">
-              <option value="same_as_input">same as input</option>
-              <option value="mp3_320">320kb mp3</option>
-              <option value="mp3_128">128kb mp3</option>
-              <option value="wav">wav</option>
-              <option value="m4a">m4a</option>
-              <option value="flac">flac</option>
-            </select>
+          <select id="output-format" class="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20">
+            <option value="same_as_input">same as input</option>
+            <option value="mp3_320">320kb mp3</option>
+            <option value="mp3_128">128kb mp3</option>
+            <option value="wav">wav</option>
+            <option value="m4a">m4a</option>
+            <option value="flac">flac</option>
+          </select>
+          <div class="space-y-2">
+            <label class="text-sm opacity-80 block">video handling</label>
+            <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="video-audio-only" type="radio" name="video-handling" class="pretty">only output the audio</label>
           </div>
         </div>
 
@@ -4212,58 +3608,16 @@
             <div class="nerd-stuff-panel">
               <div class="space-y-2">
                 <div id="lan-access-heading" class="text-sm opacity-80">lan access - connect from other devices on the local network</div>
-                <div class="space-y-2">
-                  <div class="settings-row">
-                    <button id="lan-copy-local-btn" class="copy-button" type="button" title="copy .local address" aria-label="copy .local address"></button>
-                    <div id="lan-local-text" class="text-xs opacity-70">checking…</div>
-                  </div>
-                  <div class="settings-row">
-                    <button id="lan-copy-ip-btn" class="copy-button" type="button" title="copy ip address" aria-label="copy ip address"></button>
-                    <div id="lan-ip-text" class="text-xs opacity-60">checking…</div>
-                  </div>
-                </div>
-                <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm">
-                  <input id="lan-passcode-enabled" type="checkbox" class="pretty">
-                  lan passcode
-                </label>
-                <div id="lan-passcode-wrap" class="space-y-2">
-                  <div class="flex items-center gap-2">
-                    <input id="lan-passcode-input" type="password" maxlength="24" placeholder="enter lan passcode" class="flex-1 rounded-xl border border-white/10 bg-[#132129] px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20" />
-                    <button id="lan-passcode-visibility" type="button" class="passcode-visibility" aria-label="toggle lan passcode visibility">
-                      <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
-                      <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 2 20 20"/><path d="M6.712 6.72A10.94 10.94 0 0 0 2.062 12.348a1 1 0 0 0 0 .704 10.75 10.75 0 0 0 15.378 5.622"/><path d="M10.686 10.673A3 3 0 1 0 14.134 14.12"/><path d="M9.88 4.24A10.75 10.75 0 0 1 21.938 11.652a1 1 0 0 1 0 .696 10.75 10.75 0 0 1-4.293 5.774"/></svg>
-                    </button>
-                    <button id="lan-passcode-indicator" type="button" class="passcode-indicator" aria-label="confirm lan passcode">
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                    </button>
-                  </div>
-                </div>
-                <div id="lan-passcode-ttl-wrap" class="space-y-2">
-                  <label for="lan-passcode-ttl" class="text-sm opacity-80 block">passcode ttl</label>
-                  <div class="fancy-select">
-                    <button id="lan-passcode-ttl-button" type="button" class="fancy-select-btn" aria-haspopup="listbox" aria-expanded="false">
-                      <span id="lan-passcode-ttl-label">1d</span>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
-                    </button>
-                    <div id="lan-passcode-ttl-menu" class="fancy-select-menu" role="listbox" aria-label="passcode ttl">
-                      <button type="button" class="fancy-select-option" data-value="15m">15m</button>
-                      <button type="button" class="fancy-select-option" data-value="1d">1d</button>
-                      <button type="button" class="fancy-select-option" data-value="1w">1w</button>
-                      <button type="button" class="fancy-select-option" data-value="never">never</button>
-                    </div>
-                    <select id="lan-passcode-ttl" class="sr-only">
-                      <option value="15m">15m</option>
-                      <option value="1d">1d</option>
-                      <option value="1w">1w</option>
-                      <option value="never">never</option>
-                    </select>
-                  </div>
+                <div class="settings-row">
+                  <button id="lan-copy-btn" class="copy-button" type="button" title="copy lan address" aria-label="copy lan address">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                    </svg>
+                  </button>
+                  <div id="lan-access-text" class="text-xs opacity-70">checking…</div>
                 </div>
                 <div id="port-status-text" class="text-xs opacity-60" hidden></div>
-              </div>
-              <div class="space-y-2">
-                <label class="text-sm opacity-80 block">video handling</label>
-                <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="video-audio-only" type="radio" name="video-handling" class="pretty">only output the audio</label>
               </div>
               <div class="space-y-2">
                 <div class="text-sm opacity-80">models</div>
@@ -4277,7 +3631,6 @@
                   <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
                   <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
                 </div>
-                <button id="models-first-open-test" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">test missing-models popup</button>
               </div>
             </div>
           </div>
@@ -4296,6 +3649,5 @@
       </div>
 
       <div class="mt-6 text-center opacity-70 text-sm">v0.3</div>
-      </div>
     </div>
   </div>

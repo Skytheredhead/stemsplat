@@ -120,6 +120,29 @@ def _current_network_name() -> str:
     return ""
 
 
+def _local_hostname() -> str:
+    name = ""
+    if sys.platform == "darwin":
+        with contextlib.suppress(Exception):
+            name = subprocess.run(
+                ["scutil", "--get", "LocalHostName"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+    if not name:
+        with contextlib.suppress(Exception):
+            name = socket.gethostname().strip()
+    name = str(name or "").strip().rstrip(".")
+    if not name:
+        return ""
+    if "." in name and name.lower().endswith(".local"):
+        return name
+    if "." in name:
+        name = name.split(".", 1)[0]
+    return f"{name}.local"
+
+
 class _ThreadedServer(uvicorn.Server):
     def install_signal_handlers(self) -> None:  # pragma: no cover - GUI thread owns lifecycle
         return
@@ -131,6 +154,7 @@ class ServerController:
         self.client_host = client_host
         self.preferred_port = preferred_port
         self.lan_ip = _local_lan_ip()
+        self.local_hostname = _local_hostname()
         self.network_name = _current_network_name()
         self._lock = threading.RLock()
         self._server: _ThreadedServer | None = None
@@ -150,6 +174,12 @@ class ServerController:
         current = port if port is not None else (self._current_port or self.preferred_port)
         return f"http://{self.lan_ip}:{current}/"
 
+    def lan_local_url(self, port: int | None = None) -> str:
+        if not self.local_hostname:
+            return ""
+        current = port if port is not None else (self._current_port or self.preferred_port)
+        return f"http://{self.local_hostname}:{current}/"
+
     def runtime_status(self) -> dict[str, Any]:
         with self._lock:
             current_port = self._current_port or self.preferred_port
@@ -157,13 +187,16 @@ class ServerController:
             acknowledged = self._port_notice_acknowledged
             windowed = self._windowed
         lan_url = self.lan_url(current_port)
+        lan_local_url = self.lan_local_url(current_port)
         payload = {
             "windowed": windowed,
             "preferred_port": self.preferred_port,
             "current_port": current_port,
             "client_url": self.client_url(current_port),
             "lan_url": lan_url,
+            "lan_local_url": lan_local_url,
             "lan_display": f"{self.lan_ip}:{current_port}" if self.lan_ip else "",
+            "lan_local_display": f"{self.local_hostname}:{current_port}" if self.local_hostname else "",
             "network_name": self.network_name,
             "port_conflict": port_conflict,
             "show_port_notice": port_conflict and not acknowledged,
@@ -374,6 +407,7 @@ def _run_windowed_app(controller: ServerController) -> int:
         easy_drag=False,
         text_select=False,
         background_color="#0B1A1F",
+        hidden=True,
     )
 
     def _on_closed(*_args: Any) -> None:
@@ -382,7 +416,21 @@ def _run_windowed_app(controller: ServerController) -> int:
     if window is not None:
         api.window = window
         window.events.closed += _on_closed
+
+    def _show_when_ready() -> None:
+        if window is None:
+            return
+        if not _wait_until_ready(controller.client_url()):
+            logger.error("server did not become ready in time for %s", controller.client_url())
+            with contextlib.suppress(Exception):
+                window.show()
+            return
+        time.sleep(0.12)
+        with contextlib.suppress(Exception):
+            window.show()
+
     webview.start(
+        func=_show_when_ready,
         gui="cocoa",
         debug=False,
         private_mode=False,

@@ -11,6 +11,7 @@ import platform
 import queue
 import re
 import resource
+import secrets
 import shutil
 import socket
 import subprocess
@@ -39,6 +40,7 @@ from app_paths import (
     OUTPUT_ROOT,
     RESOURCE_DIR,
     RUNTIME_DIR,
+    ETA_HISTORY_PATH,
     SETTINGS_PATH,
     UPLOAD_DIR,
     WEB_DIR,
@@ -128,6 +130,10 @@ PROCESS_RSS_HEADROOM_RATIO = 0.82
 PROCESS_RSS_LIMIT_FALLBACK_BYTES = 8 * 1024 * 1024 * 1024
 MPS_MEMORY_HEADROOM_RATIO = 0.88
 UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
+LAN_AUTH_COOKIE_NAME = "stemsplat_lan_auth"
+LAN_AUTH_TTL_CHOICES = {"15m", "1d", "1w", "never"}
+LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth"}
+TERMINAL_TASK_RETENTION_LIMIT = 100
 MODEL_PROMPT_PENDING = "pending"
 MODEL_PROMPT_DISMISSED = "dismissed"
 MODEL_PROMPT_ACCEPTED = "accepted"
@@ -146,6 +152,9 @@ COMPAT_SETTINGS_DEFAULTS = {
     "update_latest_notes": "",
     "update_last_notified_version": "",
     "update_skipped_version": "",
+    "lan_passcode_enabled": False,
+    "lan_passcode": "",
+    "lan_passcode_ttl": "1d",
 }
 
 MODEL_SPECS: dict[str, ModelSpec] = {
@@ -177,10 +186,14 @@ MODEL_URLS = {
     "instrumental": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
     "deux": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
 }
+ETA_HISTORY_KEYS = ("vocals", "instrumental", "deux")
+ETA_HISTORY_LIMIT = 10
+ETA_PREP_OVERHEAD_SECONDS = 5.0
+ETA_EXPORT_PER_OUTPUT_SECONDS = 2.5
 
 MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
-VIDEO_HANDLING_CHOICES = {"audio_only", "video_and_stems"}
+VIDEO_HANDLING_CHOICES = {"audio_only"}
 TERMINAL_STATUSES = {"done", "error", "stopped"}
 SUPPORTED_MEDIA_SUFFIXES = {
     ".wav",
@@ -263,6 +276,10 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     output_root = Path(str(normalized.get("output_root") or OUTPUT_ROOT)).expanduser()
     normalized["output_root"] = str(output_root)
     normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
+    normalized["lan_passcode_enabled"] = bool(normalized.get("lan_passcode_enabled"))
+    normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
+    if str(normalized.get("lan_passcode_ttl") or "") not in LAN_AUTH_TTL_CHOICES:
+        normalized["lan_passcode_ttl"] = "1d"
     if str(normalized.get("video_handling") or "") not in VIDEO_HANDLING_CHOICES:
         normalized["video_handling"] = "audio_only"
     normalized["structure_mode"] = "flat"
@@ -284,6 +301,46 @@ def _load_compat_settings() -> dict[str, Any]:
     return _normalize_settings_payload(settings)
 
 
+def _load_eta_history() -> dict[str, list[dict[str, float]]]:
+    payload: dict[str, list[dict[str, float]]] = {key: [] for key in ETA_HISTORY_KEYS}
+    if not ETA_HISTORY_PATH.exists():
+        return payload
+    try:
+        data = json.loads(ETA_HISTORY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logging.getLogger("stemsplat").debug("failed to load eta history from %s", ETA_HISTORY_PATH, exc_info=True)
+        return payload
+    if not isinstance(data, dict):
+        return payload
+    for key in ETA_HISTORY_KEYS:
+        raw_entries = data.get(key)
+        if not isinstance(raw_entries, list):
+            continue
+        normalized_entries: list[dict[str, float]] = []
+        for entry in raw_entries[-ETA_HISTORY_LIMIT:]:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                audio_seconds = float(entry.get("audio_seconds") or 0.0)
+                elapsed_seconds = float(entry.get("elapsed_seconds") or 0.0)
+            except Exception:
+                continue
+            if audio_seconds <= 0 or elapsed_seconds <= 0:
+                continue
+            normalized_entries.append(
+                {
+                    "audio_seconds": audio_seconds,
+                    "elapsed_seconds": elapsed_seconds,
+                }
+            )
+        payload[key] = normalized_entries[-ETA_HISTORY_LIMIT:]
+    return payload
+
+
+def _save_eta_history(history: dict[str, list[dict[str, float]]]) -> None:
+    ETA_HISTORY_PATH.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+
 def _save_compat_settings(settings: dict[str, Any]) -> None:
     payload = _normalize_settings_payload(settings)
     SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -296,13 +353,21 @@ def _compat_settings_payload() -> dict[str, Any]:
 
 def _set_compat_settings(patch: dict[str, Any]) -> dict[str, Any]:
     with compat_settings_lock:
-        updated = _normalize_settings_payload(dict(_compat_settings))
+        current = _normalize_settings_payload(dict(_compat_settings))
+        updated = dict(current)
         updated.update(patch)
         updated = _normalize_settings_payload(updated)
         _save_compat_settings(updated)
         _compat_settings.clear()
         _compat_settings.update(updated)
-        return dict(_compat_settings)
+        changed_security = any(
+            current.get(key) != updated.get(key)
+            for key in ("lan_passcode_enabled", "lan_passcode", "lan_passcode_ttl")
+        )
+        result = dict(_compat_settings)
+    if changed_security:
+        _reset_lan_auth_sessions()
+    return result
 
 
 def _current_output_root() -> Path:
@@ -316,6 +381,104 @@ def _is_remote_client(request: Request | None) -> bool:
         return False
     host = str(request.client.host or "").strip().lower()
     return host not in {"127.0.0.1", "::1", "localhost"}
+
+
+def _should_use_mobile_ui(request: Request | None) -> bool:
+    if not _is_remote_client(request):
+        return False
+    user_agent = str((request.headers.get("user-agent") if request else "") or "").lower()
+    mobile_markers = (
+        "iphone",
+        "ipad",
+        "ipod",
+        "android",
+        "mobile",
+        "windows phone",
+        "blackberry",
+    )
+    return any(marker in user_agent for marker in mobile_markers)
+
+
+def _lan_auth_ttl_seconds(ttl_value: str | None) -> int | None:
+    normalized = str(ttl_value or "").strip().lower()
+    if normalized == "15m":
+        return 15 * 60
+    if normalized == "1d":
+        return 24 * 60 * 60
+    if normalized == "1w":
+        return 7 * 24 * 60 * 60
+    return None
+
+
+def _reset_lan_auth_sessions() -> None:
+    with lan_auth_lock:
+        lan_auth_sessions.clear()
+
+
+def _lan_passcode_required(request: Request | None) -> bool:
+    if not _is_remote_client(request):
+        return False
+    settings = _compat_settings_payload()
+    return bool(settings.get("lan_passcode_enabled")) and bool(str(settings.get("lan_passcode") or "").strip())
+
+
+def _request_client_host(request: Request | None) -> str:
+    if request is None or request.client is None:
+        return ""
+    return str(request.client.host or "").strip()
+
+
+def _require_local_request(request: Request, message: str = "This action is only available on the host machine.") -> None:
+    if _is_remote_client(request):
+        raise AppError(ErrorCode.INVALID_REQUEST, message).to_http(403)
+
+
+def _prune_lan_auth_sessions_locked(now: float | None = None) -> None:
+    current = time.time() if now is None else now
+    expired_tokens = [
+        token
+        for token, session in lan_auth_sessions.items()
+        if isinstance(session.get("expires_at"), (int, float)) and float(session["expires_at"]) <= current
+    ]
+    for token in expired_tokens:
+        lan_auth_sessions.pop(token, None)
+
+
+def _request_has_valid_lan_session(request: Request) -> bool:
+    token = request.cookies.get(LAN_AUTH_COOKIE_NAME)
+    if not token:
+        return False
+    client_host = _request_client_host(request)
+    now = time.time()
+    with lan_auth_lock:
+        _prune_lan_auth_sessions_locked(now)
+        session = lan_auth_sessions.get(token)
+        if not isinstance(session, dict):
+            return False
+        session_host = str(session.get("host") or "")
+        if not session_host or session_host != client_host:
+            lan_auth_sessions.pop(token, None)
+            return False
+        expires_at = session.get("expires_at")
+        if isinstance(expires_at, (int, float)) and float(expires_at) <= now:
+            lan_auth_sessions.pop(token, None)
+            return False
+        return True
+
+
+def _load_lan_login_page() -> str:
+    candidate = WEB_DIR / "lan_login.html"
+    if candidate.exists():
+        return candidate.read_text(encoding="utf-8")
+    return """<!DOCTYPE html><html><body style="background:#0f2027;color:#fff;font-family:sans-serif;display:grid;place-items:center;min-height:100vh;">lan login page missing</body></html>"""
+
+
+def _lan_unauthorized_response(request: Request) -> HTMLResponse | JSONResponse:
+    if request.method in {"GET", "HEAD"} and request.url.path == "/":
+        return HTMLResponse(_load_lan_login_page())
+    response = JSONResponse(status_code=401, content={"error": "lan passcode required", "requires_auth": True})
+    response.delete_cookie(LAN_AUTH_COOKIE_NAME, path="/")
+    return response
 
 
 def _normalize_version_parts(raw: str) -> tuple[int, ...]:
@@ -421,6 +584,10 @@ def _stems_to_mode(stems_raw: str) -> str:
 
 
 _compat_settings = _load_compat_settings()
+eta_history_lock = threading.RLock()
+eta_history = _load_eta_history()
+lan_auth_lock = threading.RLock()
+lan_auth_sessions: dict[str, dict[str, Any]] = {}
 
 
 ensure_app_dirs()
@@ -1143,7 +1310,9 @@ def _runtime_status_payload() -> dict[str, Any]:
         "current_port": 8000,
         "client_url": "http://127.0.0.1:8000/",
         "lan_url": "",
+        "lan_local_url": "",
         "lan_display": "",
+        "lan_local_display": "",
         "network_name": "",
         "port_conflict": False,
         "show_port_notice": False,
@@ -1161,8 +1330,10 @@ def _runtime_status_payload() -> dict[str, Any]:
     return payload
 
 
-def _settings_response_payload() -> dict[str, Any]:
+def _settings_response_payload(request: Request | None = None) -> dict[str, Any]:
     payload = _compat_settings_payload()
+    if _is_remote_client(request):
+        payload["lan_passcode"] = ""
     payload["runtime"] = _runtime_status_payload()
     return payload
 
@@ -1312,14 +1483,185 @@ def _require_task(task_id: str) -> dict[str, Any]:
 
 def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
     started_at = task.get("started_at")
-    if started_at is None or pct < 3 or pct >= 100:
+    if started_at is None or pct < 1 or pct >= 100:
         return 0 if pct >= 100 else None
-    elapsed = max(1.0, time.time() - started_at)
-    estimate = int((elapsed / (pct / 100.0)) - elapsed)
-    previous = task.get("eta_seconds")
-    if isinstance(previous, int) and previous > 0:
-        estimate = int((previous * 0.6) + (estimate * 0.4))
-    return max(0, estimate)
+    now = time.time()
+    elapsed = max(1.0, now - started_at)
+    mode = str(task.get("mode") or "")
+    stage_text = str(task.get("stage") or "").lower()
+    stage_started_at = task.get("stage_started_at")
+    stage_elapsed = max(0.0, now - float(stage_started_at or started_at))
+    audio_seconds = float(task.get("audio_seconds") or 0.0)
+    export_outputs = 2 if mode in {"both_deux", "both_separate"} else 1
+    export_budget = ETA_EXPORT_PER_OUTPUT_SECONDS * export_outputs
+    raw_estimate: float | None = None
+
+    if "exporting" in stage_text:
+        export_progress = max(0.0, min(1.0, (pct - 92) / 7.0))
+        raw_estimate = max(1.0, export_budget * (1.0 - export_progress))
+        return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
+
+    if mode == "both_separate" and audio_seconds > 0:
+        vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
+        instrumental_total = _predict_model_runtime_seconds("instrumental", audio_seconds)
+        if vocals_total is not None or instrumental_total is not None:
+            vocals_total = float(vocals_total or 0.0)
+            instrumental_total = float(instrumental_total or 0.0)
+            if "instrumental" in stage_text and instrumental_total > 0:
+                raw_estimate = max(0.0, instrumental_total - stage_elapsed) + export_budget
+            elif "vocals" in stage_text and vocals_total > 0:
+                raw_estimate = max(0.0, vocals_total - stage_elapsed) + instrumental_total + export_budget
+            else:
+                raw_estimate = max(
+                    0.0,
+                    ETA_PREP_OVERHEAD_SECONDS + vocals_total + instrumental_total + export_budget - elapsed,
+                )
+
+    if audio_seconds > 0:
+        stage_model_key: str | None = None
+        if "running vocals model" in stage_text:
+            stage_model_key = "vocals"
+        elif "running instrumental model" in stage_text:
+            stage_model_key = "instrumental"
+        elif "running deux model" in stage_text:
+            stage_model_key = "deux"
+        if stage_model_key is not None:
+            stage_total = _predict_model_runtime_seconds(stage_model_key, audio_seconds)
+            if stage_total is not None:
+                stage_estimate = max(0.0, float(stage_total) - stage_elapsed) + export_budget
+                raw_estimate = stage_estimate if raw_estimate is None else ((raw_estimate * 0.72) + (stage_estimate * 0.28))
+
+    progress_fraction = _stage_progress_fraction(mode, stage_text, pct)
+    if progress_fraction is not None and progress_fraction >= 0.08 and stage_elapsed >= 4.0:
+        stage_progress_remaining = max(0.0, (stage_elapsed / progress_fraction) - stage_elapsed)
+        if mode == "both_separate" and "running vocals model" in stage_text:
+            next_stage_total = _predict_model_runtime_seconds("instrumental", audio_seconds) or stage_progress_remaining
+            progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
+        else:
+            progress_estimate = stage_progress_remaining + export_budget
+        raw_estimate = progress_estimate if raw_estimate is None else ((raw_estimate * 0.7) + (progress_estimate * 0.3))
+
+    predicted_total = task.get("predicted_total_seconds")
+    if isinstance(predicted_total, (int, float)) and float(predicted_total) > 0:
+        history_estimate = max(0.0, ETA_PREP_OVERHEAD_SECONDS + float(predicted_total) + export_budget - elapsed)
+        raw_estimate = history_estimate if raw_estimate is None else ((raw_estimate * 0.78) + (history_estimate * 0.22))
+
+    if raw_estimate is None and pct >= 8 and elapsed >= 6:
+        raw_estimate = max(0.0, (elapsed / max(pct / 100.0, 0.01)) - elapsed)
+
+    return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
+
+
+def _record_eta_sample(model_key: str, audio_seconds: float, elapsed_seconds: float) -> None:
+    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0 or elapsed_seconds <= 0:
+        return
+    with eta_history_lock:
+        entries = list(eta_history.get(model_key) or [])
+        entries.append(
+            {
+                "audio_seconds": float(audio_seconds),
+                "elapsed_seconds": float(elapsed_seconds),
+            }
+        )
+        eta_history[model_key] = entries[-ETA_HISTORY_LIMIT:]
+        _save_eta_history(eta_history)
+
+
+def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> float | None:
+    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0:
+        return None
+    with eta_history_lock:
+        entries = list(eta_history.get(model_key) or [])
+    if not entries:
+        return None
+    ranked = sorted(
+        entries,
+        key=lambda entry: abs(float(entry.get("audio_seconds") or 0.0) - audio_seconds),
+    )[: min(5, len(entries))]
+    if not ranked:
+        return None
+    weighted_total = 0.0
+    weight_sum = 0.0
+    scaled_predictions: list[float] = []
+    for entry in ranked:
+        sample_audio = max(1.0, float(entry.get("audio_seconds") or 0.0))
+        sample_elapsed = max(1.0, float(entry.get("elapsed_seconds") or 0.0))
+        distance = abs(sample_audio - audio_seconds)
+        weight = 1.0 / max(1.0, distance)
+        ratio = sample_elapsed / sample_audio
+        weighted_total += ratio * weight
+        weight_sum += weight
+        scaled_predictions.append(max(1.0, sample_elapsed * (audio_seconds / sample_audio)))
+    if weight_sum <= 0:
+        return None
+    weighted_prediction = max(1.0, audio_seconds * (weighted_total / weight_sum))
+    scaled_predictions.sort()
+    median_prediction = scaled_predictions[len(scaled_predictions) // 2]
+    return max(1.0, (median_prediction * 0.7) + (weighted_prediction * 0.3))
+
+
+def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
+    if audio_seconds <= 0:
+        return None
+    if mode == "vocals":
+        return _predict_model_runtime_seconds("vocals", audio_seconds)
+    if mode == "instrumental":
+        return _predict_model_runtime_seconds("instrumental", audio_seconds)
+    if mode == "both_deux":
+        return _predict_model_runtime_seconds("deux", audio_seconds)
+    if mode == "both_separate":
+        vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
+        instrumental = _predict_model_runtime_seconds("instrumental", audio_seconds)
+        if vocals is None and instrumental is None:
+            return None
+        return float(vocals or 0.0) + float(instrumental or 0.0)
+    return None
+
+
+def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | None:
+    stage = str(stage_text or "").lower()
+    clamped = max(0, min(100, int(pct)))
+    if "running vocals model" in stage:
+        if mode == "both_separate":
+            return max(0.0, min(1.0, (clamped - 6) / 42.0))
+        return max(0.0, min(1.0, (clamped - 6) / 82.0))
+    if "running instrumental model" in stage:
+        if mode == "both_separate":
+            return max(0.0, min(1.0, (clamped - 50) / 40.0))
+        return max(0.0, min(1.0, (clamped - 6) / 82.0))
+    if "running deux model" in stage:
+        return max(0.0, min(1.0, (clamped - 6) / 84.0))
+    if "exporting" in stage:
+        return max(0.0, min(1.0, (clamped - 92) / 7.0))
+    return None
+
+
+def _stabilize_eta(task: dict[str, Any], raw_seconds: float | None, *, now: float, stage_text: str) -> int | None:
+    if raw_seconds is None:
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
+        return None
+    raw_seconds = max(0.0, float(raw_seconds))
+    if raw_seconds <= 0:
+        task["eta_finish_at"] = now
+        task["eta_stage"] = stage_text
+        return 0
+    target_finish_at = now + raw_seconds
+    previous_finish_at = task.get("eta_finish_at")
+    previous_stage = str(task.get("eta_stage") or "")
+    if not isinstance(previous_finish_at, (int, float)) or previous_stage != stage_text:
+        finish_at = target_finish_at
+    else:
+        finish_at = float(previous_finish_at)
+        drift = target_finish_at - finish_at
+        if drift < -1.0:
+            finish_at += drift * 0.68
+        elif drift > 6.0:
+            finish_at += drift * 0.22
+        finish_at = max(now + 1.0, finish_at)
+    task["eta_finish_at"] = finish_at
+    task["eta_stage"] = stage_text
+    return max(1, int(round(finish_at - now)))
 
 
 def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
@@ -1332,6 +1674,10 @@ def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
             task["started_at"] = now
         if task["status"] not in TERMINAL_STATUSES:
             task["status"] = "running"
+        if stage != previous_stage or task.get("stage_started_at") is None:
+            task["stage_started_at"] = now
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
         task["stage"] = stage
         task["pct"] = max(0, min(100, int(pct)))
         task["eta_seconds"] = _estimate_eta(task, task["pct"])
@@ -1343,31 +1689,49 @@ def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
 
 
 def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
     with tasks_lock:
         task = tasks[task_id]
         task["status"] = "done"
         task["stage"] = "Done"
         task["pct"] = 100
         task["eta_seconds"] = 0
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
         task["out_dir"] = str(out_dir)
         task["outputs"] = list(outputs)
         task["error"] = None
         task["guard_error"] = None
         task["finished_at"] = time.time()
         task["version"] += 1
+        if bool(task.get("cleared")):
+            cleanup_snapshot = dict(task)
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    _prune_terminal_tasks()
 
 
 def _mark_task_error(task_id: str, message: str) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
     with tasks_lock:
         task = tasks[task_id]
         task["status"] = "error"
         task["stage"] = "Error"
         task["pct"] = max(0, int(task.get("pct", 0)))
         task["eta_seconds"] = None
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
         task["error"] = message
         task["guard_error"] = None
         task["finished_at"] = time.time()
         task["version"] += 1
+        if bool(task.get("cleared")):
+            cleanup_snapshot = dict(task)
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    _prune_terminal_tasks()
 
 
 def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
@@ -1388,7 +1752,91 @@ def _download_label(task: dict[str, Any]) -> str:
     return _safe_stem(str(task.get("original_name") or "stems"))
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    with contextlib.suppress(Exception):
+        return path.expanduser().resolve().is_relative_to(root.expanduser().resolve())
+    return False
+
+
+def _cleanup_task_runtime(task_id: str, task: dict[str, Any]) -> None:
+    source_path_text = str(task.get("source_path") or "").strip()
+    if source_path_text:
+        source_path = Path(source_path_text).expanduser()
+        if _path_within(source_path, UPLOAD_DIR):
+            _cleanup_path(source_path)
+
+    if ARTWORK_DIR.exists():
+        for candidate in ARTWORK_DIR.glob(f"{task_id}.*"):
+            _cleanup_path(candidate)
+
+    if WORK_DIR.exists():
+        prefix = f"stemsplat_{task_id[:8]}_"
+        for candidate in WORK_DIR.iterdir():
+            if candidate.name.startswith(prefix):
+                _cleanup_path(candidate)
+
+    downloads_dir = RUNTIME_DIR / "downloads"
+    if downloads_dir.exists():
+        for candidate in downloads_dir.glob(f"{task_id}_*"):
+            _cleanup_path(candidate)
+
+    out_dir_text = str(task.get("out_dir") or "").strip()
+    if out_dir_text:
+        out_path = Path(out_dir_text).expanduser()
+        if _path_within(out_path, WORK_DIR) or _path_within(out_path, RUNTIME_DIR):
+            _cleanup_path(out_path)
+
+
+def _forget_task(task_id: str, task_snapshot: dict[str, Any] | None = None) -> None:
+    snapshot = task_snapshot
+    with tasks_lock:
+        current = tasks.pop(task_id, None)
+    if snapshot is None:
+        snapshot = current
+    if snapshot is not None:
+        _cleanup_task_runtime(task_id, snapshot)
+
+
+def _forget_cleared_terminal_tasks(task_ids: list[str]) -> None:
+    removable: list[tuple[str, dict[str, Any]]] = []
+    with tasks_lock:
+        for task_id in task_ids:
+            task = tasks.get(task_id)
+            if task is None:
+                continue
+            if not bool(task.get("cleared")):
+                continue
+            if str(task.get("status") or "") not in TERMINAL_STATUSES:
+                continue
+            removable.append((task_id, dict(task)))
+            tasks.pop(task_id, None)
+    for task_id, snapshot in removable:
+        _cleanup_task_runtime(task_id, snapshot)
+
+
+def _prune_terminal_tasks(max_keep: int = TERMINAL_TASK_RETENTION_LIMIT) -> None:
+    removable: list[tuple[str, dict[str, Any]]] = []
+    with tasks_lock:
+        terminal = [
+            (task_id, dict(task))
+            for task_id, task in tasks.items()
+            if str(task.get("status") or "") in TERMINAL_STATUSES and not bool(task.get("cleared"))
+        ]
+        if len(terminal) <= max_keep:
+            return
+        terminal.sort(
+            key=lambda item: float(item[1].get("finished_at") or item[1].get("created_at") or 0.0),
+            reverse=True,
+        )
+        for task_id, snapshot in terminal[max_keep:]:
+            tasks.pop(task_id, None)
+            removable.append((task_id, snapshot))
+    for task_id, snapshot in removable:
+        _cleanup_task_runtime(task_id, snapshot)
+
+
 def _mark_task_stopped(task_id: str) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
     with tasks_lock:
         task = tasks[task_id]
         guard_error = str(task.get("guard_error") or "").strip()
@@ -1396,19 +1844,31 @@ def _mark_task_stopped(task_id: str) -> None:
             task["status"] = "error"
             task["stage"] = "Error"
             task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
             task["error"] = guard_error
             task["guard_error"] = None
             task["finished_at"] = time.time()
             task["version"] += 1
-            return
-        task["status"] = "stopped"
-        task["stage"] = "Stopped"
-        task["eta_seconds"] = None
-        task["finished_at"] = time.time()
-        task["version"] += 1
+        else:
+            task["status"] = "stopped"
+            task["stage"] = "Stopped"
+            task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+            task["finished_at"] = time.time()
+            task["version"] += 1
+        if bool(task.get("cleared")):
+            cleanup_snapshot = dict(task)
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    _prune_terminal_tasks()
 
 
 def _request_task_stop(task_id: str) -> None:
+    should_forget = False
+    should_prune = False
     with tasks_lock:
         task = tasks[task_id]
         task["stop_event"].set()
@@ -1416,13 +1876,27 @@ def _request_task_stop(task_id: str) -> None:
             task["status"] = "stopped"
             task["stage"] = "Stopped"
             task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
+            task["finished_at"] = time.time()
+            should_forget = bool(task.get("cleared"))
+            should_prune = not should_forget
         elif task["status"] == "running":
             task["stage"] = "Stopping"
             task["eta_seconds"] = None
+            task["eta_finish_at"] = None
+            task["eta_stage"] = None
         task["version"] += 1
+    if should_forget:
+        _forget_task(task_id)
+        return
+    if should_prune:
+        _prune_terminal_tasks()
 
 
 def _trip_task_guard(task_id: str, message: str) -> None:
+    cleanup_snapshot: dict[str, Any] | None = None
+    should_prune = False
     with tasks_lock:
         task = tasks.get(task_id)
         if task is None or task["status"] in TERMINAL_STATUSES:
@@ -1432,18 +1906,29 @@ def _trip_task_guard(task_id: str, message: str) -> None:
         task["guard_error"] = message
         task["stop_event"].set()
         task["eta_seconds"] = None
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
         if task["status"] == "queued":
             task["status"] = "error"
             task["stage"] = "Error"
             task["error"] = message
             task["finished_at"] = time.time()
             task["guard_error"] = None
+            if bool(task.get("cleared")):
+                cleanup_snapshot = dict(task)
+            else:
+                should_prune = True
         else:
             task["stage"] = "Stopping"
         task["version"] += 1
+    if cleanup_snapshot is not None:
+        _forget_task(task_id, cleanup_snapshot)
+        return
+    if should_prune:
+        _prune_terminal_tasks()
 
 
-def _stop_all_tasks() -> None:
+def _stop_all_tasks() -> list[str]:
     drained: list[str] = []
     while True:
         try:
@@ -1453,18 +1938,26 @@ def _stop_all_tasks() -> None:
     for _task_id in drained:
         task_queue.task_done()
 
+    task_ids: list[str] = []
     with tasks_lock:
+        task_ids = list(tasks.keys())
         for task in tasks.values():
             task["stop_event"].set()
+            task["cleared"] = True
             if task["status"] == "queued":
                 task["status"] = "stopped"
                 task["stage"] = "Stopped"
                 task["eta_seconds"] = None
+                task["eta_finish_at"] = None
+                task["eta_stage"] = None
                 task["finished_at"] = time.time()
             elif task["status"] == "running":
                 task["stage"] = "Stopping"
                 task["eta_seconds"] = None
+                task["eta_finish_at"] = None
+                task["eta_stage"] = None
             task["version"] += 1
+    return task_ids
 
 
 def _restart_task_payload(
@@ -1640,11 +2133,17 @@ def _build_task_payload(
         "version": 0,
         "created_at": time.time(),
         "started_at": None,
+        "stage_started_at": None,
+        "eta_finish_at": None,
+        "eta_stage": None,
+        "audio_seconds": None,
+        "predicted_total_seconds": None,
         "last_progress_at": time.time(),
         "last_progress_pct": 0,
         "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
         "finished_at": None,
         "guard_error": None,
+        "cleared": False,
         "stop_event": threading.Event(),
     }
 
@@ -1672,8 +2171,8 @@ def _validate_mode_and_output_format(mode: str, output_format: str) -> None:
 
 def _validate_video_handling(video_handling: str) -> str:
     if video_handling not in VIDEO_HANDLING_CHOICES:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid video handling option.")
-    return video_handling
+        return "audio_only"
+    return "audio_only"
 
 
 def _validate_media_type(name: str, content_type: str | None = None) -> str:
@@ -1757,6 +2256,7 @@ def _register_task(
     )
     with tasks_lock:
         tasks[task_id] = payload
+    threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
     if auto_start:
         task_queue.put(task_id)
     return payload
@@ -1774,7 +2274,10 @@ def _enqueue_task(task_id: str) -> dict[str, Any]:
         task["status"] = "queued"
         task["stage"] = "Waiting in queue"
         task["eta_seconds"] = None
+        task["eta_finish_at"] = None
+        task["eta_stage"] = None
         task["started_at"] = None
+        task["stage_started_at"] = None
         task["last_progress_at"] = time.time()
         task["last_progress_pct"] = 0
         task["last_progress_stage"] = task["stage"]
@@ -1947,12 +2450,18 @@ def _process_task(task_id: str) -> None:
         decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
+        mode = task["mode"]
+        audio_seconds = waveform.shape[1] / 44100.0 if waveform.shape[1] > 0 else 0.0
+        with tasks_lock:
+            tasks[task_id]["audio_seconds"] = audio_seconds
+            tasks[task_id]["predicted_total_seconds"] = _predict_task_runtime_seconds(mode, audio_seconds)
+            tasks[task_id]["version"] += 1
 
         temp_outputs: list[tuple[str, Path]] = []
-        mode = task["mode"]
 
         if mode == "vocals":
             vocals_model = manager.get("vocals")
+            vocals_started_at = time.time()
             vocals_pred = _run_model_chunks(
                 vocals_model,
                 waveform,
@@ -1960,9 +2469,11 @@ def _process_task(task_id: str) -> None:
                 progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 88, frac)),
                 stop_check=lambda: _stop_check(task_id),
             )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
             temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
         elif mode == "instrumental":
             instrumental_model = manager.get("instrumental")
+            instrumental_started_at = time.time()
             instrumental_pred = _run_model_chunks(
                 instrumental_model,
                 waveform,
@@ -1970,9 +2481,11 @@ def _process_task(task_id: str) -> None:
                 progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(6, 88, frac)),
                 stop_check=lambda: _stop_check(task_id),
             )
+            _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
             temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
         elif mode == "both_deux":
             deux_model = manager.get("deux")
+            deux_started_at = time.time()
             pair_pred = _run_model_chunks(
                 deux_model,
                 waveform,
@@ -1980,6 +2493,7 @@ def _process_task(task_id: str) -> None:
                 progress_cb=lambda frac: _set_task_progress(task_id, "Running deux model", _map_fraction(6, 90, frac)),
                 stop_check=lambda: _stop_check(task_id),
             )
+            _record_eta_sample("deux", audio_seconds, time.time() - deux_started_at)
             vocals_tensor = pair_pred[0]
             instrumental_tensor = (
                 pair_pred[1]
@@ -1991,6 +2505,7 @@ def _process_task(task_id: str) -> None:
         elif mode == "both_separate":
             vocals_model = manager.get("vocals")
             instrumental_model = manager.get("instrumental")
+            vocals_started_at = time.time()
             vocals_pred = _run_model_chunks(
                 vocals_model,
                 waveform,
@@ -1998,7 +2513,9 @@ def _process_task(task_id: str) -> None:
                 progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 48, frac)),
                 stop_check=lambda: _stop_check(task_id),
             )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
             temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
+            instrumental_started_at = time.time()
             instrumental_pred = _run_model_chunks(
                 instrumental_model,
                 waveform,
@@ -2006,25 +2523,27 @@ def _process_task(task_id: str) -> None:
                 progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(50, 90, frac)),
                 stop_check=lambda: _stop_check(task_id),
             )
+            _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
             temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
         else:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
 
         _stop_check(task_id)
-        export_video = source_info.has_video and task["video_handling"] == "video_and_stems"
+        export_video = False
         export_plan = None if export_video else _resolve_export_plan(source_info, task["output_format"])
         exported_files: list[str] = []
         total_exports = len(temp_outputs)
         for index, (label, temp_path) in enumerate(temp_outputs, start=1):
             start_pct = _map_fraction(92, 98, (index - 1) / max(1, total_exports))
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
+            export_label = f"{label} - deux" if mode == "both_deux" else label
             if export_video:
                 video_suffix, _audio_args = _resolve_video_output(source_info)
-                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{video_suffix}"
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
                 exported = _export_video_stem(temp_path, source_path, final_path, source_info)
             else:
                 assert export_plan is not None
-                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {label}{export_plan.suffix}"
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
                 exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
             written_outputs.append(exported)
             exported_files.append(exported.name)
@@ -2106,7 +2625,18 @@ async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
 @app.middleware("http")
 async def _log_requests(request: Request, call_next):
     started = time.time()
-    response = await call_next(request)
+    if _lan_passcode_required(request):
+        path = request.url.path
+        allowed = path in LAN_AUTH_ALLOWED_PATHS
+        authorized = _request_has_valid_lan_session(request)
+        if not authorized and not allowed:
+            response = _lan_unauthorized_response(request)
+        elif not authorized and path == "/" and request.method in {"GET", "HEAD"}:
+            response = _lan_unauthorized_response(request)
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
     elapsed_ms = (time.time() - started) * 1000
     logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
     return response
@@ -2150,7 +2680,8 @@ async def models_status() -> dict[str, Any]:
 
 
 @app.post("/api/open_models_folder")
-async def open_models_folder() -> dict[str, str]:
+async def open_models_folder(request: Request) -> dict[str, str]:
+    _require_local_request(request, "LAN clients cannot control the host machine.")
     _ensure_dir(MODEL_DIR)
     try:
         _open_path_in_finder(MODEL_DIR)
@@ -2169,8 +2700,53 @@ async def runtime_status() -> dict[str, Any]:
     return _runtime_status_payload()
 
 
+@app.post("/api/lan_auth")
+async def lan_auth(request: Request) -> JSONResponse:
+    if not _lan_passcode_required(request):
+        return JSONResponse({"ok": True, "required": False})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    submitted = str(body.get("passcode") or "")
+    settings = _compat_settings_payload()
+    expected = str(settings.get("lan_passcode") or "")
+    if not expected or not secrets.compare_digest(submitted, expected):
+        return JSONResponse(status_code=401, content={"ok": False, "error": "incorrect passcode"})
+    ttl_seconds = _lan_auth_ttl_seconds(str(settings.get("lan_passcode_ttl") or "1d"))
+    token = secrets.token_urlsafe(32)
+    expires_at = None if ttl_seconds is None else time.time() + ttl_seconds
+    with lan_auth_lock:
+        _prune_lan_auth_sessions_locked()
+        lan_auth_sessions[token] = {
+            "host": _request_client_host(request),
+            "expires_at": expires_at,
+            "created_at": time.time(),
+        }
+    response = JSONResponse(
+        {
+            "ok": True,
+            "required": True,
+            "ttl": str(settings.get("lan_passcode_ttl") or "1d"),
+        }
+    )
+    response.set_cookie(
+        key=LAN_AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=ttl_seconds,
+        path="/",
+    )
+    return response
+
+
 @app.post("/api/release_status/ack")
-async def ack_release_status() -> dict[str, Any]:
+async def ack_release_status(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
     status = _release_status_payload()
     latest = str(status.get("latest_version") or "")
     if latest:
@@ -2179,7 +2755,8 @@ async def ack_release_status() -> dict[str, Any]:
 
 
 @app.post("/api/release_status/skip")
-async def skip_release_status() -> dict[str, Any]:
+async def skip_release_status(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
     status = _release_status_payload()
     latest = str(status.get("latest_version") or "")
     if latest:
@@ -2199,6 +2776,7 @@ async def model_download_status() -> dict[str, Any]:
 
 @app.post("/api/model_downloads/start")
 async def start_model_download(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
     selection: list[str] | None = None
     with contextlib.suppress(Exception):
         body = await request.json()
@@ -2208,13 +2786,15 @@ async def start_model_download(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/model_download_prompt/dismiss")
-async def dismiss_model_download_prompt() -> dict[str, Any]:
+async def dismiss_model_download_prompt(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
     _set_compat_settings({"model_prompt_state": MODEL_PROMPT_DISMISSED})
     return _public_model_download_status()
 
 
 @app.post("/api/settings/output_root/pick")
-async def pick_output_root() -> dict[str, Any]:
+async def pick_output_root(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
     chosen = _pick_directory_dialog()
     if chosen is None:
         return {"cancelled": True, "output_root": str(_current_output_root())}
@@ -2224,7 +2804,8 @@ async def pick_output_root() -> dict[str, Any]:
 
 
 @app.post("/api/settings/output_root/open")
-async def open_output_root() -> dict[str, str]:
+async def open_output_root(request: Request) -> dict[str, str]:
+    _require_local_request(request, "LAN clients cannot control the host machine.")
     path = _current_output_root()
     try:
         _open_path_in_finder(path)
@@ -2396,7 +2977,8 @@ async def update_task_selection(task_id: str, request: Request):
 
 
 @app.post("/api/tasks/{task_id}/reveal")
-async def reveal_output(task_id: str):
+async def reveal_output(task_id: str, request: Request):
+    _require_local_request(request, "LAN clients cannot control the host machine.")
     task = _require_task(task_id)
     try:
         out_path, existing_outputs = _task_output_paths(task)
@@ -2452,12 +3034,13 @@ async def download_output(task_id: str):
 
 
 @app.get("/settings")
-async def get_settings() -> dict[str, Any]:
-    return _settings_response_payload()
+async def get_settings(request: Request) -> dict[str, Any]:
+    return _settings_response_payload(request)
 
 
 @app.post("/settings")
 async def update_settings(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot change settings.")
     body = await request.json()
     if not isinstance(body, dict):
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid settings payload.").to_http()
@@ -2478,8 +3061,18 @@ async def update_settings(request: Request) -> dict[str, Any]:
         patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
     if "video_handling" in body:
         patch["video_handling"] = _validate_video_handling(str(body.get("video_handling") or "audio_only"))
+    if not _is_remote_client(request):
+        if "lan_passcode_enabled" in body:
+            patch["lan_passcode_enabled"] = bool(body.get("lan_passcode_enabled"))
+        if "lan_passcode" in body:
+            patch["lan_passcode"] = str(body.get("lan_passcode") or "")
+        if "lan_passcode_ttl" in body:
+            ttl_value = str(body.get("lan_passcode_ttl") or "")
+            if ttl_value not in LAN_AUTH_TTL_CHOICES:
+                raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN passcode ttl.").to_http()
+            patch["lan_passcode_ttl"] = ttl_value
     _set_compat_settings(patch)
-    return _settings_response_payload()
+    return _settings_response_payload(request)
 
 
 @app.post("/upload")
@@ -2528,23 +3121,31 @@ async def compat_progress(task_id: str):
     async def _event_stream():
         last_version = -1
         last_ping_at = time.time()
+        last_emit_at = 0.0
         while True:
+            now = time.time()
             with tasks_lock:
                 task = tasks.get(task_id)
                 if task is None:
                     break
                 snapshot = _compat_public_task(task)
+                if task["status"] == "running" and 0 < int(task.get("pct") or 0) < 100:
+                    snapshot["eta_seconds"] = _estimate_eta(task, int(task.get("pct") or 0))
             if snapshot["pct"] != -1 and snapshot["stage"] == "error":
                 snapshot["pct"] = -1
-            if task["version"] != last_version:
+            should_emit = task["version"] != last_version
+            if not should_emit and task["status"] == "running" and 0 < int(snapshot["pct"]) < 100:
+                should_emit = (now - last_emit_at) >= 1.0
+            if should_emit:
                 yield f"data: {json.dumps(snapshot)}\n\n"
                 last_version = task["version"]
-                last_ping_at = time.time()
+                last_ping_at = now
+                last_emit_at = now
                 if task["status"] in TERMINAL_STATUSES:
                     break
-            elif time.time() - last_ping_at >= 10:
+            elif now - last_ping_at >= 10:
                 yield ": ping\n\n"
-                last_ping_at = time.time()
+                last_ping_at = now
             await asyncio.sleep(0.35)
 
     return StreamingResponse(
@@ -2585,8 +3186,8 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @app.post("/reveal/{task_id}")
-async def compat_reveal(task_id: str):
-    return await reveal_output(task_id)
+async def compat_reveal(task_id: str, request: Request):
+    return await reveal_output(task_id, request)
 
 
 @app.get("/download/{task_id}")
@@ -2596,15 +3197,8 @@ async def compat_download(task_id: str):
 
 @app.post("/clear_all_uploads")
 async def compat_clear_all_uploads() -> dict[str, str]:
-    _stop_all_tasks()
-
-    def _cleanup_after_stop() -> None:
-        time.sleep(1.0)
-        for root in (UPLOAD_DIR, WORK_DIR, ARTWORK_DIR):
-            for candidate in root.iterdir():
-                _cleanup_path(candidate)
-
-    threading.Thread(target=_cleanup_after_stop, daemon=True).start()
+    cleared_task_ids = _stop_all_tasks()
+    _forget_cleared_terminal_tasks(cleared_task_ids)
     return {"status": "cleared"}
 
 
@@ -2631,10 +3225,14 @@ async def compat_rehydrate_tasks(request: Request) -> dict[str, list[dict[str, A
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index() -> HTMLResponse:
-    index_path = WEB_DIR / "index.html"
+async def index(request: Request) -> HTMLResponse:
+    candidate = "mobile.html" if _should_use_mobile_ui(request) else "index.html"
+    index_path = WEB_DIR / candidate
     if index_path.exists():
         return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    fallback_path = WEB_DIR / "index.html"
+    if fallback_path.exists():
+        return HTMLResponse(fallback_path.read_text(encoding="utf-8"))
     return HTMLResponse(INDEX_HTML)
 
 
@@ -2647,7 +3245,8 @@ async def favicon():
 
 
 @app.api_route("/shutdown", methods=["POST", "GET"])
-async def shutdown():
+async def shutdown(request: Request):
+    _require_local_request(request, "LAN clients cannot control the host machine.")
     logger.warning("shutdown requested; exiting process")
     _close_installer_ui()
 
