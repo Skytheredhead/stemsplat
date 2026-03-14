@@ -608,7 +608,7 @@
       color: #f5fbff;
     }
 
-    #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:48px; background:linear-gradient(to bottom,rgba(0,0,0,.45),transparent); opacity:0; transition:opacity .25s ease; }
+    #top-vig, #bot-vig { pointer-events:none; position:fixed; left:0; right:0; height:96px; background:linear-gradient(to bottom,rgba(0,0,0,.56), rgba(0,0,0,.22) 52%, transparent 100%); opacity:0; transition:opacity .5s ease; }
     #top-vig{ top:0; bottom:auto; transform:none; }
     #bot-vig{ top:auto; bottom:0; transform:rotate(180deg); }
 
@@ -830,7 +830,6 @@
     let modelsDownloadBtn = null;
     let modelsCtaWrap = null;
     let modelsFolderBtn = null;
-    let modelsFirstOpenTestBtn = null;
     let modelsProgressWrap = null;
     let modelsProgressBar = null;
     let modelsProgressMeta = null;
@@ -851,6 +850,9 @@
     let activeReleaseOverlay = null;
     let activePortOverlay = null;
     let activeModelOverlay = null;
+    let activeHostClosedOverlay = null;
+    let lanRuntimeHeartbeat = null;
+    let lanRuntimeFailures = 0;
     let lastModelStatus = null;
     let modelPreviewActive = false;
     let modelPreviewTimer = null;
@@ -1722,7 +1724,15 @@
     function setStopVisibility(stopPad, stage, forceShow = false){
       if(!stopPad) return;
       const normalized = String(stage || '').toLowerCase();
-      const active = forceShow || (normalized && !['ready','queued','done','stopped','error','errored'].includes(normalized));
+      let inferredActive = false;
+      const row = stopPad.closest ? stopPad.closest('.item-row') : null;
+      if(row){
+        const id = row.__taskId;
+        const tempKey = row.__tempKey;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        inferredActive = !!task && (isProcessing(task) || (normalized === 'queued' && Number(task.pct || 0) > 0));
+      }
+      const active = forceShow || inferredActive || (normalized && !['ready','queued','done','stopped','error','errored'].includes(normalized));
       const show = !!active;
       stopPad.style.display = show ? '' : 'none';
       stopPad.classList.toggle('show', show);
@@ -1769,7 +1779,7 @@
     function setStopSquareIcon(stopPad){
       if(!stopPad) return;
       while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
-      stopPad.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="#0F2027" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>');
+      stopPad.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="#0F2027" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.75" ry="1.75"/></svg>');
     }
 
     function setDownloadIcon(btn){
@@ -2213,7 +2223,6 @@
       modelsDownloadBtn = document.getElementById('models-download');
       modelsCtaWrap = document.getElementById('models-cta-wrap');
       modelsFolderBtn = document.getElementById('models-folder-open');
-      modelsFirstOpenTestBtn = document.getElementById('models-first-open-test');
       modelsProgressWrap = document.getElementById('models-progress-wrap');
       modelsProgressBar = document.getElementById('models-progress-bar');
       modelsProgressMeta = document.getElementById('models-progress-meta');
@@ -2255,6 +2264,7 @@
       await loadSettings();
       updateSettingsScrollIndicator();
       await refreshRuntimeStatus({ showPortNotice: true });
+      startLanDisconnectMonitor();
       await refreshModelStatus();
       await checkForReleaseUpdate();
       setInterval(checkForReleaseUpdate, 12 * 60 * 60 * 1000);
@@ -2447,9 +2457,6 @@
       if(modelsFolderBtn){
         modelsFolderBtn.addEventListener('click', () => openModelsFolderAction());
       }
-      if(modelsFirstOpenTestBtn){
-        modelsFirstOpenTestBtn.addEventListener('click', () => beginModelPreview());
-      }
       if(structureCheck){
         structureCheck.addEventListener('change', () => {
           if(structureCheck.checked){
@@ -2569,7 +2576,8 @@
       card.textContent = msg;
       card.className = 'fixed top-4 right-4 z-[95] glass px-4 py-2 rounded text-[var(--txt-main)]';
       document.body.appendChild(card);
-      setTimeout(() => card.remove(), 3000);
+      const isErrorLike = /errorcode\.|failed|error/i.test(String(msg || ''));
+      setTimeout(() => card.remove(), isErrorLike ? 8000 : 3000);
     }
     const reopenParam = new URLSearchParams(window.location.search).get('reopen');
     if(reopenParam === '1'){
@@ -2609,6 +2617,9 @@
       if(overlay === activeModelOverlay){
         activeModelOverlay = null;
         activeModelOverlayUi = null;
+      }
+      if(overlay === activeHostClosedOverlay){
+        activeHostClosedOverlay = null;
       }
       const bg = overlay.querySelector('.overlay-bg');
       const card = overlay.querySelector('.overlay-card');
@@ -2696,6 +2707,7 @@
           if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
           if(activePortOverlay === overlay) activePortOverlay = null;
           if(activeModelOverlay === overlay) activeModelOverlay = null;
+          if(activeHostClosedOverlay === overlay) activeHostClosedOverlay = null;
         }
       });
       overlay.addEventListener('keydown', (e) => {
@@ -2704,6 +2716,7 @@
           if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
           if(activePortOverlay === overlay) activePortOverlay = null;
           if(activeModelOverlay === overlay) activeModelOverlay = null;
+          if(activeHostClosedOverlay === overlay) activeHostClosedOverlay = null;
         }
       });
       overlay.tabIndex = 0;
@@ -2806,8 +2819,15 @@
     async function refreshRuntimeStatus({ showPortNotice = false } = {}){
       try{
         const res = await fetch('/api/runtime_status');
+        if(res.status === 401){
+          if(isLanClient){
+            window.location.reload();
+          }
+          return null;
+        }
         if(!res.ok) return null;
         const data = await res.json();
+        lanRuntimeFailures = 0;
         settingsState.runtime = data;
         applyRuntimeUI(data);
         if(showPortNotice && data.show_port_notice){
@@ -2818,6 +2838,63 @@
         console.warn('runtime status failed', err);
         return null;
       }
+    }
+
+    function showHostClosedOverlay(){
+      if(activeHostClosedOverlay) return;
+      closeOverlay(activePortOverlay);
+      closeOverlay(activeReleaseOverlay);
+      closeOverlay(activeModelOverlay);
+      activePortOverlay = null;
+      activeReleaseOverlay = null;
+      activeModelOverlay = null;
+
+      const { overlay, card } = createOverlayCard('program was closed on host');
+      activeHostClosedOverlay = overlay;
+
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90 whitespace-pre-line';
+      info.textContent = 'the stemsplat app was closed on the host machine. reopen it on the host to continue using lan access.';
+      card.appendChild(info);
+
+      const row = document.createElement('div');
+      row.className = 'flex gap-3 justify-end flex-wrap';
+      const reloadBtn = makeActionButton('reload', 'bg-white text-black');
+      reloadBtn.onclick = () => window.location.reload();
+      row.appendChild(reloadBtn);
+      card.appendChild(row);
+    }
+
+    function startLanDisconnectMonitor(){
+      if(!isLanClient || lanRuntimeHeartbeat) return;
+      const tick = async () => {
+        if(activeHostClosedOverlay) return;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        try{
+          const res = await fetch(`/api/runtime_status?_=${Date.now()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if(res.status === 401){
+            window.location.reload();
+            return;
+          }
+          if(!res.ok){
+            throw new Error(`runtime status ${res.status}`);
+          }
+          lanRuntimeFailures = 0;
+        }catch(err){
+          clearTimeout(timer);
+          lanRuntimeFailures += 1;
+          if(lanRuntimeFailures >= 2){
+            showHostClosedOverlay();
+          }
+        }
+      };
+      tick();
+      lanRuntimeHeartbeat = setInterval(tick, 3000);
     }
 
     function showPortConflictOverlay(status){
@@ -3861,7 +3938,7 @@
           const fallbackTask = task || { stage: 'queued', pct: 0, id: id || null };
           applyRowState(row, fallbackTask);
           const stopPad = row.querySelector('.stop-pad');
-          setStopVisibility(stopPad, 'queued');
+          setStopVisibility(stopPad, fallbackTask.stage, !!task && isProcessing(task));
         });
         if(changed){
           saveTasks();
@@ -4341,7 +4418,6 @@
                   <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
                   <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
                 </div>
-                <button id="models-first-open-test" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">test missing-models popup</button>
               </div>
             </div>
           </div>

@@ -48,3 +48,5 @@ if [[ -f "${INFO_PLIST}" ]]; then
     /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 0.3" "${INFO_PLIST}" >/dev/null
   codesign --force --deep --sign - "${APP_BUNDLE}" >/dev/null
 fi
+
+echo "Created ${APP_BUNDLE}"

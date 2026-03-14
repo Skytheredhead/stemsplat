@@ -38,6 +38,7 @@ import soundfile as sf
 import torch
 import yaml
 from beartype import beartype
+from beartype.typing import Callable as BeartypeCallable, Optional as BeartypeOptional, Tuple as BeartypeTuple
 from downloader import SSL_CONTEXT, download_to
 from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
@@ -72,9 +73,10 @@ except Exception:  # pragma: no cover - optional cleanup dependency
 BASE_DIR = RESOURCE_DIR
 
 try:  # pragma: no cover - import failure is surfaced at runtime
-    from split.mel_band_roformer import MelBandRoformer
+    from split.mel_band_roformer import MelBandRoformer, _mel_filter_bank
 except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
     MelBandRoformer = None  # type: ignore[assignment]
+    _mel_filter_bank = None  # type: ignore[assignment]
     _model_import_error = exc
 else:
     _model_import_error = None
@@ -117,6 +119,86 @@ else:  # pragma: no cover - fallback for older torch
 FlashAttentionConfig = namedtuple(
     "FlashAttentionConfig", ["enable_flash", "enable_math", "enable_mem_efficient"]
 )
+
+
+def _hz_to_mel(frequencies: np.ndarray | float, *, htk: bool = False) -> np.ndarray:
+    frequencies = np.asanyarray(frequencies, dtype=np.float32)
+
+    if htk:
+        return 2595.0 * np.log10(1.0 + frequencies / 700.0)
+
+    f_sp = 200.0 / 3
+    mels = frequencies / f_sp
+
+    min_log_hz = 1000.0
+    min_log_mel = min_log_hz / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    if frequencies.ndim:
+        log_t = frequencies >= min_log_hz
+        mels[log_t] = min_log_mel + np.log(frequencies[log_t] / min_log_hz) / logstep
+    elif frequencies >= min_log_hz:
+        mels = min_log_mel + np.log(frequencies / min_log_hz) / logstep
+
+    return mels
+
+
+def _mel_to_hz(mels: np.ndarray | float, *, htk: bool = False) -> np.ndarray:
+    mels = np.asanyarray(mels, dtype=np.float32)
+
+    if htk:
+        return 700.0 * (10.0 ** (mels / 2595.0) - 1.0)
+
+    f_sp = 200.0 / 3
+    freqs = f_sp * mels
+
+    min_log_hz = 1000.0
+    min_log_mel = min_log_hz / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    if mels.ndim:
+        log_t = mels >= min_log_mel
+        freqs[log_t] = min_log_hz * np.exp(logstep * (mels[log_t] - min_log_mel))
+    elif mels >= min_log_mel:
+        freqs = min_log_hz * np.exp(logstep * (mels - min_log_mel))
+
+    return freqs
+
+
+def _mel_frequencies(
+    n_mels: int, *, fmin: float, fmax: float, htk: bool = False
+) -> np.ndarray:
+    min_mel = _hz_to_mel(fmin, htk=htk)
+    max_mel = _hz_to_mel(fmax, htk=htk)
+    return _mel_to_hz(
+        np.linspace(min_mel, max_mel, n_mels, dtype=np.float32), htk=htk
+    )
+
+
+def _local_mel_filter_bank(
+    *,
+    sample_rate: int,
+    n_fft: int,
+    n_mels: int,
+    fmin: float = 0.0,
+    fmax: float | None = None,
+) -> np.ndarray:
+    fmax = float(sample_rate) / 2 if fmax is None else fmax
+    weights = np.zeros((n_mels, int(1 + n_fft // 2)), dtype=np.float32)
+
+    fft_freqs = np.fft.rfftfreq(n=n_fft, d=1.0 / sample_rate)
+    mel_freqs = _mel_frequencies(n_mels + 2, fmin=fmin, fmax=fmax, htk=False)
+    fdiff = np.diff(mel_freqs)
+    ramps = np.subtract.outer(mel_freqs, fft_freqs)
+
+    for index in range(n_mels):
+        lower = -ramps[index] / fdiff[index]
+        upper = ramps[index + 2] / fdiff[index + 1]
+        weights[index] = np.maximum(0.0, np.minimum(lower, upper))
+
+    enorm = 2.0 / (mel_freqs[2 : n_mels + 2] - mel_freqs[:n_mels])
+    weights *= enorm[:, np.newaxis]
+    return weights
 
 
 def exists(val):
@@ -517,8 +599,12 @@ class MelBandRoformer(Module):
             return_complex=True,
         ).shape[1]
 
-        mel_filter_bank_numpy = filters.mel(
-            sr=sample_rate, n_fft=stft_n_fft, n_mels=num_bands
+        mel_filter_bank_fn = _mel_filter_bank or _local_mel_filter_bank
+
+        mel_filter_bank_numpy = mel_filter_bank_fn(
+            sample_rate=sample_rate,
+            n_fft=stft_n_fft,
+            n_mels=num_bands,
         )
 
         mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
