@@ -867,7 +867,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.3"
+APP_VERSION = "0.3.0"
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 WATCHDOG_INTERVAL_SECONDS = 5.0
@@ -938,6 +938,14 @@ ETA_HISTORY_KEYS = ("vocals", "instrumental", "deux")
 ETA_HISTORY_LIMIT = 10
 ETA_PREP_OVERHEAD_SECONDS = 5.0
 ETA_EXPORT_PER_OUTPUT_SECONDS = 2.5
+MODEL_PROGRESS_START_PCT = 6
+SINGLE_MODEL_PROGRESS_END_PCT = 95
+DEUX_MODEL_PROGRESS_END_PCT = 95
+BOTH_SEPARATE_VOCALS_END_PCT = 48
+BOTH_SEPARATE_INSTRUMENTAL_START_PCT = 50
+BOTH_SEPARATE_INSTRUMENTAL_END_PCT = 95
+EXPORT_PROGRESS_START_PCT = 96
+EXPORT_PROGRESS_END_PCT = 99
 
 MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
@@ -2052,10 +2060,14 @@ model_download_state: dict[str, Any] = {
     "downloaded_bytes": 0,
     "total_bytes": 0,
     "eta_seconds": None,
+    "retry_count": 0,
+    "retry_label": "0",
     "started_at": None,
     "error": "",
 }
 model_download_thread: threading.Thread | None = None
+ffmpeg_status_lock = threading.RLock()
+ffmpeg_status_cache: dict[str, Any] = {"checked_at": 0.0, "available": True, "message": ""}
 
 
 def set_runtime_status_provider(provider: Callable[[], dict[str, Any]] | None) -> None:
@@ -2086,7 +2098,29 @@ def _runtime_status_payload() -> dict[str, Any]:
         else:
             if isinstance(raw, dict):
                 payload.update(raw)
+    payload.update(_ffmpeg_runtime_payload())
     return payload
+
+
+def _ffmpeg_runtime_payload(max_age_seconds: float = 10.0) -> dict[str, Any]:
+    now = time.time()
+    with ffmpeg_status_lock:
+        checked_at = float(ffmpeg_status_cache.get("checked_at") or 0.0)
+        if now - checked_at <= max_age_seconds:
+            return {
+                "ffmpeg_available": bool(ffmpeg_status_cache.get("available", True)),
+                "ffmpeg_message": str(ffmpeg_status_cache.get("message") or ""),
+            }
+    available = True
+    message = ""
+    try:
+        _ensure_ffmpeg()
+    except AppError as exc:
+        available = False
+        message = exc.message
+    with ffmpeg_status_lock:
+        ffmpeg_status_cache.update({"checked_at": now, "available": available, "message": message})
+    return {"ffmpeg_available": available, "ffmpeg_message": message}
 
 
 def _settings_response_payload(request: Request | None = None) -> dict[str, Any]:
@@ -2126,6 +2160,10 @@ def _public_model_download_status() -> dict[str, Any]:
     return payload
 
 
+def _model_retry_label(retry_count: int) -> str:
+    return "too many to count" if retry_count > 9999 else str(max(0, retry_count))
+
+
 def _run_model_download(selection: list[str] | None = None) -> None:
     missing = _selected_missing_models(selection)
     if not missing:
@@ -2136,6 +2174,8 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             current_model="",
             downloaded_bytes=0,
             total_bytes=0,
+            retry_count=0,
+            retry_label="0",
             error="",
         )
         _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
@@ -2149,6 +2189,8 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         downloaded_bytes=0,
         total_bytes=0,
         eta_seconds=None,
+        retry_count=0,
+        retry_label="0",
         started_at=time.time(),
         error="",
     )
@@ -2162,6 +2204,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         total_bytes = int(update.get("total_bytes") or 0)
         with model_download_lock:
             started_at = model_download_state.get("started_at")
+            retry_count = int(model_download_state.get("retry_count") or 0)
         eta_seconds: int | None = None
         if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
             elapsed = max(1.0, time.time() - float(started_at))
@@ -2175,22 +2218,32 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             downloaded_bytes=downloaded_bytes,
             total_bytes=total_bytes,
             eta_seconds=eta_seconds,
+            retry_label=_model_retry_label(retry_count),
             error="",
         )
 
-    try:
-        download_to(MODEL_DIR.parent, missing, progress_cb=_progress)
-    except Exception as exc:
-        logger.exception("model download failed")
-        _set_model_download_state(
-            status="error",
-            pct=-1,
-            step="download failed",
-            current_model="",
-            eta_seconds=None,
-            error=str(exc),
-        )
-        return
+    retry_count = 0
+    while True:
+        missing = _selected_missing_models(selection)
+        if not missing:
+            break
+        try:
+            download_to(MODEL_DIR.parent, missing, progress_cb=_progress)
+            break
+        except Exception as exc:
+            retry_count += 1
+            retry_label = _model_retry_label(retry_count)
+            logger.warning("model download attempt %s failed; retrying", retry_label, exc_info=True)
+            _set_model_download_state(
+                status="retrying",
+                step="waiting to retry",
+                current_model="",
+                eta_seconds=5,
+                retry_count=retry_count,
+                retry_label=retry_label,
+                error=f"network dropped, retrying in 5s... ({retry_label})",
+            )
+            time.sleep(5)
 
     _set_model_download_state(
         status="done",
@@ -2198,6 +2251,8 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         step="models ready",
         current_model="",
         eta_seconds=0,
+        retry_count=retry_count,
+        retry_label=_model_retry_label(retry_count),
         error="",
     )
     _set_compat_settings({"model_prompt_state": MODEL_PROMPT_COMPLETE})
@@ -2256,7 +2311,8 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
     raw_estimate: float | None = None
 
     if "exporting" in stage_text:
-        export_progress = max(0.0, min(1.0, (pct - 92) / 7.0))
+        export_span = max(1, EXPORT_PROGRESS_END_PCT - EXPORT_PROGRESS_START_PCT)
+        export_progress = max(0.0, min(1.0, (pct - EXPORT_PROGRESS_START_PCT) / export_span))
         raw_estimate = max(1.0, export_budget * (1.0 - export_progress))
         return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
 
@@ -2382,16 +2438,22 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
     clamped = max(0, min(100, int(pct)))
     if "running vocals model" in stage:
         if mode == "both_separate":
-            return max(0.0, min(1.0, (clamped - 6) / 42.0))
-        return max(0.0, min(1.0, (clamped - 6) / 82.0))
+            span = max(1, BOTH_SEPARATE_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
+            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
+        span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
+        return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if "running instrumental model" in stage:
         if mode == "both_separate":
-            return max(0.0, min(1.0, (clamped - 50) / 40.0))
-        return max(0.0, min(1.0, (clamped - 6) / 82.0))
+            span = max(1, BOTH_SEPARATE_INSTRUMENTAL_END_PCT - BOTH_SEPARATE_INSTRUMENTAL_START_PCT)
+            return max(0.0, min(1.0, (clamped - BOTH_SEPARATE_INSTRUMENTAL_START_PCT) / span))
+        span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
+        return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if "running deux model" in stage:
-        return max(0.0, min(1.0, (clamped - 6) / 84.0))
+        span = max(1, DEUX_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
+        return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if "exporting" in stage:
-        return max(0.0, min(1.0, (clamped - 92) / 7.0))
+        span = max(1, EXPORT_PROGRESS_END_PCT - EXPORT_PROGRESS_START_PCT)
+        return max(0.0, min(1.0, (clamped - EXPORT_PROGRESS_START_PCT) / span))
     return None
 
 
@@ -2725,6 +2787,9 @@ def _restart_task_payload(
     stems_raw: str | None = None,
     output_format: str | None = None,
     video_handling: str | None = None,
+    output_root: str | None = None,
+    output_same_as_input: bool | None = None,
+    prioritize: bool = False,
 ) -> dict[str, Any]:
     old_task = _require_task(task_id)
     source_path = Path(old_task["source_path"])
@@ -2744,8 +2809,16 @@ def _restart_task_payload(
         output_format=resolved_output_format,
         video_handling=resolved_video_handling,
         delivery=str(old_task.get("delivery") or "folder"),
-        auto_start=True,
+        auto_start=False,
     )
+    _apply_task_start_settings(
+        payload,
+        output_format=resolved_output_format,
+        video_handling=resolved_video_handling,
+        output_root=output_root,
+        output_same_as_input=output_same_as_input,
+    )
+    _enqueue_task(payload["id"], front=prioritize)
     return payload
 
 
@@ -2881,6 +2954,8 @@ def _build_task_payload(
         "mode": mode,
         "output_format": output_format,
         "video_handling": video_handling,
+        "output_root_snapshot": None,
+        "output_same_as_input_snapshot": None,
         "delivery": delivery,
         "status": "queued" if auto_start else "ready",
         "stage": "Waiting in queue" if auto_start else "Ready",
@@ -2910,13 +2985,19 @@ def _build_task_payload(
 def _create_output_dir(task: dict[str, Any]) -> Path:
     if str(task.get("delivery") or "") == "browser_download":
         return _ensure_dir(WORK_DIR / "exports" / str(task["id"]))
-    settings = _compat_settings_payload()
-    if bool(settings.get("output_same_as_input")):
+    use_same_as_input = task.get("output_same_as_input_snapshot")
+    if use_same_as_input is None:
+        settings = _compat_settings_payload()
+        use_same_as_input = bool(settings.get("output_same_as_input"))
+    if bool(use_same_as_input):
         source_dir = task.get("source_dir")
         if isinstance(source_dir, str) and source_dir:
             candidate = Path(source_dir).expanduser()
             if candidate.exists() and candidate.is_dir():
                 return _ensure_dir(candidate)
+    output_root_snapshot = str(task.get("output_root_snapshot") or "").strip()
+    if output_root_snapshot:
+        return _ensure_dir(Path(output_root_snapshot).expanduser())
     return _current_output_root()
 
 
@@ -2990,6 +3071,42 @@ def _store_local_media_file(path: Path) -> tuple[str, Path]:
     return original_name, stored_path
 
 
+def _queue_task(task_id: str, *, front: bool = False) -> None:
+    if not front:
+        task_queue.put(task_id)
+        return
+    with task_queue.mutex:
+        task_queue.queue.appendleft(task_id)
+        task_queue.unfinished_tasks += 1
+        task_queue.not_empty.notify()
+
+
+def _apply_task_start_settings(
+    task: dict[str, Any],
+    *,
+    output_format: str | None = None,
+    video_handling: str | None = None,
+    output_root: str | None = None,
+    output_same_as_input: bool | None = None,
+) -> None:
+    next_output_format = str(output_format or task.get("output_format") or _compat_settings_payload()["output_format"])
+    next_video_handling = _validate_video_handling(
+        str(video_handling or task.get("video_handling") or _compat_settings_payload()["video_handling"])
+    )
+    mode = str(task.get("mode") or "vocals")
+    _validate_mode_and_output_format(mode, next_output_format)
+    task["output_format"] = next_output_format
+    task["video_handling"] = next_video_handling
+    if output_root is not None:
+        task["output_root_snapshot"] = str(_ensure_dir(Path(output_root).expanduser()))
+    elif not str(task.get("output_root_snapshot") or "").strip():
+        task["output_root_snapshot"] = str(_current_output_root())
+    if output_same_as_input is not None:
+        task["output_same_as_input_snapshot"] = bool(output_same_as_input)
+    elif task.get("output_same_as_input_snapshot") is None:
+        task["output_same_as_input_snapshot"] = bool(_compat_settings_payload().get("output_same_as_input"))
+
+
 def _register_task(
     *,
     original_name: str,
@@ -3000,6 +3117,7 @@ def _register_task(
     video_handling: str,
     delivery: str = "folder",
     auto_start: bool,
+    queue_front: bool = False,
 ) -> dict[str, Any]:
     task_id = str(uuid.uuid4())
     payload = _build_task_payload(
@@ -3017,11 +3135,11 @@ def _register_task(
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
     if auto_start:
-        task_queue.put(task_id)
+        _queue_task(task_id, front=queue_front)
     return payload
 
 
-def _enqueue_task(task_id: str) -> dict[str, Any]:
+def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
     with tasks_lock:
         task = tasks.get(task_id)
         if task is None:
@@ -3042,7 +3160,7 @@ def _enqueue_task(task_id: str) -> dict[str, Any]:
         task["last_progress_stage"] = task["stage"]
         task["guard_error"] = None
         task["version"] += 1
-    task_queue.put(task_id)
+    _queue_task(task_id, front=front)
     return task
 
 
@@ -3225,7 +3343,11 @@ def _process_task(task_id: str) -> None:
                 vocals_model,
                 waveform,
                 MODEL_SPECS["vocals"].segment,
-                progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 88, frac)),
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running vocals model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
@@ -3237,7 +3359,11 @@ def _process_task(task_id: str) -> None:
                 instrumental_model,
                 waveform,
                 MODEL_SPECS["instrumental"].segment,
-                progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(6, 88, frac)),
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running instrumental model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
@@ -3249,7 +3375,11 @@ def _process_task(task_id: str) -> None:
                 deux_model,
                 waveform,
                 MODEL_SPECS["deux"].segment,
-                progress_cb=lambda frac: _set_task_progress(task_id, "Running deux model", _map_fraction(6, 90, frac)),
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running deux model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, DEUX_MODEL_PROGRESS_END_PCT, frac),
+                ),
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("deux", audio_seconds, time.time() - deux_started_at)
@@ -3269,7 +3399,11 @@ def _process_task(task_id: str) -> None:
                 vocals_model,
                 waveform,
                 MODEL_SPECS["vocals"].segment,
-                progress_cb=lambda frac: _set_task_progress(task_id, "Running vocals model", _map_fraction(6, 48, frac)),
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running vocals model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, BOTH_SEPARATE_VOCALS_END_PCT, frac),
+                ),
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
@@ -3279,7 +3413,11 @@ def _process_task(task_id: str) -> None:
                 instrumental_model,
                 waveform,
                 MODEL_SPECS["instrumental"].segment,
-                progress_cb=lambda frac: _set_task_progress(task_id, "Running instrumental model", _map_fraction(50, 90, frac)),
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running instrumental model",
+                    _map_fraction(BOTH_SEPARATE_INSTRUMENTAL_START_PCT, BOTH_SEPARATE_INSTRUMENTAL_END_PCT, frac),
+                ),
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
@@ -3293,7 +3431,7 @@ def _process_task(task_id: str) -> None:
         exported_files: list[str] = []
         total_exports = len(temp_outputs)
         for index, (label, temp_path) in enumerate(temp_outputs, start=1):
-            start_pct = _map_fraction(92, 98, (index - 1) / max(1, total_exports))
+            start_pct = _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT - 1, (index - 1) / max(1, total_exports))
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
             export_label = f"{label} - deux" if mode == "both_deux" else label
             if export_video:
@@ -3306,7 +3444,11 @@ def _process_task(task_id: str) -> None:
                 exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
             written_outputs.append(exported)
             exported_files.append(exported.name)
-            _set_task_progress(task_id, f"Exporting {label}", _map_fraction(92, 99, index / max(1, total_exports)))
+            _set_task_progress(
+                task_id,
+                f"Exporting {label}",
+                _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT, index / max(1, total_exports)),
+            )
 
         _mark_task_done(task_id, output_dir, exported_files)
     except TaskStopped:
@@ -3357,6 +3499,8 @@ async def _startup_cleanup() -> None:
             downloaded_bytes=0,
             total_bytes=0,
             eta_seconds=None,
+            retry_count=0,
+            retry_label="0",
             started_at=None,
             error="",
         )
@@ -3369,6 +3513,8 @@ async def _startup_cleanup() -> None:
             downloaded_bytes=0,
             total_bytes=0,
             eta_seconds=0,
+            retry_count=0,
+            retry_label="0",
             started_at=None,
             error="",
         )
@@ -3669,6 +3815,11 @@ async def task_events(task_id: str):
     )
 
 
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    return _public_task(_require_task(task_id))
+
+
 @app.get("/api/tasks/{task_id}/artwork")
 async def task_artwork(task_id: str):
     _require_task(task_id)
@@ -3704,12 +3855,18 @@ async def retry_task(task_id: str, request: Request):
     stems_raw = body.get("stems")
     output_format = body.get("output_format")
     video_handling = body.get("video_handling")
+    output_root = body.get("output_root")
+    prioritize = bool(body.get("prioritize"))
+    output_same_as_input = body.get("output_same_as_input")
     try:
         payload = _restart_task_payload(
             task_id,
             stems_raw=stems_raw if isinstance(stems_raw, str) and stems_raw.strip() else None,
             output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
             video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+            output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
+            output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
+            prioritize=prioritize,
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
@@ -3865,8 +4022,30 @@ async def compat_upload(
 
 
 @app.post("/start/{task_id}")
-async def compat_start(task_id: str) -> dict[str, Any]:
+async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
     try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    output_format = body.get("output_format")
+    video_handling = body.get("video_handling")
+    output_root = body.get("output_root")
+    output_same_as_input = body.get("output_same_as_input")
+    try:
+        with tasks_lock:
+            task = tasks.get(task_id)
+            if task is None:
+                raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+            if str(task.get("status") or "") == "ready":
+                _apply_task_start_settings(
+                    task,
+                    output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
+                    video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+                    output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
+                    output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
+                )
         task = _enqueue_task(task_id)
         return _compat_public_task(task)
     except AppError as exc:
@@ -3932,12 +4111,18 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
     stems_raw = body.get("stems")
     output_format = body.get("output_format")
     video_handling = body.get("video_handling")
+    output_root = body.get("output_root")
+    prioritize = bool(body.get("prioritize"))
+    output_same_as_input = body.get("output_same_as_input")
     try:
         payload = _restart_task_payload(
             task_id,
             stems_raw=stems_raw if isinstance(stems_raw, str) and stems_raw.strip() else None,
             output_format=str(output_format) if isinstance(output_format, str) and output_format.strip() else None,
             video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
+            output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
+            output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
+            prioritize=prioritize,
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)

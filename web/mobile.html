@@ -276,6 +276,41 @@
     }
     .attention-sequence { animation: modelAttention 2.5s ease-in-out infinite; }
     .attention-ring { box-shadow: 0 0 0 2px rgba(255,255,255,.45), 0 0 24px rgba(255,255,255,.18); }
+    #toast-wrap {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 95;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: flex-end;
+      pointer-events: none;
+    }
+    #toast-wrap > * { pointer-events: auto; }
+    .toast-card {
+      width: min(360px, calc(100vw - 32px));
+      padding: 12px 14px;
+      border-radius: 16px;
+      color: var(--txt-main);
+    }
+    .toast-title {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+    .toast-body {
+      margin-top: 4px;
+      font-size: 12px;
+      line-height: 1.45;
+      opacity: .76;
+    }
+    .toast-progress {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
     .dimmed-control { opacity:.45; pointer-events:none; }
     .copy-button { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.10); display: inline-flex; align-items: center; justify-content: center; color: var(--txt-main); transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
     .copy-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.16); box-shadow: 0 8px 18px rgba(0,0,0,.2); }
@@ -727,6 +762,8 @@
     let modelPreviewTimer = null;
     let nerdStuffExpanded = false;
     let copyResetTimers = new WeakMap();
+    let activeModelToast = null;
+    let modelToastTimer = null;
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
@@ -1921,12 +1958,22 @@
       }
       if(modelsDownloadBtn){
         modelsDownloadBtn.addEventListener('click', async () => {
+          stopModelDownloadAttention(modelsDownloadBtn);
           if(modelPreviewActive){
             simulateModelPreviewDownload();
             return;
           }
           await dismissModelPrompt();
           const missing = Array.isArray(lastModelStatus && lastModelStatus.missing) ? lastModelStatus.missing : null;
+          syncModelDownloadToast({
+            status: 'downloading',
+            pct: 0,
+            current_model: '',
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            eta_seconds: null,
+            missing: missing && missing.length ? missing : [],
+          });
           startModelDownload(missing && missing.length ? missing : null);
         });
       }
@@ -2042,11 +2089,22 @@
       overlay.addEventListener('keydown', e => { if(e.key === 'Enter') btn.click(); });
     }
 
+    function ensureToastWrap(){
+      let wrap = document.getElementById('toast-wrap');
+      if(!wrap){
+        wrap = document.createElement('div');
+        wrap.id = 'toast-wrap';
+        document.body.appendChild(wrap);
+      }
+      return wrap;
+    }
+
     function showPopup(msg){
+      const wrap = ensureToastWrap();
       const card = document.createElement('div');
       card.textContent = msg;
-      card.className = 'fixed top-4 right-4 z-[95] glass px-4 py-2 rounded text-[var(--txt-main)]';
-      document.body.appendChild(card);
+      card.className = 'toast-card glass text-[var(--txt-main)]';
+      wrap.appendChild(card);
       const isErrorLike = /errorcode\.|failed|error/i.test(String(msg || ''));
       setTimeout(() => card.remove(), isErrorLike ? 8000 : 3000);
     }
@@ -2059,13 +2117,14 @@
     function showConfirm(msg){
       return new Promise((resolve) => {
         const overlay = document.createElement('div');
-        overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
+        overlay.className = 'fixed inset-0 z-[90] flex items-center justify-center px-4';
         overlay.innerHTML = `
-          <div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)] max-w-sm w-11/12">
+          <div class="absolute inset-0 bg-black/55 backdrop-blur-md"></div>
+          <div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)] max-w-sm w-11/12 relative">
             <p class="text-center">${msg}</p>
             <div class="flex justify-center gap-3">
-              <button id="cfm-cancel" class="px-3 py-1 bg-gray-600 rounded">cancel</button>
-              <button id="cfm-ok" class="px-3 py-1 bg-[var(--accent)] text-black rounded">ok</button>
+              <button id="cfm-cancel" class="px-3 py-1 rounded bg-white/12 text-white">cancel</button>
+              <button id="cfm-ok" class="px-3 py-1 rounded text-[#0b1a1f]" style="background:linear-gradient(135deg,#8ed8ff,#68c9c0);">yes</button>
             </div>
           </div>`;
         document.body.appendChild(overlay);
@@ -2492,6 +2551,118 @@
       return `${hours}h ${remMins}m left`;
     }
 
+    function stopModelDownloadAttention(...buttons){
+      buttons.forEach((button) => {
+        if(!button) return;
+        button.classList.remove('attention-sequence', 'attention-ring');
+      });
+      if(modelsDownloadBtn){
+        modelsDownloadBtn.classList.remove('attention-sequence', 'attention-ring');
+      }
+    }
+
+    function clearModelToastTimer(){
+      if(modelToastTimer){
+        clearTimeout(modelToastTimer);
+        modelToastTimer = null;
+      }
+    }
+
+    function removeModelDownloadToast({ immediate = false } = {}){
+      clearModelToastTimer();
+      if(!activeModelToast) return;
+      const card = activeModelToast.card;
+      activeModelToast = null;
+      if(!card) return;
+      if(immediate){
+        card.remove();
+        return;
+      }
+      setTimeout(() => card.remove(), 180);
+    }
+
+    function queueModelToastRemoval(delayMs){
+      clearModelToastTimer();
+      modelToastTimer = setTimeout(() => {
+        modelToastTimer = null;
+        removeModelDownloadToast();
+      }, delayMs);
+    }
+
+    function ensureModelDownloadToast(){
+      if(activeModelToast && activeModelToast.card && activeModelToast.card.isConnected){
+        return activeModelToast;
+      }
+      const wrap = ensureToastWrap();
+      const card = document.createElement('div');
+      card.className = 'toast-card glass';
+      const title = document.createElement('div');
+      title.className = 'toast-title';
+      const body = document.createElement('div');
+      body.className = 'toast-body';
+      const progress = document.createElement('div');
+      progress.className = 'toast-progress';
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      bar.appendChild(fill);
+      const meta = document.createElement('div');
+      meta.className = 'text-xs opacity-70';
+      progress.append(bar, meta);
+      card.append(title, body, progress);
+      wrap.appendChild(card);
+      activeModelToast = { card, title, body, fill, meta, progress };
+      return activeModelToast;
+    }
+
+    function syncModelDownloadToast(status){
+      const missing = Array.isArray(status && status.missing) ? status.missing : [];
+      const isDownloading = !!(status && status.status === 'downloading');
+      const isError = !!(status && status.status === 'error');
+      const isDone = !!(status && status.status === 'done' && missing.length === 0);
+      if(!isDownloading && !isError && !isDone){
+        removeModelDownloadToast({ immediate: true });
+        return;
+      }
+
+      const toast = ensureModelDownloadToast();
+      const pct = Math.max(0, Math.min(100, Number(status && status.pct) || 0));
+      toast.fill.style.width = `${isDone ? 100 : pct}%`;
+
+      if(isDownloading){
+        clearModelToastTimer();
+        const label = status.current_model || 'models';
+        toast.title.textContent = status.total_bytes ? `downloading ${label}` : 'starting model download...';
+        const bits = [];
+        if(status.total_bytes){
+          bits.push(`${pct}%`);
+          bits.push(`${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`);
+        }
+        const eta = formatDuration(status.eta_seconds);
+        if(eta) bits.push(eta);
+        toast.body.textContent = bits.join(' · ');
+        toast.meta.textContent = '';
+        toast.progress.hidden = false;
+        return;
+      }
+
+      if(isError){
+        toast.title.textContent = 'model download failed';
+        toast.body.textContent = status.error || 'could not download models';
+        toast.meta.textContent = '';
+        toast.progress.hidden = false;
+        queueModelToastRemoval(8000);
+        return;
+      }
+
+      toast.title.textContent = 'models downloaded';
+      toast.body.textContent = 'all required models are ready';
+      toast.meta.textContent = '';
+      toast.progress.hidden = false;
+      queueModelToastRemoval(2600);
+    }
+
     function flashModelDownloadCTA(){
       if(!modelsDownloadBtn || modelsDownloadBtn.hidden) return;
       openSettings();
@@ -2594,6 +2765,7 @@
       const isError = !!(status && status.status === 'error');
       modelsBlocked = missing.length > 0 || isDownloading;
       renderModelChecklist(status);
+      syncModelDownloadToast(status);
       if(modelsNote){
         let noteMessage = '';
         if(isError){
@@ -2677,6 +2849,7 @@
           body: JSON.stringify(models ? { models } : {}),
         });
         if(!res.ok){
+          removeModelDownloadToast({ immediate: true });
           showPopup('could not start model download');
           return;
         }
@@ -2684,6 +2857,7 @@
         updateModelSettings(data);
         startModelStatusPolling();
       }catch(err){
+        removeModelDownloadToast({ immediate: true });
         console.warn('start model download failed', err);
         showPopup('could not start model download');
       }
@@ -3326,7 +3500,7 @@
       };
       try{
         if(!freezeReadyBatch()){
-          showPopup('there are no ready songs to start');
+          showPopup('there are no songs to start');
           return;
         }
         startGeneration += 1;
@@ -3737,6 +3911,6 @@
         <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.3</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.3.0</div>
     </div>
   </div>

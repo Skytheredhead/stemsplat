@@ -378,6 +378,36 @@ class DesktopApi:
             return []
         return [str(path) for path in (result or []) if path]
 
+    def pick_output_folder(self) -> str:
+        if self.window is None or webview is None:
+            return ""
+        try:
+            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception:
+            logger.exception("output folder picker failed")
+            return ""
+        if not result:
+            return ""
+        chosen = result[0] if isinstance(result, (list, tuple)) else result
+        return str(chosen or "")
+
+    def open_path(self, path: str) -> bool:
+        target = str(path or "").strip()
+        if not target:
+            return False
+        try:
+            expanded = str(Path(target).expanduser())
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", expanded])
+            elif os.name == "nt":
+                subprocess.Popen(["explorer", expanded])
+            else:
+                subprocess.Popen(["xdg-open", expanded])
+            return True
+        except Exception:
+            logger.exception("open_path failed for %s", target)
+            return False
+
 
 def _open_browser_when_ready(url: str) -> None:
     if _wait_until_ready(url):

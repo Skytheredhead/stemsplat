@@ -17,10 +17,15 @@ ARGS=(
   --clean
   --windowed
   --name "Stemsplat"
+  --distpath "${SCRIPT_DIR}/dist"
+  --workpath "${SCRIPT_DIR}/build/pyinstaller"
+  --specpath "${SCRIPT_DIR}/build/spec"
   --icon "${SCRIPT_DIR}/.stemsplat_icon.icns"
   --osx-bundle-identifier "com.stemsplat.app"
   --collect-submodules uvicorn
   --collect-submodules webview
+  --collect-submodules imageio_ffmpeg
+  --collect-data imageio_ffmpeg
   --exclude-module librosa
   --exclude-module scipy
   --exclude-module numba
@@ -35,6 +40,8 @@ if [[ "${BUNDLE_MODELS:-0}" == "1" ]] && find "${SCRIPT_DIR}/models" -maxdepth 1
   ARGS+=(--add-data "${SCRIPT_DIR}/models:models")
 fi
 
+export PYINSTALLER_CONFIG_DIR="${SCRIPT_DIR}/build/.pyinstaller"
+
 "${PYTHON_BIN}" -m PyInstaller "${ARGS[@]}" "${SCRIPT_DIR}/launcher.py"
 
 APP_BUNDLE="${SCRIPT_DIR}/dist/Stemsplat.app"
@@ -42,10 +49,10 @@ INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
 
 if [[ -f "${INFO_PLIST}" ]]; then
   /usr/libexec/PlistBuddy -c "Delete :LSUIElement" "${INFO_PLIST}" >/dev/null 2>&1 || true
-  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.3" "${INFO_PLIST}" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.3" "${INFO_PLIST}" >/dev/null
-  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 0.3" "${INFO_PLIST}" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 0.3" "${INFO_PLIST}" >/dev/null
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.3.0" "${INFO_PLIST}" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.3.0" "${INFO_PLIST}" >/dev/null
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 0.3.0" "${INFO_PLIST}" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 0.3.0" "${INFO_PLIST}" >/dev/null
   codesign --force --deep --sign - "${APP_BUNDLE}" >/dev/null
 fi
 
