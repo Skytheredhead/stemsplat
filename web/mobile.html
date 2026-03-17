@@ -2063,13 +2063,10 @@
             selectedStemModes = new Set(['both_deux']);
           }
         }else{
-          if(selectedStemModes.has('both_deux')){
-            selectedStemModes.delete('both_deux');
-          }
-          if(selectedStemModes.has(nextMode)){
-            selectedStemModes.delete(nextMode);
+          if(event.shiftKey){
+            selectedStemModes = new Set(['vocals', 'instrumental']);
           }else{
-            selectedStemModes.add(nextMode);
+            selectedStemModes = new Set([nextMode]);
           }
         }
         updateStemChoiceUI();

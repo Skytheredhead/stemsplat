@@ -889,6 +889,7 @@ MODEL_PROMPT_COMPLETE = "complete"
 COMPAT_SETTINGS_DEFAULTS = {
     "output_format": "same_as_input",
     "output_root": str(OUTPUT_ROOT),
+    "output_root_migrated_to_downloads": False,
     "output_same_as_input": False,
     "video_handling": "audio_only",
     "structure_mode": "flat",
@@ -1030,7 +1031,15 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(COMPAT_SETTINGS_DEFAULTS)
     normalized.update(settings)
     output_root = Path(str(normalized.get("output_root") or OUTPUT_ROOT)).expanduser()
+    legacy_documents_root = (Path.home() / "Documents").expanduser()
+    migrated_to_downloads = bool(normalized.get("output_root_migrated_to_downloads"))
+    if not migrated_to_downloads and output_root == legacy_documents_root:
+        output_root = OUTPUT_ROOT
+        migrated_to_downloads = True
+    elif output_root == OUTPUT_ROOT:
+        migrated_to_downloads = True
     normalized["output_root"] = str(output_root)
+    normalized["output_root_migrated_to_downloads"] = migrated_to_downloads
     normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
     normalized["lan_passcode_enabled"] = bool(normalized.get("lan_passcode_enabled"))
     normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
