@@ -2,6 +2,11 @@
 
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers to fiddle with and the best quality.
 
+<p align="center">
+  <img src="assets/ui-preview.png" alt="Stemsplat UI" width="760" />
+</p>
+
+
 ## Prerequisites
 
 - Python (I'm using 3.13.5, not sure about other versions)
@@ -12,7 +17,14 @@
 2. Extract the .zip
 3. Open the .app
 4. Download the models in the app
-5. Done 
+5. Done
+
+## Features
+- Vocals, instrumental, and deux split modes (quality comparisons on stemsplat.skylarenns.com)
+- Batch queue processing
+- Mobile/LAN usage for use from other devices
+- Export format/folder selection
+- No cloud
 
 ## Current Models (Thank you Becruily)
 
