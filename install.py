@@ -55,6 +55,7 @@ ALIAS_MAP = {
         "becruily_guitar.ckpt": ["Mel Band Roformer Guitar.ckpt"],
         "mel_band_roformer_karaoke_becruily.ckpt": ["Mel Band Roformer Karaoke.ckpt"],
         "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt": ["Mel Band Roformer Denoise.ckpt"],
+        "BS-Rofo-SW-Fixed.ckpt": ["BS-Rofo-SW-Fixed-v1.ckpt", "BS Rofo SW Fixed.ckpt"],
     },
 }
 

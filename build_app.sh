@@ -25,6 +25,8 @@ ARGS=(
   --collect-submodules uvicorn
   --collect-submodules webview
   --collect-submodules imageio_ffmpeg
+  --collect-submodules demucs
+  --collect-submodules openunmix
   --collect-data imageio_ffmpeg
   --exclude-module librosa
   --exclude-module scipy

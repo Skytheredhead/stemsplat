@@ -49,6 +49,8 @@ from app_paths import (
     LOG_DIR,
     MODEL_DIR,
     OUTPUT_ROOT,
+    PREVIOUS_FILES_DIR,
+    PREVIOUS_FILES_INDEX_PATH,
     RESOURCE_DIR,
     RUNTIME_DIR,
     ETA_HISTORY_PATH,
@@ -67,6 +69,17 @@ from torch import einsum, nn
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 
+try:  # pragma: no cover - optional runtime dependency
+    from demucs.apply import TensorChunk, apply_model as demucs_apply_model
+    from demucs.states import set_state as demucs_set_state
+except Exception as exc:  # pragma: no cover - surfaced when fast models are used
+    TensorChunk = None  # type: ignore[assignment]
+    demucs_apply_model = None  # type: ignore[assignment]
+    demucs_set_state = None  # type: ignore[assignment]
+    _demucs_import_error = exc
+else:
+    _demucs_import_error = None
+
 try:
     from mutagen import File as MutagenFile
 except Exception:  # pragma: no cover - optional cleanup dependency
@@ -82,6 +95,22 @@ except Exception as exc:  # pragma: no cover - keep app importable for syntax ch
     _model_import_error = exc
 else:
     _model_import_error = None
+
+try:  # pragma: no cover - import failure is surfaced at runtime
+    from split.drumsep_mdx23c import (
+        TFC_TDF_net,
+        config_namespace,
+        demix_mdx23c,
+        load_not_compatible_weights,
+    )
+except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
+    TFC_TDF_net = None  # type: ignore[assignment]
+    config_namespace = None  # type: ignore[assignment]
+    demix_mdx23c = None  # type: ignore[assignment]
+    load_not_compatible_weights = None  # type: ignore[assignment]
+    _drumsep_import_error = exc
+else:
+    _drumsep_import_error = None
 
 
 def _optional_import(module_name: str) -> Any | None:
@@ -868,6 +897,8 @@ class ModelSpec:
     config: str
     segment: int
     overlap: int = 2
+    kind: str = "roformer"
+    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -902,6 +933,16 @@ MPS_MEMORY_HEADROOM_RATIO = 0.88
 UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
 LAN_AUTH_COOKIE_NAME = "stemsplat_lan_auth"
 LAN_AUTH_TTL_CHOICES = {"15m", "1d", "1w", "never"}
+PREVIOUS_FILES_RETENTION_CHOICES: dict[str, int] = {
+    "12h": 12 * 60 * 60,
+    "1d": 24 * 60 * 60,
+    "3d": 3 * 24 * 60 * 60,
+    "1w": 7 * 24 * 60 * 60,
+    "2w": 14 * 24 * 60 * 60,
+    "1mo": 30 * 24 * 60 * 60,
+    "3mo": 90 * 24 * 60 * 60,
+    "6mo": 180 * 24 * 60 * 60,
+}
 LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth"}
 TERMINAL_TASK_RETENTION_LIMIT = 100
 MODEL_PROMPT_PENDING = "pending"
@@ -912,6 +953,12 @@ PRESET_GAIN_DB_MIN = -18.0
 PRESET_GAIN_DB_MAX = 18.0
 PRESET_DEFAULT_OVERLAY_GAIN_DB = 3.0
 PRESET_DEFAULT_BASE_GAIN_DB = -3.0
+PREVIOUS_FILES_LIMIT_GB_MIN = 0.5
+PREVIOUS_FILES_LIMIT_GB_MAX = 1024.0
+PREVIOUS_FILES_WARN_GB_MIN = 0.1
+PREVIOUS_FILES_WARN_GB_MAX = 1024.0
+PREVIOUS_FILES_LIMIT_GB_DEFAULT = 10.0
+PREVIOUS_FILES_WARN_GB_DEFAULT = 8.0
 BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
 BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
 BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
@@ -939,6 +986,9 @@ COMPAT_SETTINGS_DEFAULTS = {
     "lan_passcode_enabled": False,
     "lan_passcode": "",
     "lan_passcode_ttl": "1d",
+    "previous_files_retention": "1w",
+    "previous_files_limit_gb": PREVIOUS_FILES_LIMIT_GB_DEFAULT,
+    "previous_files_warn_gb": PREVIOUS_FILES_WARN_GB_DEFAULT,
     "boost_harmonies_background_vocals_gain_db": BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
     "boost_harmonies_base_song_gain_db": BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
     "boost_guitar_guitar_gain_db": BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
@@ -988,6 +1038,59 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         segment=588_800,
         overlap=2,
     ),
+    "htdemucs_ft_drums": ModelSpec(
+        filename="f7e0c4bc-ba3fe64a.th",
+        config="config_musdb18_htdemucs.yaml",
+        segment=485_100,
+        overlap=4,
+        kind="demucs",
+        target="drums",
+    ),
+    "htdemucs_ft_bass": ModelSpec(
+        filename="d12395a8-e57c48e6.th",
+        config="config_musdb18_htdemucs.yaml",
+        segment=485_100,
+        overlap=4,
+        kind="demucs",
+        target="bass",
+    ),
+    "htdemucs_ft_other": ModelSpec(
+        filename="92cfc3b6-ef3bcb9c.th",
+        config="config_musdb18_htdemucs.yaml",
+        segment=485_100,
+        overlap=4,
+        kind="demucs",
+        target="other",
+    ),
+    "htdemucs_ft_vocals": ModelSpec(
+        filename="04573f0d-f3cf25b2.th",
+        config="config_musdb18_htdemucs.yaml",
+        segment=485_100,
+        overlap=4,
+        kind="demucs",
+        target="vocals",
+    ),
+    "htdemucs_6s": ModelSpec(
+        filename="5c90dfd2-34c22ccb.th",
+        config="config_htdemucs_6stems.yaml",
+        segment=485_100,
+        overlap=4,
+        kind="demucs",
+    ),
+    "drumsep_6s": ModelSpec(
+        filename="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        config="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
+        segment=130_560,
+        overlap=4,
+        kind="mdx23c",
+    ),
+    "drumsep_4s": ModelSpec(
+        filename="model_drumsep.th",
+        config="config_drumsep.yaml",
+        segment=1_764_000,
+        overlap=4,
+        kind="demucs",
+    ),
 }
 
 MODEL_ALIAS_MAP = {
@@ -1008,15 +1111,29 @@ MODEL_URLS = {
     "mel_band_karaoke": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
     "denoise": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
     "bs_roformer_6s": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
+    "htdemucs_ft_drums": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+    "htdemucs_ft_bass": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+    "htdemucs_ft_other": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+    "htdemucs_ft_vocals": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+    "htdemucs_6s": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
+    "drumsep_6s": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+    "drumsep_4s": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
 }
 MODEL_DISPLAY_NAMES = {
     "vocals": "vocals",
     "instrumental": "instrumental",
-    "deux": "both - deux model",
-    "guitar": "mel-band guitar",
-    "mel_band_karaoke": "mel-band karaoke",
-    "denoise": "mel-band denoise",
+    "deux": "both",
+    "guitar": "guitar",
+    "mel_band_karaoke": "karaoke",
+    "denoise": "denoise",
     "bs_roformer_6s": "bs-roformer 6s",
+    "htdemucs_ft_drums": "htdemucs4 ft drums",
+    "htdemucs_ft_bass": "htdemucs4 ft bass",
+    "htdemucs_ft_other": "htdemucs4 ft other",
+    "htdemucs_ft_vocals": "htdemucs4 ft vocals",
+    "htdemucs_6s": "htdemucs4 (6 stem)",
+    "drumsep_6s": "drumsep (6 stem)",
+    "drumsep_4s": "drum sep (4 stem)",
 }
 MODE_TO_STEMS = {
     "vocals": ("vocals",),
@@ -1025,7 +1142,16 @@ MODE_TO_STEMS = {
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
     "mel_band_karaoke": ("mel_band_karaoke",),
+    "denoise": ("denoise",),
     "bs_roformer_6s": ("bs_roformer_6s",),
+    "htdemucs_ft_drums": ("htdemucs_ft_drums",),
+    "htdemucs_ft_bass": ("htdemucs_ft_bass",),
+    "htdemucs_ft_other": ("htdemucs_ft_other",),
+    "htdemucs_ft_vocals": ("htdemucs_ft_vocals",),
+    "htdemucs_6s": ("htdemucs_6s",),
+    "drumsep_6s": ("drumsep_6s",),
+    "drumsep_4s": ("drumsep_4s",),
+    "preset_voc_instrum": ("voc_instrum",),
     "preset_boost_harmonies": ("boost_harmonies",),
     "preset_boost_guitar": ("boost_guitar",),
     "preset_denoise": ("denoise",),
@@ -1037,7 +1163,16 @@ MODE_REQUIRED_MODELS = {
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
     "mel_band_karaoke": ("mel_band_karaoke",),
+    "denoise": ("denoise",),
     "bs_roformer_6s": ("bs_roformer_6s",),
+    "htdemucs_ft_drums": ("htdemucs_ft_drums",),
+    "htdemucs_ft_bass": ("htdemucs_ft_bass",),
+    "htdemucs_ft_other": ("htdemucs_ft_other",),
+    "htdemucs_ft_vocals": ("htdemucs_ft_vocals",),
+    "htdemucs_6s": ("htdemucs_6s",),
+    "drumsep_6s": ("drumsep_6s",),
+    "drumsep_4s": ("drumsep_4s",),
+    "preset_voc_instrum": ("vocals", "instrumental"),
     "preset_boost_harmonies": ("vocals", "mel_band_karaoke"),
     "preset_boost_guitar": ("guitar",),
     "preset_denoise": ("denoise",),
@@ -1049,7 +1184,16 @@ MODE_OUTPUT_LABELS = {
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
     "mel_band_karaoke": ("vocals", "karaoke"),
+    "denoise": ("denoise",),
     "bs_roformer_6s": ("bass", "drums", "other", "vocals", "guitar", "piano"),
+    "htdemucs_ft_drums": ("drums",),
+    "htdemucs_ft_bass": ("bass",),
+    "htdemucs_ft_other": ("other",),
+    "htdemucs_ft_vocals": ("vocals",),
+    "htdemucs_6s": ("drums", "bass", "other", "vocals", "guitar", "piano"),
+    "drumsep_6s": ("kick", "snare", "toms", "hh", "ride", "crash"),
+    "drumsep_4s": ("kick", "snare", "cymbals", "toms"),
+    "preset_voc_instrum": ("vocals", "instrumental"),
     "preset_boost_harmonies": ("boost harmonies",),
     "preset_boost_guitar": ("boost guitar",),
     "preset_denoise": ("denoise",),
@@ -1192,6 +1336,17 @@ def _preset_settings_payload_for_mode(mode: str, settings: dict[str, Any] | None
     return None
 
 
+def _coerce_storage_gb(value: Any, default: float, *, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    if not math.isfinite(parsed):
+        parsed = float(default)
+    clamped = max(minimum, min(maximum, parsed))
+    return round(clamped * 10.0) / 10.0
+
+
 def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(COMPAT_SETTINGS_DEFAULTS)
     normalized.update(settings)
@@ -1210,6 +1365,22 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
     if str(normalized.get("lan_passcode_ttl") or "") not in LAN_AUTH_TTL_CHOICES:
         normalized["lan_passcode_ttl"] = "1d"
+    if str(normalized.get("previous_files_retention") or "") not in PREVIOUS_FILES_RETENTION_CHOICES:
+        normalized["previous_files_retention"] = "1w"
+    normalized["previous_files_limit_gb"] = _coerce_storage_gb(
+        normalized.get("previous_files_limit_gb"),
+        PREVIOUS_FILES_LIMIT_GB_DEFAULT,
+        minimum=PREVIOUS_FILES_LIMIT_GB_MIN,
+        maximum=PREVIOUS_FILES_LIMIT_GB_MAX,
+    )
+    normalized["previous_files_warn_gb"] = _coerce_storage_gb(
+        normalized.get("previous_files_warn_gb"),
+        PREVIOUS_FILES_WARN_GB_DEFAULT,
+        minimum=PREVIOUS_FILES_WARN_GB_MIN,
+        maximum=PREVIOUS_FILES_WARN_GB_MAX,
+    )
+    if normalized["previous_files_warn_gb"] > normalized["previous_files_limit_gb"]:
+        normalized["previous_files_warn_gb"] = normalized["previous_files_limit_gb"]
     if str(normalized.get("video_handling") or "") not in VIDEO_HANDLING_CHOICES:
         normalized["video_handling"] = "audio_only"
     boost_harmonies_settings = _boost_harmonies_settings_payload(normalized)
@@ -1271,6 +1442,72 @@ def _load_eta_history() -> dict[str, list[dict[str, float]]]:
             )
         payload[key] = normalized_entries[-ETA_HISTORY_LIMIT:]
     return payload
+
+
+def _normalize_previous_file_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+    entry_id = str(entry.get("id") or "").strip()
+    if not entry_id:
+        return None
+    original_name = str(entry.get("original_name") or "").strip()
+    storage_dir = str(entry.get("storage_dir") or "").strip()
+    source_path = str(entry.get("source_path") or "").strip()
+    finished_at = entry.get("finished_at")
+    if not original_name or not storage_dir or not source_path:
+        return None
+    if not isinstance(finished_at, (int, float)):
+        return None
+    outputs = entry.get("outputs")
+    if not isinstance(outputs, list):
+        outputs = []
+    stems = entry.get("stems")
+    if not isinstance(stems, list):
+        stems = []
+    normalized: dict[str, Any] = {
+        "id": entry_id,
+        "task_id": str(entry.get("task_id") or "").strip(),
+        "original_name": original_name,
+        "mode": str(entry.get("mode") or "").strip(),
+        "stems": [str(item) for item in stems if str(item).strip()],
+        "storage_dir": storage_dir,
+        "source_path": source_path,
+        "source_name": str(entry.get("source_name") or Path(source_path).name or original_name),
+        "outputs": [str(item) for item in outputs if str(item).strip()],
+        "finished_at": float(finished_at),
+        "artwork_path": str(entry.get("artwork_path") or "").strip(),
+        "output_format": str(entry.get("output_format") or "").strip(),
+        "video_handling": str(entry.get("video_handling") or "audio_only").strip() or "audio_only",
+        "preset_settings": entry.get("preset_settings") if isinstance(entry.get("preset_settings"), dict) else None,
+        "total_bytes": max(0, int(entry.get("total_bytes") or 0)),
+    }
+    return normalized
+
+
+def _load_previous_files_index() -> list[dict[str, Any]]:
+    if not PREVIOUS_FILES_INDEX_PATH.exists():
+        return []
+    try:
+        data = json.loads(PREVIOUS_FILES_INDEX_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logging.getLogger("stemsplat").debug(
+            "failed to load previous files from %s",
+            PREVIOUS_FILES_INDEX_PATH,
+            exc_info=True,
+        )
+        return []
+    if not isinstance(data, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in data:
+        entry = _normalize_previous_file_entry(item)
+        if entry is not None:
+            normalized.append(entry)
+    return normalized
+
+
+def _save_previous_files_index(entries: list[dict[str, Any]]) -> None:
+    PREVIOUS_FILES_INDEX_PATH.write_text(json.dumps(entries, indent=2), encoding="utf-8")
 
 
 def _save_eta_history(history: dict[str, list[dict[str, float]]]) -> None:
@@ -2114,6 +2351,66 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
     return model.to(device).eval()
 
 
+def _load_model_config(config_path: Path) -> dict[str, Any]:
+    with config_path.open("r", encoding="utf-8") as handle:
+        data = yaml.unsafe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise AppError(ErrorCode.CONFIG_MISSING, f"Invalid config structure: {config_path.name}")
+    return data
+
+
+def _instantiate_demucs_package(package: dict[str, Any]) -> torch.nn.Module:
+    klass = package.get("klass")
+    args = tuple(package.get("args") or ())
+    kwargs = dict(package.get("kwargs") or {})
+    state = package.get("state")
+    if klass is None or state is None:
+        raise AppError(ErrorCode.SEPARATION_FAILED, "Demucs checkpoint is missing model metadata.")
+    valid_params = set(inspect.signature(klass).parameters)
+    valid_params.discard("self")
+    model_kwargs = {key: value for key, value in kwargs.items() if key in valid_params}
+    model = klass(*args, **model_kwargs)
+    if demucs_set_state is not None:
+        demucs_set_state(model, state)
+    else:
+        model.load_state_dict(state)
+    return model
+
+
+def _load_demucs_model(model_path: Path, device: torch.device) -> torch.nn.Module:
+    if TensorChunk is None or demucs_apply_model is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Demucs import failed: {_demucs_import_error}")
+    package = torch.load(model_path, map_location="cpu", weights_only=False)
+    if isinstance(package, torch.nn.Module):
+        model = package
+    elif isinstance(package, dict):
+        model = _instantiate_demucs_package(package)
+    else:
+        raise AppError(ErrorCode.SEPARATION_FAILED, f"Unsupported Demucs checkpoint format: {type(package)!r}")
+    return model.to(device).eval()
+
+
+def _load_mdx23c_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
+    if TFC_TDF_net is None or config_namespace is None or load_not_compatible_weights is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"DrumSep import failed: {_drumsep_import_error}")
+    cfg = config_namespace(_load_model_config(config_path))
+    model = TFC_TDF_net(cfg)
+    state = torch.load(model_path, map_location="cpu", weights_only=False)
+    load_not_compatible_weights(model, state)
+    setattr(model, "_stemsplat_config", cfg)
+    return model.to(device).eval()
+
+
+def _load_model_from_spec(spec: ModelSpec, model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
+    if spec.kind == "roformer":
+        return _load_roformer_model(model_path, config_path, device)
+    if spec.kind == "demucs":
+        return _load_demucs_model(model_path, device)
+    if spec.kind == "mdx23c":
+        return _load_mdx23c_model(model_path, config_path, device)
+    raise AppError(ErrorCode.INVALID_REQUEST, f"Unknown model kind: {spec.kind}")
+
+
 def select_device() -> torch.device:
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return torch.device("mps")
@@ -2149,7 +2446,7 @@ class ModelManager:
         spec = MODEL_SPECS[name]
         model_path = self._resolve_model_path(spec.filename)
         config_path = self._resolve_config_path(spec.config)
-        model = _load_roformer_model(model_path, config_path, self.device)
+        model = _load_model_from_spec(spec, model_path, config_path, self.device)
         self.cache[name] = model
         return model
 
@@ -2240,6 +2537,114 @@ def _run_model_chunks(
     for index in range(restored.shape[0]):
         outputs.append(_restore_output_channels(restored[index], original_channels))
     return torch.stack(outputs, dim=0)
+
+
+def _overlap_fraction(overlap_count: int) -> float:
+    overlap_count = max(1, int(overlap_count))
+    return max(0.0, min(0.95, 1.0 - (1.0 / float(overlap_count))))
+
+
+def _run_demucs_chunks(
+    model: torch.nn.Module,
+    waveform: torch.Tensor,
+    segment: int,
+    overlap: int,
+    progress_cb: Callable[[float], None],
+    stop_check: Callable[[], None],
+) -> torch.Tensor:
+    if TensorChunk is None or demucs_apply_model is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Demucs import failed: {_demucs_import_error}")
+    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
+    mix = working.unsqueeze(0)
+    length = int(mix.shape[-1])
+    segment_seconds = max(1.0 / 44100.0, float(segment) / 44100.0)
+    segment_length = max(1, int(round(segment_seconds * float(getattr(model, "samplerate", 44100)))))
+    stride = max(1, int((1.0 - _overlap_fraction(overlap)) * segment_length))
+    offsets = list(range(0, length, stride)) or [0]
+    weight = torch.cat(
+        [
+            torch.arange(1, segment_length // 2 + 1, device=working.device),
+            torch.arange(segment_length - segment_length // 2, 0, -1, device=working.device),
+        ]
+    )
+    weight = weight / weight.max().clamp_min(1e-6)
+    out = torch.zeros((1, len(getattr(model, "sources", [])), working.shape[0], length), device=working.device)
+    sum_weight = torch.zeros(length, device=working.device)
+
+    progress_cb(0.0)
+    with torch.no_grad():
+        for index, offset in enumerate(offsets, start=1):
+            stop_check()
+            chunk = TensorChunk(mix, offset, segment_length)
+            chunk_out = demucs_apply_model(
+                model,
+                chunk,
+                shifts=0,
+                split=False,
+                overlap=_overlap_fraction(overlap),
+                device=working.device,
+                segment=segment_seconds,
+            )
+            chunk_length = int(chunk_out.shape[-1])
+            out[..., offset : offset + chunk_length] += weight[:chunk_length] * chunk_out[..., :chunk_length]
+            sum_weight[offset : offset + chunk_length] += weight[:chunk_length]
+            progress_cb(index / max(1, len(offsets)))
+
+    out = out / sum_weight.clamp_min(1e-6)
+    restored = out[0]
+    outputs = []
+    for index in range(restored.shape[0]):
+        outputs.append(_restore_output_channels(restored[index], original_channels))
+    return torch.stack(outputs, dim=0)
+
+
+def _run_mdx23c_chunks(
+    model: torch.nn.Module,
+    waveform: torch.Tensor,
+    progress_cb: Callable[[float], None],
+    stop_check: Callable[[], None],
+) -> torch.Tensor:
+    if demix_mdx23c is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"DrumSep import failed: {_drumsep_import_error}")
+    config = getattr(model, "_stemsplat_config", None)
+    if config is None:
+        raise AppError(ErrorCode.CONFIG_MISSING, "DrumSep config missing from loaded model.")
+    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
+    predicted = demix_mdx23c(config, model, working, next(model.parameters()).device, progress_cb, stop_check)
+    outputs = []
+    for index in range(predicted.shape[0]):
+        outputs.append(_restore_output_channels(predicted[index], original_channels))
+    return torch.stack(outputs, dim=0)
+
+
+def _run_model_for_spec(
+    model_key: str,
+    model: torch.nn.Module,
+    waveform: torch.Tensor,
+    progress_cb: Callable[[float], None],
+    stop_check: Callable[[], None],
+) -> torch.Tensor:
+    spec = MODEL_SPECS[model_key]
+    if spec.kind == "roformer":
+        return _run_model_chunks(model, waveform, spec.segment, spec.overlap, progress_cb, stop_check)
+    if spec.kind == "demucs":
+        return _run_demucs_chunks(model, waveform, spec.segment, spec.overlap, progress_cb, stop_check)
+    if spec.kind == "mdx23c":
+        return _run_mdx23c_chunks(model, waveform, progress_cb, stop_check)
+    raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported model kind: {spec.kind}")
+
+
+def _extract_target_tensor(model_key: str, model: torch.nn.Module, prediction: torch.Tensor) -> torch.Tensor:
+    spec = MODEL_SPECS[model_key]
+    if not spec.target:
+        return prediction[0]
+    sources = [str(item) for item in getattr(model, "sources", [])]
+    if spec.target in sources:
+        return prediction[sources.index(spec.target)]
+    expected_labels = MODE_OUTPUT_LABELS.get(model_key, ())
+    if spec.target in expected_labels:
+        return prediction[list(expected_labels).index(spec.target)]
+    raise AppError(ErrorCode.SEPARATION_FAILED, f"Target source '{spec.target}' not found in model output.")
 
 
 def _waveform_like(source: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
@@ -2402,6 +2807,14 @@ def _stage_model_key(stage_text: str) -> str | None:
         "running mel-band karaoke model": "mel_band_karaoke",
         "running harmony background model": "mel_band_karaoke",
         "running denoise model": "denoise",
+        "running bs-roformer 6s model": "bs_roformer_6s",
+        "running htdemucs4 ft drums model": "htdemucs_ft_drums",
+        "running htdemucs4 ft bass model": "htdemucs_ft_bass",
+        "running htdemucs4 ft other model": "htdemucs_ft_other",
+        "running htdemucs4 ft vocals model": "htdemucs_ft_vocals",
+        "running htdemucs4 6 stem model": "htdemucs_6s",
+        "running drumsep 6 stem model": "drumsep_6s",
+        "running drum sep 4 stem model": "drumsep_4s",
     }
     for prefix, model_key in mapping.items():
         if prefix in stage:
@@ -2414,6 +2827,8 @@ app.state.runtime_status_provider = None
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
 task_queue: queue.Queue[str] = queue.Queue()
+previous_files_lock = threading.RLock()
+previous_files_index: list[dict[str, Any]] = _load_previous_files_index()
 model_download_lock = threading.RLock()
 model_download_state: dict[str, Any] = {
     "status": "idle",
@@ -2492,6 +2907,232 @@ def _settings_response_payload(request: Request | None = None) -> dict[str, Any]
         payload["lan_passcode"] = ""
     payload["runtime"] = _runtime_status_payload()
     return payload
+
+
+def _previous_files_retention_seconds(settings: dict[str, Any] | None = None) -> int:
+    source = settings or _compat_settings_payload()
+    choice = str(source.get("previous_files_retention") or "1w")
+    return PREVIOUS_FILES_RETENTION_CHOICES.get(choice, PREVIOUS_FILES_RETENTION_CHOICES["1w"])
+
+
+def _previous_files_limit_gb(settings: dict[str, Any] | None = None) -> float:
+    source = settings or _compat_settings_payload()
+    return _coerce_storage_gb(
+        source.get("previous_files_limit_gb"),
+        PREVIOUS_FILES_LIMIT_GB_DEFAULT,
+        minimum=PREVIOUS_FILES_LIMIT_GB_MIN,
+        maximum=PREVIOUS_FILES_LIMIT_GB_MAX,
+    )
+
+
+def _previous_files_warn_gb(settings: dict[str, Any] | None = None) -> float:
+    source = settings or _compat_settings_payload()
+    limit_gb = _previous_files_limit_gb(source)
+    warn_gb = _coerce_storage_gb(
+        source.get("previous_files_warn_gb"),
+        PREVIOUS_FILES_WARN_GB_DEFAULT,
+        minimum=PREVIOUS_FILES_WARN_GB_MIN,
+        maximum=PREVIOUS_FILES_WARN_GB_MAX,
+    )
+    return min(limit_gb, warn_gb)
+
+
+def _gb_to_bytes(value_gb: float) -> int:
+    return max(0, int(round(float(value_gb) * (1024**3))))
+
+
+def _previous_files_limit_bytes(settings: dict[str, Any] | None = None) -> int:
+    return _gb_to_bytes(_previous_files_limit_gb(settings))
+
+
+def _previous_files_warn_bytes(settings: dict[str, Any] | None = None) -> int:
+    return _gb_to_bytes(_previous_files_warn_gb(settings))
+
+
+def _path_total_bytes(path: Path) -> int:
+    try:
+        if path.is_file():
+            return max(0, int(path.stat().st_size))
+        if not path.exists():
+            return 0
+        total = 0
+        for child in path.rglob("*"):
+            if child.is_file():
+                with contextlib.suppress(OSError):
+                    total += max(0, int(child.stat().st_size))
+        return total
+    except Exception:
+        return 0
+
+
+def _previous_file_entry_total_bytes(entry: dict[str, Any]) -> int:
+    storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+    return _path_total_bytes(storage_dir)
+
+
+def _history_storage_payload(
+    entries: list[dict[str, Any]] | None = None,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    active_settings = settings or _compat_settings_payload()
+    active_entries = entries if entries is not None else _prune_previous_files(save=False)
+    usage_bytes = 0
+    for entry in active_entries:
+        size_bytes = max(0, int(entry.get("total_bytes") or 0))
+        if size_bytes <= 0:
+            size_bytes = _previous_file_entry_total_bytes(entry)
+        usage_bytes += size_bytes
+    limit_bytes = _previous_files_limit_bytes(active_settings)
+    warn_bytes = _previous_files_warn_bytes(active_settings)
+    return {
+        "usage_bytes": usage_bytes,
+        "limit_bytes": limit_bytes,
+        "warn_bytes": warn_bytes,
+        "near_limit": usage_bytes >= warn_bytes if warn_bytes > 0 else False,
+        "at_limit": usage_bytes >= limit_bytes if limit_bytes > 0 else False,
+    }
+
+
+def _previous_file_output_paths(entry: dict[str, Any]) -> tuple[Path, list[Path]]:
+    storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+    if not storage_dir.exists() or not storage_dir.is_dir():
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    outputs_dir = storage_dir / "outputs"
+    outputs = [outputs_dir / str(name) for name in (entry.get("outputs") or [])]
+    existing_outputs = [path for path in outputs if path.exists() and path.is_file()]
+    if outputs and not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    return outputs_dir, existing_outputs
+
+
+def _public_previous_file(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(entry.get("id") or ""),
+        "task_id": str(entry.get("task_id") or ""),
+        "name": str(entry.get("original_name") or ""),
+        "mode": str(entry.get("mode") or ""),
+        "stems": list(entry.get("stems") or []),
+        "outputs": list(entry.get("outputs") or []),
+        "finished_at": float(entry.get("finished_at") or 0.0),
+        "preset_settings": entry.get("preset_settings") if isinstance(entry.get("preset_settings"), dict) else None,
+        "total_bytes": max(0, int(entry.get("total_bytes") or 0)),
+        "artwork_url": f"/api/history/{entry['id']}/artwork",
+    }
+
+
+def _require_previous_file(entry_id: str) -> dict[str, Any]:
+    _prune_previous_files(save=False)
+    with previous_files_lock:
+        for entry in previous_files_index:
+            if str(entry.get("id") or "") == str(entry_id):
+                return dict(entry)
+    raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid previous file id")
+
+
+def _prune_previous_files(*, save: bool = True) -> list[dict[str, Any]]:
+    cutoff = time.time() - _previous_files_retention_seconds()
+    limit_bytes = _previous_files_limit_bytes()
+    kept: list[dict[str, Any]] = []
+    removed_dirs: list[Path] = []
+    with previous_files_lock:
+        for entry in previous_files_index:
+            storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+            source_path = Path(str(entry.get("source_path") or "")).expanduser()
+            if float(entry.get("finished_at") or 0.0) < cutoff:
+                removed_dirs.append(storage_dir)
+                continue
+            if not storage_dir.exists() or not source_path.exists():
+                removed_dirs.append(storage_dir)
+                continue
+            try:
+                _previous_file_output_paths(entry)
+            except AppError:
+                removed_dirs.append(storage_dir)
+                continue
+            entry["total_bytes"] = _previous_file_entry_total_bytes(entry)
+            kept.append(entry)
+        kept.sort(key=lambda item: float(item.get("finished_at") or 0.0), reverse=True)
+        if limit_bytes > 0:
+            limited: list[dict[str, Any]] = []
+            usage_bytes = 0
+            for entry in kept:
+                entry_size = max(0, int(entry.get("total_bytes") or 0))
+                if usage_bytes + entry_size > limit_bytes:
+                    removed_dirs.append(Path(str(entry.get("storage_dir") or "")).expanduser())
+                    continue
+                limited.append(entry)
+                usage_bytes += entry_size
+            kept = limited
+        previous_files_index[:] = kept
+        if save:
+            _save_previous_files_index(previous_files_index)
+    for path in removed_dirs:
+        _cleanup_path(path)
+    return [dict(entry) for entry in kept]
+
+
+def _archive_previous_file(task_id: str, out_dir: Path, outputs: list[str]) -> dict[str, Any] | None:
+    with tasks_lock:
+        task = dict(tasks.get(task_id) or {})
+    if not task:
+        return None
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    if not source_path.exists() or not outputs:
+        return None
+    entry_id = str(uuid.uuid4())
+    storage_dir = _ensure_dir(PREVIOUS_FILES_DIR / entry_id)
+    outputs_dir = _ensure_dir(storage_dir / "outputs")
+    stored_outputs: list[str] = []
+    for output_name in outputs:
+        source_output = out_dir / str(output_name)
+        if not source_output.exists() or not source_output.is_file():
+            continue
+        target_output = outputs_dir / source_output.name
+        try:
+            shutil.copy2(source_output, target_output)
+        except Exception:
+            logger.warning("failed to archive output %s for task %s", source_output, task_id, exc_info=True)
+            continue
+        stored_outputs.append(target_output.name)
+    if not stored_outputs:
+        _cleanup_path(storage_dir)
+        return None
+    archived_source = storage_dir / source_path.name
+    try:
+        shutil.copy2(source_path, archived_source)
+    except Exception:
+        logger.warning("failed to archive source %s for task %s", source_path, task_id, exc_info=True)
+        _cleanup_path(storage_dir)
+        return None
+    artwork_path = ""
+    with contextlib.suppress(Exception):
+        current_artwork = _extract_task_artwork(task_id)
+        if current_artwork is not None and current_artwork.exists():
+            archived_artwork = storage_dir / f"artwork{current_artwork.suffix.lower() or '.jpg'}"
+            shutil.copy2(current_artwork, archived_artwork)
+            artwork_path = str(archived_artwork)
+    entry = {
+        "id": entry_id,
+        "task_id": task_id,
+        "original_name": str(task.get("original_name") or archived_source.name),
+        "mode": str(task.get("mode") or ""),
+        "stems": _mode_to_stems(str(task.get("mode") or "")),
+        "storage_dir": str(storage_dir),
+        "source_path": str(archived_source),
+        "source_name": archived_source.name,
+        "outputs": stored_outputs,
+        "finished_at": float(task.get("finished_at") or time.time()),
+        "artwork_path": artwork_path,
+        "output_format": str(task.get("output_format") or ""),
+        "video_handling": str(task.get("video_handling") or "audio_only"),
+        "preset_settings": task.get("preset_settings_snapshot") if isinstance(task.get("preset_settings_snapshot"), dict) else None,
+        "total_bytes": _path_total_bytes(storage_dir),
+    }
+    with previous_files_lock:
+        previous_files_index.insert(0, entry)
+        _save_previous_files_index(previous_files_index)
+    _prune_previous_files()
+    return entry
 
 
 def _task_boost_harmonies_settings(task: dict[str, Any]) -> dict[str, float]:
@@ -2722,7 +3363,7 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
         raw_estimate = max(1.0, export_budget * (1.0 - export_progress))
         return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
 
-    if mode == "both_separate" and audio_seconds > 0:
+    if mode in {"both_separate", "preset_voc_instrum"} and audio_seconds > 0:
         vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
         instrumental_total = _predict_model_runtime_seconds("instrumental", audio_seconds)
         if vocals_total is not None or instrumental_total is not None:
@@ -2775,7 +3416,7 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
     progress_fraction = _stage_progress_fraction(mode, stage_text, pct)
     if progress_fraction is not None and progress_fraction >= 0.08 and stage_elapsed >= 4.0:
         stage_progress_remaining = max(0.0, (stage_elapsed / progress_fraction) - stage_elapsed)
-        if mode == "both_separate" and "running vocals model" in stage_text:
+        if mode in {"both_separate", "preset_voc_instrum"} and "running vocals model" in stage_text:
             next_stage_total = _predict_model_runtime_seconds("instrumental", audio_seconds) or stage_progress_remaining
             progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
         elif mode == "preset_boost_harmonies" and "running vocals model" in stage_text:
@@ -2847,7 +3488,7 @@ def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> floa
 def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
     if audio_seconds <= 0:
         return None
-    if mode == "both_separate":
+    if mode in {"both_separate", "preset_voc_instrum"}:
         vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
         instrumental = _predict_model_runtime_seconds("instrumental", audio_seconds)
         if vocals is None and instrumental is None:
@@ -2872,7 +3513,7 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
     clamped = max(0, min(100, int(pct)))
     stage_model = _stage_model_key(stage)
     if stage_model == "vocals":
-        if mode == "both_separate":
+        if mode in {"both_separate", "preset_voc_instrum"}:
             span = max(1, BOTH_SEPARATE_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
         if mode == "preset_boost_harmonies":
@@ -2881,12 +3522,25 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if stage_model == "instrumental":
-        if mode == "both_separate":
+        if mode in {"both_separate", "preset_voc_instrum"}:
             span = max(1, BOTH_SEPARATE_INSTRUMENTAL_END_PCT - BOTH_SEPARATE_INSTRUMENTAL_START_PCT)
             return max(0.0, min(1.0, (clamped - BOTH_SEPARATE_INSTRUMENTAL_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-    if stage_model in {"deux", "guitar", "mel_band_karaoke", "denoise"}:
+    if stage_model in {
+        "deux",
+        "guitar",
+        "mel_band_karaoke",
+        "denoise",
+        "bs_roformer_6s",
+        "htdemucs_ft_drums",
+        "htdemucs_ft_bass",
+        "htdemucs_ft_other",
+        "htdemucs_ft_vocals",
+        "htdemucs_6s",
+        "drumsep_6s",
+        "drumsep_4s",
+    }:
         if mode == "preset_boost_harmonies" and stage_model == "mel_band_karaoke":
             span = max(1, BOOST_HARMONIES_BACKGROUND_END_PCT - BOOST_HARMONIES_BACKGROUND_START_PCT)
             return max(0.0, min(1.0, (clamped - BOOST_HARMONIES_BACKGROUND_START_PCT) / span))
@@ -2971,6 +3625,8 @@ def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
     if cleanup_snapshot is not None:
         _forget_task(task_id, cleanup_snapshot)
         return
+    with contextlib.suppress(Exception):
+        _archive_previous_file(task_id, out_dir, outputs)
     _prune_terminal_tasks()
 
 
@@ -3012,6 +3668,18 @@ def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
 
 def _download_label(task: dict[str, Any]) -> str:
     return _safe_stem(str(task.get("original_name") or "stems"))
+
+
+def _copy_outputs_to_directory(output_paths: list[Path], destination_dir: Path) -> list[Path]:
+    copied: list[Path] = []
+    _ensure_dir(destination_dir)
+    for output_path in output_paths:
+        target = destination_dir / output_path.name
+        if target.exists():
+            target = destination_dir / f"{output_path.stem} ({int(time.time())}){output_path.suffix}"
+        shutil.copy2(output_path, target)
+        copied.append(target)
+    return copied
 
 
 def _path_within(path: Path, root: Path) -> bool:
@@ -3841,7 +4509,7 @@ def _process_task(task_id: str) -> None:
             )
             _append_named_output(temp_outputs, work_dir, "vocals", vocals_tensor)
             _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_tensor)
-        elif mode == "both_separate":
+        elif mode in {"both_separate", "preset_voc_instrum"}:
             vocals_model = manager.get("vocals")
             instrumental_model = manager.get("instrumental")
             vocals_started_at = time.time()
@@ -3877,11 +4545,10 @@ def _process_task(task_id: str) -> None:
         elif mode == "guitar":
             guitar_model = manager.get("guitar")
             guitar_started_at = time.time()
-            guitar_pred = _run_model_chunks(
+            guitar_pred = _run_model_for_spec(
+                "guitar",
                 guitar_model,
                 waveform,
-                MODEL_SPECS["guitar"].segment,
-                MODEL_SPECS["guitar"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running guitar model",
@@ -3894,11 +4561,10 @@ def _process_task(task_id: str) -> None:
         elif mode == "mel_band_karaoke":
             karaoke_model = manager.get("mel_band_karaoke")
             karaoke_started_at = time.time()
-            karaoke_pred = _run_model_chunks(
+            karaoke_pred = _run_model_for_spec(
+                "mel_band_karaoke",
                 karaoke_model,
                 waveform,
-                MODEL_SPECS["mel_band_karaoke"].segment,
-                MODEL_SPECS["mel_band_karaoke"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running mel-band karaoke model",
@@ -3917,11 +4583,10 @@ def _process_task(task_id: str) -> None:
             preset_settings = _task_boost_harmonies_settings(task)
 
             vocals_started_at = time.time()
-            vocals_pred = _run_model_chunks(
+            vocals_pred = _run_model_for_spec(
+                "vocals",
                 vocals_model,
                 waveform,
-                MODEL_SPECS["vocals"].segment,
-                MODEL_SPECS["vocals"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running vocals model",
@@ -3933,11 +4598,10 @@ def _process_task(task_id: str) -> None:
             vocals_tensor = vocals_pred[0]
 
             harmony_started_at = time.time()
-            harmony_pred = _run_model_chunks(
+            harmony_pred = _run_model_for_spec(
+                "mel_band_karaoke",
                 harmony_model,
                 vocals_tensor,
-                MODEL_SPECS["mel_band_karaoke"].segment,
-                MODEL_SPECS["mel_band_karaoke"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running harmony background model",
@@ -3968,11 +4632,10 @@ def _process_task(task_id: str) -> None:
             preset_settings = _task_boost_guitar_settings(task)
 
             guitar_started_at = time.time()
-            guitar_pred = _run_model_chunks(
+            guitar_pred = _run_model_for_spec(
+                "guitar",
                 guitar_model,
                 waveform,
-                MODEL_SPECS["guitar"].segment,
-                MODEL_SPECS["guitar"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running guitar model",
@@ -3993,14 +4656,13 @@ def _process_task(task_id: str) -> None:
                 overlay_gain_db=preset_settings["overlay_gain_db"],
             )
             _append_named_output(temp_outputs, work_dir, "boost guitar", boost_mix_tensor)
-        elif mode == "preset_denoise":
+        elif mode in {"denoise", "preset_denoise"}:
             denoise_model = manager.get("denoise")
             denoise_started_at = time.time()
-            denoise_pred = _run_model_chunks(
+            denoise_pred = _run_model_for_spec(
+                "denoise",
                 denoise_model,
                 waveform,
-                MODEL_SPECS["denoise"].segment,
-                MODEL_SPECS["denoise"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running denoise model",
@@ -4010,6 +4672,98 @@ def _process_task(task_id: str) -> None:
             )
             _record_eta_sample("denoise", audio_seconds, time.time() - denoise_started_at)
             _append_named_output(temp_outputs, work_dir, "denoise", denoise_pred[0])
+        elif mode == "bs_roformer_6s":
+            bs_6s_model = manager.get("bs_roformer_6s")
+            bs_6s_started_at = time.time()
+            bs_6s_pred = _run_model_for_spec(
+                "bs_roformer_6s",
+                bs_6s_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running bs-roformer 6s model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("bs_roformer_6s", audio_seconds, time.time() - bs_6s_started_at)
+            expected_labels = MODE_OUTPUT_LABELS["bs_roformer_6s"]
+            if bs_6s_pred.shape[0] < len(expected_labels):
+                raise AppError(ErrorCode.SEPARATION_FAILED, "6-stem model returned incomplete output.")
+            for label, tensor in zip(expected_labels, bs_6s_pred, strict=False):
+                _append_named_output(temp_outputs, work_dir, label, tensor)
+        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_ft_other", "htdemucs_ft_vocals"}:
+            fast_model = manager.get(mode)
+            fast_started_at = time.time()
+            fast_pred = _run_model_for_spec(
+                mode,
+                fast_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    f"Running {MODEL_DISPLAY_NAMES[mode]} model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample(mode, audio_seconds, time.time() - fast_started_at)
+            _append_named_output(
+                temp_outputs,
+                work_dir,
+                MODE_OUTPUT_LABELS[mode][0],
+                _extract_target_tensor(mode, fast_model, fast_pred),
+            )
+        elif mode == "htdemucs_6s":
+            htdemucs_6s_model = manager.get("htdemucs_6s")
+            htdemucs_6s_started_at = time.time()
+            htdemucs_6s_pred = _run_model_for_spec(
+                "htdemucs_6s",
+                htdemucs_6s_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running htdemucs4 6 stem model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("htdemucs_6s", audio_seconds, time.time() - htdemucs_6s_started_at)
+            for label, tensor in zip(MODE_OUTPUT_LABELS["htdemucs_6s"], htdemucs_6s_pred, strict=False):
+                _append_named_output(temp_outputs, work_dir, label, tensor)
+        elif mode == "drumsep_6s":
+            drumsep_6s_model = manager.get("drumsep_6s")
+            drumsep_6s_started_at = time.time()
+            drumsep_6s_pred = _run_model_for_spec(
+                "drumsep_6s",
+                drumsep_6s_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running drumsep 6 stem model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("drumsep_6s", audio_seconds, time.time() - drumsep_6s_started_at)
+            for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_6s"], drumsep_6s_pred, strict=False):
+                _append_named_output(temp_outputs, work_dir, label, tensor)
+        elif mode == "drumsep_4s":
+            drumsep_4s_model = manager.get("drumsep_4s")
+            drumsep_4s_started_at = time.time()
+            drumsep_4s_pred = _run_model_for_spec(
+                "drumsep_4s",
+                drumsep_4s_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running drum sep 4 stem model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("drumsep_4s", audio_seconds, time.time() - drumsep_4s_started_at)
+            for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_4s"], drumsep_4s_pred, strict=False):
+                _append_named_output(temp_outputs, work_dir, label, tensor)
         else:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
 
@@ -4079,6 +4833,7 @@ async def _startup_cleanup() -> None:
     _cleanup_old_runtime_entries(WORK_DIR)
     _cleanup_old_runtime_entries(UPLOAD_DIR)
     _cleanup_old_runtime_entries(INTERMEDIATE_CACHE_DIR, INTERMEDIATE_CACHE_RETENTION_SECONDS)
+    _prune_previous_files()
     if _selected_missing_models():
         _set_model_download_state(
             status="idle",
@@ -4575,6 +5330,140 @@ async def download_output(task_id: str):
     )
 
 
+@app.get("/api/history")
+async def list_previous_files() -> dict[str, Any]:
+    entries = _prune_previous_files()
+    entries.sort(key=lambda entry: float(entry.get("finished_at") or 0.0), reverse=True)
+    return {
+        "items": [_public_previous_file(entry) for entry in entries],
+        "storage": _history_storage_payload(entries),
+    }
+
+
+@app.get("/api/history/{entry_id}/artwork")
+async def previous_file_artwork(entry_id: str):
+    entry = _require_previous_file(entry_id)
+    artwork_path = Path(str(entry.get("artwork_path") or "")).expanduser()
+    if not artwork_path.exists() or not artwork_path.is_file():
+        raise HTTPException(status_code=404, detail="artwork not found")
+    media_type = "image/png" if artwork_path.suffix.lower() == ".png" else "image/jpeg"
+    return FileResponse(
+        artwork_path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.post("/api/history/{entry_id}/reveal")
+async def reveal_previous_file(entry_id: str, request: Request):
+    _require_local_request(request, "LAN clients cannot control the host machine.")
+    entry = _require_previous_file(entry_id)
+    try:
+        out_path, existing_outputs = _previous_file_output_paths(entry)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
+    single_output = existing_outputs[0] if len(existing_outputs) == 1 else None
+    try:
+        if sys.platform.startswith("darwin"):
+            if single_output is not None:
+                subprocess.Popen(["open", "-R", str(single_output)])
+            else:
+                subprocess.Popen(["open", str(out_path)])
+        elif sys.platform.startswith("win"):
+            if single_output is not None:
+                subprocess.Popen(["explorer", "/select,", str(single_output)])
+            else:
+                os.startfile(str(out_path))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(single_output.parent if single_output is not None else out_path)])
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not reveal output: {exc}").to_http(500) from exc
+    return {"status": "opened", "path": str(single_output or out_path)}
+
+
+@app.get("/api/history/{entry_id}/download")
+async def download_previous_file(entry_id: str):
+    entry = _require_previous_file(entry_id)
+    try:
+        _out_path, existing_outputs = _previous_file_output_paths(entry)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
+    if not existing_outputs:
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
+    if len(existing_outputs) == 1:
+        output = existing_outputs[0]
+        return FileResponse(output, filename=output.name)
+    archive_dir = _ensure_dir(RUNTIME_DIR / "downloads")
+    archive_name = f"{_safe_stem(str(entry.get('original_name') or 'stems'))}.zip"
+    archive_path = archive_dir / f"history_{entry_id}_{archive_name}"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for output in existing_outputs:
+            zf.write(output, arcname=output.name)
+    return FileResponse(
+        archive_path,
+        filename=archive_name,
+        background=BackgroundTask(lambda: _cleanup_path(archive_path)),
+    )
+
+
+@app.post("/api/history/{entry_id}/copy")
+async def copy_previous_file(entry_id: str, request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot save files from the host machine.")
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid copy payload.").to_http()
+    destination = str(body.get("output_root") or "").strip()
+    if not destination:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Missing destination folder.").to_http()
+    destination_dir = _ensure_dir(Path(destination).expanduser())
+    entry = _require_previous_file(entry_id)
+    try:
+        _out_path, existing_outputs = _previous_file_output_paths(entry)
+    except AppError as exc:
+        status = 404 if exc.message == "file doesn't exist" else 409
+        raise exc.to_http(status) from exc
+    try:
+        copied = _copy_outputs_to_directory(existing_outputs, destination_dir)
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save files: {exc}").to_http(500) from exc
+    return {
+        "status": "saved",
+        "output_root": str(destination_dir),
+        "outputs": [path.name for path in copied],
+    }
+
+
+@app.post("/api/history/{entry_id}/reuse")
+async def reuse_previous_file(entry_id: str, request: Request) -> dict[str, Any]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid reuse payload.").to_http()
+    stems_raw = body.get("stems")
+    if not isinstance(stems_raw, str) or not stems_raw.strip():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
+    output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
+    video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
+    mode = _stems_to_mode(stems_raw)
+    _validate_mode_and_output_format(mode, output_format)
+    entry = _require_previous_file(entry_id)
+    source_path = Path(str(entry.get("source_path") or "")).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
+    payload = _register_task(
+        original_name=str(entry.get("original_name") or source_path.name),
+        source_path=source_path,
+        source_dir=None,
+        mode=mode,
+        output_format=output_format,
+        video_handling=video_handling,
+        delivery="browser_download" if _is_remote_client(request) else "folder",
+        auto_start=False,
+    )
+    return _compat_public_task(payload)
+
+
 @app.get("/settings")
 async def get_settings(request: Request) -> dict[str, Any]:
     return _settings_response_payload(request)
@@ -4601,6 +5490,25 @@ async def update_settings(request: Request) -> dict[str, Any]:
         patch["output_root"] = str(resolved)
     if "output_same_as_input" in body:
         patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
+    if "previous_files_retention" in body:
+        retention_value = str(body.get("previous_files_retention") or "")
+        if retention_value not in PREVIOUS_FILES_RETENTION_CHOICES:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid previous files retention.").to_http()
+        patch["previous_files_retention"] = retention_value
+    if "previous_files_limit_gb" in body:
+        patch["previous_files_limit_gb"] = _coerce_storage_gb(
+            body.get("previous_files_limit_gb"),
+            PREVIOUS_FILES_LIMIT_GB_DEFAULT,
+            minimum=PREVIOUS_FILES_LIMIT_GB_MIN,
+            maximum=PREVIOUS_FILES_LIMIT_GB_MAX,
+        )
+    if "previous_files_warn_gb" in body:
+        patch["previous_files_warn_gb"] = _coerce_storage_gb(
+            body.get("previous_files_warn_gb"),
+            PREVIOUS_FILES_WARN_GB_DEFAULT,
+            minimum=PREVIOUS_FILES_WARN_GB_MIN,
+            maximum=PREVIOUS_FILES_WARN_GB_MAX,
+        )
     if "video_handling" in body:
         patch["video_handling"] = _validate_video_handling(str(body.get("video_handling") or "audio_only"))
     if "boost_harmonies_background_vocals_gain_db" in body:
@@ -4634,6 +5542,8 @@ async def update_settings(request: Request) -> dict[str, Any]:
                 raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN passcode ttl.").to_http()
             patch["lan_passcode_ttl"] = ttl_value
     _set_compat_settings(patch)
+    if {"previous_files_retention", "previous_files_limit_gb", "previous_files_warn_gb"} & set(patch):
+        _prune_previous_files()
     return _settings_response_payload(request)
 
 
@@ -5656,6 +6566,13 @@ INDEX_HTML = """<!DOCTYPE html>
                 <strong>mel-band karaoke</strong>
               </div>
             </label>
+            <label class="mode-card" data-mode="bs_roformer_6s">
+              <input type="radio" name="split-mode" value="bs_roformer_6s">
+              <div class="checkbox"></div>
+              <div>
+                <strong>bs-roformer 6s</strong>
+              </div>
+            </label>
             <label class="mode-card" data-mode="preset_denoise">
               <input type="radio" name="split-mode" value="preset_denoise">
               <div class="checkbox"></div>
@@ -5711,6 +6628,7 @@ INDEX_HTML = """<!DOCTYPE html>
       both_separate: 'both (separate)',
       guitar: 'mel-band guitar',
       mel_band_karaoke: 'mel-band karaoke',
+      bs_roformer_6s: 'bs-roformer 6s',
       preset_denoise: 'denoise',
     };
 
@@ -5760,6 +6678,7 @@ INDEX_HTML = """<!DOCTYPE html>
       }
       if (mode === 'guitar') return missingModels.includes('guitar') ? ['guitar'] : [];
       if (mode === 'mel_band_karaoke') return missingModels.includes('mel_band_karaoke') ? ['mel_band_karaoke'] : [];
+      if (mode === 'bs_roformer_6s') return missingModels.includes('bs_roformer_6s') ? ['bs_roformer_6s'] : [];
       if (mode === 'preset_denoise') return missingModels.includes('denoise') ? ['denoise'] : [];
       return [];
     }

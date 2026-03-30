@@ -51,6 +51,54 @@ FILES = [
         "filename": "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
         "tag": "denoise",
     },
+    {
+        "url": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
+        "subdir": "models",
+        "filename": "BS-Rofo-SW-Fixed.ckpt",
+        "tag": "bs_roformer_6s",
+    },
+    {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+        "subdir": "models",
+        "filename": "f7e0c4bc-ba3fe64a.th",
+        "tag": "htdemucs_ft_drums",
+    },
+    {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+        "subdir": "models",
+        "filename": "d12395a8-e57c48e6.th",
+        "tag": "htdemucs_ft_bass",
+    },
+    {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+        "subdir": "models",
+        "filename": "92cfc3b6-ef3bcb9c.th",
+        "tag": "htdemucs_ft_other",
+    },
+    {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "subdir": "models",
+        "filename": "04573f0d-f3cf25b2.th",
+        "tag": "htdemucs_ft_vocals",
+    },
+    {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
+        "subdir": "models",
+        "filename": "5c90dfd2-34c22ccb.th",
+        "tag": "htdemucs_6s",
+    },
+    {
+        "url": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        "subdir": "models",
+        "filename": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        "tag": "drumsep_6s",
+    },
+    {
+        "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
+        "subdir": "models",
+        "filename": "model_drumsep.th",
+        "tag": "drumsep_4s",
+    },
 ]
 
 

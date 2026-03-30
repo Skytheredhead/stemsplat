@@ -12,6 +12,7 @@ beartype>=0.17
 imageio-ffmpeg
 certifi
 mutagen
+demucs
 pywebview
 pyobjc-core
 pyobjc-framework-Cocoa

@@ -34,9 +34,70 @@ NEW_MODEL_EXPECTATIONS = {
         "url": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
         "filename": "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
     },
+    "bs_roformer_6s": {
+        "config": "BS-Rofo-SW-Fixed.yaml",
+        "segment": 588_800,
+        "overlap": 2,
+        "url": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
+        "filename": "BS-Rofo-SW-Fixed.ckpt",
+    },
+    "htdemucs_ft_drums": {
+        "config": "config_musdb18_htdemucs.yaml",
+        "segment": 485_100,
+        "overlap": 4,
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+        "filename": "f7e0c4bc-ba3fe64a.th",
+    },
+    "htdemucs_ft_bass": {
+        "config": "config_musdb18_htdemucs.yaml",
+        "segment": 485_100,
+        "overlap": 4,
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+        "filename": "d12395a8-e57c48e6.th",
+    },
+    "htdemucs_ft_other": {
+        "config": "config_musdb18_htdemucs.yaml",
+        "segment": 485_100,
+        "overlap": 4,
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+        "filename": "92cfc3b6-ef3bcb9c.th",
+    },
+    "htdemucs_ft_vocals": {
+        "config": "config_musdb18_htdemucs.yaml",
+        "segment": 485_100,
+        "overlap": 4,
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "filename": "04573f0d-f3cf25b2.th",
+    },
+    "htdemucs_6s": {
+        "config": "config_htdemucs_6stems.yaml",
+        "segment": 485_100,
+        "overlap": 4,
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
+        "filename": "5c90dfd2-34c22ccb.th",
+    },
+    "drumsep_6s": {
+        "config": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
+        "segment": 130_560,
+        "overlap": 4,
+        "url": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        "filename": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+    },
+    "drumsep_4s": {
+        "config": "config_drumsep.yaml",
+        "segment": 1_764_000,
+        "overlap": 4,
+        "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
+        "filename": "model_drumsep.th",
+    },
 }
 
 PRESET_MODE_EXPECTATIONS = {
+    "preset_voc_instrum": {
+        "stems": ["voc_instrum"],
+        "required_models": ["vocals", "instrumental"],
+        "output_labels": ["vocals", "instrumental"],
+    },
     "preset_boost_harmonies": {
         "stems": ["boost_harmonies"],
         "required_models": ["vocals", "mel_band_karaoke"],
@@ -46,11 +107,6 @@ PRESET_MODE_EXPECTATIONS = {
         "stems": ["boost_guitar"],
         "required_models": ["guitar"],
         "output_labels": ["boost guitar"],
-    },
-    "preset_denoise": {
-        "stems": ["denoise"],
-        "required_models": ["denoise"],
-        "output_labels": ["denoise"],
     },
 }
 
@@ -175,6 +231,8 @@ class ModelRegistryTests(unittest.TestCase):
 
         self.assertEqual(list(self.mode_to_stems["both_separate"]), ["vocals", "instrumental"])
         self.assertEqual(list(self.mode_required_models["both_separate"]), ["vocals", "instrumental"])
+        self.assertEqual(list(self.mode_to_stems["denoise"]), ["denoise"])
+        self.assertEqual(list(self.mode_required_models["denoise"]), ["denoise"])
 
     def test_preset_mode_registry(self) -> None:
         for mode, expected in PRESET_MODE_EXPECTATIONS.items():
@@ -183,6 +241,9 @@ class ModelRegistryTests(unittest.TestCase):
             self.assertEqual(list(self.mode_output_labels[mode]), expected["output_labels"])
 
     def test_preset_defaults_are_present(self) -> None:
+        self.assertEqual(self.compat_defaults["previous_files_retention"], "1w")
+        self.assertEqual(self.compat_defaults["previous_files_limit_gb"], 10.0)
+        self.assertEqual(self.compat_defaults["previous_files_warn_gb"], 8.0)
         self.assertEqual(self.compat_defaults["boost_harmonies_background_vocals_gain_db"], 3.0)
         self.assertEqual(self.compat_defaults["boost_harmonies_base_song_gain_db"], -3.0)
         self.assertEqual(self.compat_defaults["boost_guitar_guitar_gain_db"], 3.0)
