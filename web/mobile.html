@@ -1477,6 +1477,15 @@
     }
 
     function ensureSelectionForActiveTab(){
+      if(selectedPresetMode && MODE_TO_TAB[selectedPresetMode] === activeModeTab){
+        return;
+      }
+      if(Array.from(selectedStemModes).some((mode) => MODE_TO_TAB[mode] === activeModeTab)){
+        return;
+      }
+      if(selectedPresetMode || selectedStemModes.size){
+        return;
+      }
       const currentMode = currentSelectedModeKey();
       if(currentMode && MODE_TO_TAB[currentMode] === activeModeTab){
         return;
@@ -1485,6 +1494,26 @@
       if(firstOption){
         setSelectionForModeKey(firstOption.id);
       }
+    }
+
+    function toggleStemModeSelection(modeKey, additive = false){
+      if(!modeKey) return;
+      if(!additive){
+        setSelectionForModeKey(modeKey);
+        return;
+      }
+      selectedPresetMode = null;
+      const next = new Set(selectedStemModes);
+      if(next.has(modeKey)){
+        if(next.size === 1){
+          selectedStemModes = next;
+          return;
+        }
+        next.delete(modeKey);
+      }else{
+        next.add(modeKey);
+      }
+      selectedStemModes = next;
     }
 
     function positionModeSwitcherPill(){
@@ -1748,7 +1777,7 @@
 
     function relevantMissingModels(status = lastModelStatus){
       const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
-      const needed = new Set(requiredModelKeysForStems(selectedStems()));
+      const needed = new Set(requiredModelKeysForStems(selectedStemUnion()));
       (Array.isArray(tasks) ? tasks : []).forEach((task) => {
         const stage = String(task && task.stage || '').toLowerCase();
         if(!task || !Array.isArray(task.stems) || ['done', 'error', 'stopped'].includes(stage)) return;
@@ -3579,18 +3608,7 @@
           return;
         }
         const nextMode = button.dataset.mode || 'vocals';
-        selectedPresetMode = null;
-        if(EXCLUSIVE_STEM_MODES.has(nextMode)){
-          if(selectedStemModes.has(nextMode)){
-            setSelectionForModeKey(nextMode);
-          }else{
-            selectedStemModes = new Set([nextMode]);
-          }
-        }else if(event.shiftKey){
-          selectedStemModes = new Set(['vocals', 'instrumental']);
-        }else{
-          selectedStemModes = new Set([nextMode]);
-        }
+        toggleStemModeSelection(nextMode, !!(event.metaKey || event.ctrlKey || event.shiftKey));
         updateModeChoiceUI();
         Promise.resolve(syncQueuedStemSelection()).catch(() => {});
       });
@@ -4649,8 +4667,9 @@
     }
 
     async function syncQueuedStemSelection(){
-      const stems = selectedStems();
-      if(stems.length === 0) return;
+      const groups = selectedStemGroups();
+      if(groups.length !== 1) return;
+      const stems = groups[0].slice();
       pendingItems.forEach((pending) => {
         if(!pending || pending.frozen) return;
         const linkedTask = pending.id ? getTaskById(pending.id) : getTaskByTempKey(pending.tempKey);
@@ -4688,56 +4707,55 @@
       }
     }
 
-    function selectedStems(){
+    function selectedStemGroups(){
       if(selectedPresetMode === 'boost_harmonies'){
-        return ['boost_harmonies'];
+        return [['boost_harmonies']];
       }
       if(selectedPresetMode === 'voc_instrum'){
-        return ['voc_instrum'];
+        return [['voc_instrum']];
       }
       if(selectedPresetMode === 'boost_guitar'){
-        return ['boost_guitar'];
+        return [['boost_guitar']];
       }
-      if(selectedStemModes.has('both_deux')){
-        return ['deux'];
-      }
-      if(selectedStemModes.has('guitar')){
-        return ['guitar'];
-      }
-      if(selectedStemModes.has('mel_band_karaoke')){
-        return ['mel_band_karaoke'];
-      }
-      if(selectedStemModes.has('bs_roformer_6s')){
-        return ['bs_roformer_6s'];
-      }
-      if(selectedStemModes.has('htdemucs_ft_drums')){
-        return ['htdemucs_ft_drums'];
-      }
-      if(selectedStemModes.has('htdemucs_ft_bass')){
-        return ['htdemucs_ft_bass'];
-      }
-      if(selectedStemModes.has('htdemucs_ft_other')){
-        return ['htdemucs_ft_other'];
-      }
-      if(selectedStemModes.has('htdemucs_ft_vocals')){
-        return ['htdemucs_ft_vocals'];
-      }
-      if(selectedStemModes.has('htdemucs_6s')){
-        return ['htdemucs_6s'];
-      }
-      if(selectedStemModes.has('drumsep_6s')){
-        return ['drumsep_6s'];
-      }
-      if(selectedStemModes.has('drumsep_4s')){
-        return ['drumsep_4s'];
-      }
-      if(selectedStemModes.has('denoise')){
-        return ['denoise'];
-      }
+      const groups = [];
+      const pushGroup = (modeKey, stems) => {
+        if(selectedStemModes.has(modeKey)){
+          groups.push(stems.slice());
+        }
+      };
+      pushGroup('vocals', ['vocals']);
+      pushGroup('instrumental', ['instrumental']);
+      pushGroup('both_deux', ['deux']);
+      pushGroup('guitar', ['guitar']);
+      pushGroup('mel_band_karaoke', ['mel_band_karaoke']);
+      pushGroup('bs_roformer_6s', ['bs_roformer_6s']);
+      pushGroup('htdemucs_ft_drums', ['htdemucs_ft_drums']);
+      pushGroup('htdemucs_ft_bass', ['htdemucs_ft_bass']);
+      pushGroup('htdemucs_ft_other', ['htdemucs_ft_other']);
+      pushGroup('htdemucs_ft_vocals', ['htdemucs_ft_vocals']);
+      pushGroup('htdemucs_6s', ['htdemucs_6s']);
+      pushGroup('drumsep_6s', ['drumsep_6s']);
+      pushGroup('drumsep_4s', ['drumsep_4s']);
+      pushGroup('denoise', ['denoise']);
+      return groups;
+    }
+
+    function selectedStemUnion(){
+      const seen = new Set();
       const stems = [];
-      if(selectedStemModes.has('vocals')) stems.push('vocals');
-      if(selectedStemModes.has('instrumental')) stems.push('instrumental');
+      selectedStemGroups().forEach((group) => {
+        group.forEach((stem) => {
+          if(seen.has(stem)) return;
+          seen.add(stem);
+          stems.push(stem);
+        });
+      });
       return stems;
+    }
+
+    function selectedStems(){
+      const groups = selectedStemGroups();
+      return groups[0] ? groups[0].slice() : [];
     }
 
     function sourceDirForFile(file){
@@ -4767,8 +4785,8 @@
         return;
       }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
-      const stems = selectedStems();
-      if(stems.length === 0){
+      const stemGroups = selectedStemGroups();
+      if(stemGroups.length === 0){
         showPopup('please select at least one stem before uploading');
         if (fileInput) fileInput.value = '';
         return;
@@ -4778,10 +4796,16 @@
       const audioFiles = files.filter((file) => {
         return (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
       });
-      if(existingCount + audioFiles.length > MAX_TASKS){
+      const taskCountNeeded = audioFiles.length * stemGroups.length;
+      if(existingCount + taskCountNeeded > MAX_TASKS){
         const slots = Math.max(0, MAX_TASKS - existingCount);
-        const slotLabel = slots === 1 ? 'song' : 'songs';
-        showPopup(`you can only add ${slots} more ${slotLabel} (max 50 total)`);
+        const maxSongs = Math.floor(slots / stemGroups.length);
+        if(maxSongs <= 0){
+          showPopup(`you need ${stemGroups.length} free slots for the selected models on one song`);
+        }else{
+          const slotLabel = maxSongs === 1 ? 'song' : 'songs';
+          showPopup(`with ${stemGroups.length} selected models, you can only add ${maxSongs} more ${slotLabel}`);
+        }
         return;
       }
       let availableSlots = Math.max(0, MAX_TASKS - existingCount);
@@ -4801,44 +4825,46 @@
             continue;
           }
         }
-
-        const tempKey = makeTempKey();
-        availableSlots -= 1;
-        // build UI row (ready state)
-        const frag = template.content.cloneNode(true);
-        const item = frag.firstElementChild;
-        const li   = item.querySelector('.filename');
-        const bar  = item.querySelector('.bar-fill');
-        const st   = item.querySelector('.chip.status');
-        const dl   = item.querySelector('.dl-pad');
-        const card = item.querySelector('.card');
-        const stopPad = item.querySelector('.stop-pad');
-        applyFilename(li, file.name);
-        applyLabels(item.querySelector('.labels'), stems);
-        st.textContent = 'ready';
-        st.classList.add('chip-dim');
-        st.classList.add('hidden');
-        if(startPressed){ st.classList.remove('hidden'); }
-        dl.classList.remove('show');
-        if (stopPad) stopPad.style.display = 'none';
-        item.classList.add('enter-pre');
-        item.__tempKey = tempKey;
-        queue.insertBefore(item, queue.firstChild);
-        requestAnimationFrame(() => {
-          item.classList.add('enter-active');
-        });
-        updateVigs();
-        const smooth = makeProgressSmoother(bar);
-        smooth.setImmediate(0);
-        // record pending entry
-        const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:stems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false };
-        applyRowState(item, { stage: 'ready', pct: 0, id: null });
-        pendingItems.push(pending);
-        newPending.push(pending);
-        // persist placeholder task (no id yet)
-        tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
-        saveTasks();
-        updateUI();
+        for(const stems of stemGroups){
+          if(availableSlots <= 0) break;
+          const tempKey = makeTempKey();
+          availableSlots -= 1;
+          // build UI row (ready state)
+          const frag = template.content.cloneNode(true);
+          const item = frag.firstElementChild;
+          const li   = item.querySelector('.filename');
+          const bar  = item.querySelector('.bar-fill');
+          const st   = item.querySelector('.chip.status');
+          const dl   = item.querySelector('.dl-pad');
+          const card = item.querySelector('.card');
+          const stopPad = item.querySelector('.stop-pad');
+          applyFilename(li, file.name);
+          applyLabels(item.querySelector('.labels'), stems);
+          st.textContent = 'ready';
+          st.classList.add('chip-dim');
+          st.classList.add('hidden');
+          if(startPressed){ st.classList.remove('hidden'); }
+          dl.classList.remove('show');
+          if (stopPad) stopPad.style.display = 'none';
+          item.classList.add('enter-pre');
+          item.__tempKey = tempKey;
+          queue.insertBefore(item, queue.firstChild);
+          requestAnimationFrame(() => {
+            item.classList.add('enter-active');
+          });
+          updateVigs();
+          const smooth = makeProgressSmoother(bar);
+          smooth.setImmediate(0);
+          // record pending entry
+          const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:stems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false };
+          applyRowState(item, { stage: 'ready', pct: 0, id: null });
+          pendingItems.push(pending);
+          newPending.push(pending);
+          // persist placeholder task (no id yet)
+          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
+          saveTasks();
+          updateUI();
+        }
       }
       if (fileInput) fileInput.value = '';
       await Promise.all(newPending.map((p) => p.started ? p.uploadPromise : uploadWithStems(p, p.stems)));
@@ -5123,34 +5149,42 @@
         showPopup('you already have 50 songs queued; clear some to upload more');
         return;
       }
-      const availableSlots = Math.max(0, MAX_TASKS - existingCount);
-      const trimmed = paths.slice(0, availableSlots);
-      if(!trimmed.length){
-        return;
-      }
-      const stems = selectedStems();
-      if(stems.length === 0){
+      const stemGroups = selectedStemGroups();
+      if(stemGroups.length === 0){
         showPopup('please select at least one stem before uploading');
         return;
       }
+      const availableSlots = Math.max(0, MAX_TASKS - existingCount);
+      const maxSongs = Math.floor(availableSlots / stemGroups.length);
+      if(maxSongs <= 0){
+        showPopup(`you need ${stemGroups.length} free slots for the selected models on one song`);
+        return;
+      }
+      const trimmed = paths.slice(0, maxSongs);
+      if(!trimmed.length){
+        return;
+      }
       try{
-        const res = await fetch('/api/import_paths', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            paths: trimmed,
-            stems: stems.join(','),
-            output_format: settingsState.output_format || 'same_as_input',
-            video_handling: settingsState.video_handling || 'audio_only',
-          }),
-        });
-        const payload = await res.json().catch(() => ({}));
-        if(!res.ok){
-          const msg = payload && payload.message ? payload.message : 'could not import files';
-          showPopup(msg);
-          return;
+        const importedTasks = [];
+        for(const stems of stemGroups){
+          const res = await fetch('/api/import_paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              paths: trimmed,
+              stems: stems.join(','),
+              output_format: settingsState.output_format || 'same_as_input',
+              video_handling: settingsState.video_handling || 'audio_only',
+            }),
+          });
+          const payload = await res.json().catch(() => ({}));
+          if(!res.ok){
+            const msg = payload && payload.message ? payload.message : 'could not import files';
+            showPopup(msg);
+            return;
+          }
+          importedTasks.push(...(Array.isArray(payload.tasks) ? payload.tasks : []));
         }
-        const importedTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
         importedTasks.forEach((task) => {
           const item = {
             id: task.task_id || task.id || null,

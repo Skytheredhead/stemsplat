@@ -27,6 +27,10 @@ ARGS=(
   --collect-submodules imageio_ffmpeg
   --collect-submodules demucs
   --collect-submodules openunmix
+  --hidden-import numpy.core.multiarray
+  --hidden-import numpy.core.numeric
+  --hidden-import numpy._core.multiarray
+  --hidden-import numpy._core.numeric
   --collect-data imageio_ffmpeg
   --exclude-module librosa
   --exclude-module scipy

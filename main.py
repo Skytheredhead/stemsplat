@@ -2346,7 +2346,7 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
     if ignored:
         logger.info("ignoring unsupported model config keys for %s: %s", config_path.name, ", ".join(ignored))
     model = MelBandRoformer(**model_kwargs)
-    state = torch.load(model_path, map_location="cpu")
+    state = _torch_load_compat(model_path, map_location="cpu", weights_only=None)
     model.load_state_dict(state.get("state_dict", state), strict=False)
     return model.to(device).eval()
 
@@ -2357,6 +2357,43 @@ def _load_model_config(config_path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise AppError(ErrorCode.CONFIG_MISSING, f"Invalid config structure: {config_path.name}")
     return data
+
+
+def _prepare_torch_pickle_compat() -> None:
+    alias_pairs = (
+        ("numpy.core.multiarray", "numpy._core.multiarray"),
+        ("numpy.core.numeric", "numpy._core.numeric"),
+        ("numpy._core.multiarray", "numpy.core.multiarray"),
+        ("numpy._core.numeric", "numpy.core.numeric"),
+    )
+    for alias_name, module_name in alias_pairs:
+        if alias_name in sys.modules:
+            continue
+        with contextlib.suppress(Exception):
+            sys.modules[alias_name] = importlib.import_module(module_name)
+
+
+def _torch_load_compat(model_path: Path, *, map_location: str | torch.device = "cpu", weights_only: bool | None = False) -> Any:
+    _prepare_torch_pickle_compat()
+    try:
+        kwargs: dict[str, Any] = {"map_location": map_location}
+        if weights_only is not None:
+            kwargs["weights_only"] = weights_only
+        return torch.load(model_path, **kwargs)
+    except Exception as exc:
+        message = str(exc)
+        lowered = message.lower()
+        if "numpy.core.multiarray" in message or "numpy.core.numeric" in message:
+            raise AppError(
+                ErrorCode.MODEL_IMPORT_FAILED,
+                "Missing NumPy checkpoint compatibility modules in the app bundle.",
+            ) from exc
+        if "incorrect header check" in lowered or "pytorchstreamreader failed" in lowered or "invalid load key" in lowered:
+            raise AppError(
+                ErrorCode.SEPARATION_FAILED,
+                f"Model file appears corrupted: {model_path.name}. Remove it and download it again.",
+            ) from exc
+        raise
 
 
 def _instantiate_demucs_package(package: dict[str, Any]) -> torch.nn.Module:
@@ -2380,7 +2417,7 @@ def _instantiate_demucs_package(package: dict[str, Any]) -> torch.nn.Module:
 def _load_demucs_model(model_path: Path, device: torch.device) -> torch.nn.Module:
     if TensorChunk is None or demucs_apply_model is None:
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Demucs import failed: {_demucs_import_error}")
-    package = torch.load(model_path, map_location="cpu", weights_only=False)
+    package = _torch_load_compat(model_path, map_location="cpu", weights_only=False)
     if isinstance(package, torch.nn.Module):
         model = package
     elif isinstance(package, dict):
@@ -2395,7 +2432,7 @@ def _load_mdx23c_model(model_path: Path, config_path: Path, device: torch.device
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"DrumSep import failed: {_drumsep_import_error}")
     cfg = config_namespace(_load_model_config(config_path))
     model = TFC_TDF_net(cfg)
-    state = torch.load(model_path, map_location="cpu", weights_only=False)
+    state = _torch_load_compat(model_path, map_location="cpu", weights_only=False)
     load_not_compatible_weights(model, state)
     setattr(model, "_stemsplat_config", cfg)
     return model.to(device).eval()
