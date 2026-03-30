@@ -33,6 +33,24 @@ FILES = [
         "filename": "becruily_deux.ckpt",
         "tag": "deux",
     },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
+        "subdir": "models",
+        "filename": "becruily_guitar.ckpt",
+        "tag": "guitar",
+    },
+    {
+        "url": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
+        "subdir": "models",
+        "filename": "mel_band_roformer_karaoke_becruily.ckpt",
+        "tag": "mel_band_karaoke",
+    },
+    {
+        "url": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
+        "subdir": "models",
+        "filename": "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
+        "tag": "denoise",
+    },
 ]
 
 

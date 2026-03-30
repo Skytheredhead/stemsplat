@@ -41,13 +41,24 @@ RUNTIME_DIR = APP_SUPPORT_DIR / ".runtime"
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 WORK_DIR = RUNTIME_DIR / "work"
 ARTWORK_DIR = RUNTIME_DIR / "artwork"
+INTERMEDIATE_CACHE_DIR = APP_SUPPORT_DIR / "intermediate_cache"
 OUTPUT_ROOT = (Path.home() / "Downloads").expanduser()
 SETTINGS_PATH = APP_SUPPORT_DIR / "settings.json"
 ETA_HISTORY_PATH = APP_SUPPORT_DIR / "eta_history.json"
 
 
 def ensure_app_dirs() -> None:
-    for path in (APP_SUPPORT_DIR, MODEL_DIR, LOG_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, ARTWORK_DIR, OUTPUT_ROOT):
+    for path in (
+        APP_SUPPORT_DIR,
+        MODEL_DIR,
+        LOG_DIR,
+        RUNTIME_DIR,
+        UPLOAD_DIR,
+        WORK_DIR,
+        ARTWORK_DIR,
+        INTERMEDIATE_CACHE_DIR,
+        OUTPUT_ROOT,
+    ):
         path.mkdir(parents=True, exist_ok=True)
 
 

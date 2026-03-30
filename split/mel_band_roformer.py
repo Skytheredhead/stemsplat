@@ -302,18 +302,20 @@ class MaskEstimator(Module):
             dim,
             dim_inputs: Tuple[int, ...],
             depth,
-            mlp_expansion_factor=4
+            mlp_expansion_factor=4,
+            legacy_depth=False,
     ):
         super().__init__()
         self.dim_inputs = dim_inputs
         self.to_freqs = ModuleList([])
         dim_hidden = dim * mlp_expansion_factor
+        mlp_depth = max(1, depth - 1) if legacy_depth else depth
 
         for dim_in in dim_inputs:
             net = []
 
             mlp = nn.Sequential(
-                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=depth),
+                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=mlp_depth),
                 nn.GLU(dim=-1)
             )
 
@@ -360,6 +362,8 @@ class MelBandRoformer(Module):
             stft_normalized=False,
             stft_window_fn: Optional[Callable] = None,
             mask_estimator_depth=1,
+            mlp_expansion_factor=4,
+            freqs_per_bands: Optional[Tuple[int, ...]] = None,
             multi_stft_resolution_loss_weight=1.,
             multi_stft_resolutions_window_sizes: Tuple[int, ...] = (4096, 2048, 1024, 512, 256),
             multi_stft_hop_size=147,
@@ -412,29 +416,41 @@ class MelBandRoformer(Module):
         ).shape[1]
 
         # create mel filter bank locally so the desktop app does not need librosa
-        mel_filter_bank_numpy = _mel_filter_bank(
-            sample_rate=sample_rate,
-            n_fft=stft_n_fft,
-            n_mels=num_bands,
-        )
+        band_count = len(freqs_per_bands) if freqs_per_bands is not None else num_bands
 
-        mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
+        if freqs_per_bands is not None:
+            assert sum(freqs_per_bands) == freqs, 'freqs_per_bands must sum to the STFT frequency bins'
+            freqs_per_band = torch.zeros((band_count, freqs), dtype=torch.bool)
+            start = 0
+            for band_index, band_width in enumerate(freqs_per_bands):
+                end = start + band_width
+                freqs_per_band[band_index, start:end] = True
+                start = end
+        else:
+            mel_filter_bank_numpy = _mel_filter_bank(
+                sample_rate=sample_rate,
+                n_fft=stft_n_fft,
+                n_mels=num_bands,
+            )
 
-        # for some reason, it doesn't include the first freq? just force a value for now
+            mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
 
-        mel_filter_bank[0][0] = 1.
+            # for some reason, it doesn't include the first freq? just force a value for now
 
-        # In some systems/envs we get 0.0 instead of ~1.9e-18 in the last position,
-        # so let's force a positive value
+            mel_filter_bank[0][0] = 1.
 
-        mel_filter_bank[-1, -1] = 1.
+            # In some systems/envs we get 0.0 instead of ~1.9e-18 in the last position,
+            # so let's force a positive value
 
-        # binary as in paper (then estimated masks are averaged for overlapping regions)
+            mel_filter_bank[-1, -1] = 1.
 
-        freqs_per_band = mel_filter_bank > 0
+            # binary as in paper (then estimated masks are averaged for overlapping regions)
+
+            freqs_per_band = mel_filter_bank > 0
+
         assert freqs_per_band.any(dim=0).all(), 'all frequencies need to be covered by all bands for now'
 
-        repeated_freq_indices = repeat(torch.arange(freqs), 'f -> b f', b=num_bands)
+        repeated_freq_indices = repeat(torch.arange(freqs), 'f -> b f', b=band_count)
         freq_indices = repeated_freq_indices[freqs_per_band]
 
         if stereo:
@@ -466,7 +482,9 @@ class MelBandRoformer(Module):
             mask_estimator = MaskEstimator(
                 dim=dim,
                 dim_inputs=freqs_per_bands_with_complex,
-                depth=mask_estimator_depth
+                depth=mask_estimator_depth,
+                mlp_expansion_factor=mlp_expansion_factor,
+                legacy_depth=freqs_per_bands is not None,
             )
 
             self.mask_estimators.append(mask_estimator)

@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import gc
 import importlib
+import inspect
 import json
 import logging
 import math
@@ -44,6 +45,7 @@ from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
     CONFIG_DIR,
+    INTERMEDIATE_CACHE_DIR,
     LOG_DIR,
     MODEL_DIR,
     OUTPUT_ROOT,
@@ -480,15 +482,17 @@ class MaskEstimator(Module):
         dim_inputs: BeartypeTuple[int, ...],
         depth,
         mlp_expansion_factor=4,
+        legacy_depth=False,
     ):
         super().__init__()
         self.dim_inputs = dim_inputs
         self.to_freqs = ModuleList([])
         dim_hidden = dim * mlp_expansion_factor
+        mlp_depth = max(1, depth - 1) if legacy_depth else depth
 
         for dim_in in dim_inputs:
             mlp = nn.Sequential(
-                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=depth),
+                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=mlp_depth),
                 nn.GLU(dim=-1),
             )
 
@@ -531,6 +535,8 @@ class MelBandRoformer(Module):
         stft_normalized=False,
         stft_window_fn: BeartypeOptional[BeartypeCallable] = None,
         mask_estimator_depth=1,
+        mlp_expansion_factor=4,
+        freqs_per_bands: BeartypeOptional[BeartypeTuple[int, ...]] = None,
         multi_stft_resolution_loss_weight=1.0,
         multi_stft_resolutions_window_sizes: BeartypeTuple[int, ...] = (
             4096,
@@ -599,25 +605,36 @@ class MelBandRoformer(Module):
             return_complex=True,
         ).shape[1]
 
-        mel_filter_bank_fn = _mel_filter_bank or _local_mel_filter_bank
+        band_count = len(freqs_per_bands) if freqs_per_bands is not None else num_bands
 
-        mel_filter_bank_numpy = mel_filter_bank_fn(
-            sample_rate=sample_rate,
-            n_fft=stft_n_fft,
-            n_mels=num_bands,
-        )
+        if freqs_per_bands is not None:
+            assert sum(freqs_per_bands) == freqs, "freqs_per_bands must sum to the STFT frequency bins"
+            freqs_per_band = torch.zeros((band_count, freqs), dtype=torch.bool)
+            start = 0
+            for band_index, band_width in enumerate(freqs_per_bands):
+                end = start + band_width
+                freqs_per_band[band_index, start:end] = True
+                start = end
+        else:
+            mel_filter_bank_fn = _mel_filter_bank or _local_mel_filter_bank
 
-        mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
+            mel_filter_bank_numpy = mel_filter_bank_fn(
+                sample_rate=sample_rate,
+                n_fft=stft_n_fft,
+                n_mels=num_bands,
+            )
 
-        mel_filter_bank[0][0] = 1.0
-        mel_filter_bank[-1, -1] = 1.0
+            mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
 
-        freqs_per_band = mel_filter_bank > 0
+            mel_filter_bank[0][0] = 1.0
+            mel_filter_bank[-1, -1] = 1.0
+
+            freqs_per_band = mel_filter_bank > 0
         assert freqs_per_band.any(dim=0).all(), (
             "all frequencies need to be covered by all bands for now"
         )
 
-        repeated_freq_indices = repeat(torch.arange(freqs), "f -> b f", b=num_bands)
+        repeated_freq_indices = repeat(torch.arange(freqs), "f -> b f", b=band_count)
         freq_indices = repeated_freq_indices[freqs_per_band]
 
         if stereo:
@@ -644,7 +661,11 @@ class MelBandRoformer(Module):
 
         for _ in range(num_stems):
             mask_estimator = MaskEstimator(
-                dim=dim, dim_inputs=freqs_per_bands_with_complex, depth=mask_estimator_depth
+                dim=dim,
+                dim_inputs=freqs_per_bands_with_complex,
+                depth=mask_estimator_depth,
+                mlp_expansion_factor=mlp_expansion_factor,
+                legacy_depth=freqs_per_bands is not None,
             )
 
             self.mask_estimators.append(mask_estimator)
@@ -846,6 +867,7 @@ class ModelSpec:
     filename: str
     config: str
     segment: int
+    overlap: int = 2
 
 
 @dataclass(frozen=True)
@@ -886,6 +908,19 @@ MODEL_PROMPT_PENDING = "pending"
 MODEL_PROMPT_DISMISSED = "dismissed"
 MODEL_PROMPT_ACCEPTED = "accepted"
 MODEL_PROMPT_COMPLETE = "complete"
+PRESET_GAIN_DB_MIN = -18.0
+PRESET_GAIN_DB_MAX = 18.0
+PRESET_DEFAULT_OVERLAY_GAIN_DB = 3.0
+PRESET_DEFAULT_BASE_GAIN_DB = -3.0
+BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
+BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
+BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
+BOOST_GUITAR_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
+BOOST_HARMONIES_VOCALS_END_PCT = 44
+BOOST_HARMONIES_BACKGROUND_START_PCT = 48
+BOOST_HARMONIES_BACKGROUND_END_PCT = 92
+BOOST_GUITAR_MODEL_END_PCT = 92
+INTERMEDIATE_CACHE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 COMPAT_SETTINGS_DEFAULTS = {
     "output_format": "same_as_input",
     "output_root": str(OUTPUT_ROOT),
@@ -904,6 +939,10 @@ COMPAT_SETTINGS_DEFAULTS = {
     "lan_passcode_enabled": False,
     "lan_passcode": "",
     "lan_passcode_ttl": "1d",
+    "boost_harmonies_background_vocals_gain_db": BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
+    "boost_harmonies_base_song_gain_db": BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
+    "boost_guitar_guitar_gain_db": BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
+    "boost_guitar_base_song_gain_db": BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
 }
 
 MODEL_SPECS: dict[str, ModelSpec] = {
@@ -911,16 +950,43 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         filename="mel_band_roformer_vocals_becruily.ckpt",
         config="Mel Band Roformer Vocals Config.yaml",
         segment=352_800,
+        overlap=2,
     ),
     "instrumental": ModelSpec(
         filename="mel_band_roformer_instrumental_becruily.ckpt",
         config="Mel Band Roformer Instrumental Config.yaml",
         segment=352_800,
+        overlap=2,
     ),
     "deux": ModelSpec(
         filename="becruily_deux.ckpt",
         config="config_deux_becruily.yaml",
         segment=573_300,
+        overlap=2,
+    ),
+    "guitar": ModelSpec(
+        filename="becruily_guitar.ckpt",
+        config="config_guitar_becruily.yaml",
+        segment=485_100,
+        overlap=2,
+    ),
+    "mel_band_karaoke": ModelSpec(
+        filename="mel_band_roformer_karaoke_becruily.ckpt",
+        config="config_karaoke_becruily.yaml",
+        segment=485_100,
+        overlap=8,
+    ),
+    "denoise": ModelSpec(
+        filename="denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
+        config="model_mel_band_roformer_denoise.yaml",
+        segment=352_800,
+        overlap=4,
+    ),
+    "bs_roformer_6s": ModelSpec(
+        filename="BS-Rofo-SW-Fixed.ckpt",
+        config="BS-Rofo-SW-Fixed.yaml",
+        segment=588_800,
+        overlap=2,
     ),
 }
 
@@ -928,14 +994,67 @@ MODEL_ALIAS_MAP = {
     "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
     "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
     "becruily_deux.ckpt": ["Mel Band Roformer Deux.ckpt"],
+    "becruily_guitar.ckpt": ["Mel Band Roformer Guitar.ckpt"],
+    "mel_band_roformer_karaoke_becruily.ckpt": ["Mel Band Roformer Karaoke.ckpt"],
+    "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt": ["Mel Band Roformer Denoise.ckpt"],
+    "BS-Rofo-SW-Fixed.ckpt": ["BS-Rofo-SW-Fixed-v1.ckpt", "BS Rofo SW Fixed.ckpt"],
 }
 
 MODEL_URLS = {
     "vocals": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
     "instrumental": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
     "deux": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
+    "guitar": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
+    "mel_band_karaoke": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
+    "denoise": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
+    "bs_roformer_6s": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
 }
-ETA_HISTORY_KEYS = ("vocals", "instrumental", "deux")
+MODEL_DISPLAY_NAMES = {
+    "vocals": "vocals",
+    "instrumental": "instrumental",
+    "deux": "both - deux model",
+    "guitar": "mel-band guitar",
+    "mel_band_karaoke": "mel-band karaoke",
+    "denoise": "mel-band denoise",
+    "bs_roformer_6s": "bs-roformer 6s",
+}
+MODE_TO_STEMS = {
+    "vocals": ("vocals",),
+    "instrumental": ("instrumental",),
+    "both_deux": ("deux",),
+    "both_separate": ("vocals", "instrumental"),
+    "guitar": ("guitar",),
+    "mel_band_karaoke": ("mel_band_karaoke",),
+    "bs_roformer_6s": ("bs_roformer_6s",),
+    "preset_boost_harmonies": ("boost_harmonies",),
+    "preset_boost_guitar": ("boost_guitar",),
+    "preset_denoise": ("denoise",),
+}
+MODE_REQUIRED_MODELS = {
+    "vocals": ("vocals",),
+    "instrumental": ("instrumental",),
+    "both_deux": ("deux",),
+    "both_separate": ("vocals", "instrumental"),
+    "guitar": ("guitar",),
+    "mel_band_karaoke": ("mel_band_karaoke",),
+    "bs_roformer_6s": ("bs_roformer_6s",),
+    "preset_boost_harmonies": ("vocals", "mel_band_karaoke"),
+    "preset_boost_guitar": ("guitar",),
+    "preset_denoise": ("denoise",),
+}
+MODE_OUTPUT_LABELS = {
+    "vocals": ("vocals",),
+    "instrumental": ("instrumental",),
+    "both_deux": ("vocals", "instrumental"),
+    "both_separate": ("vocals", "instrumental"),
+    "guitar": ("guitar",),
+    "mel_band_karaoke": ("vocals", "karaoke"),
+    "bs_roformer_6s": ("bass", "drums", "other", "vocals", "guitar", "piano"),
+    "preset_boost_harmonies": ("boost harmonies",),
+    "preset_boost_guitar": ("boost guitar",),
+    "preset_denoise": ("denoise",),
+}
+ETA_HISTORY_KEYS = tuple(MODEL_SPECS.keys())
 ETA_HISTORY_LIMIT = 10
 ETA_PREP_OVERHEAD_SECONDS = 5.0
 ETA_EXPORT_PER_OUTPUT_SECONDS = 2.5
@@ -948,7 +1067,7 @@ BOTH_SEPARATE_INSTRUMENTAL_END_PCT = 95
 EXPORT_PROGRESS_START_PCT = 96
 EXPORT_PROGRESS_END_PCT = 99
 
-MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
+MODE_CHOICES = set(MODE_TO_STEMS)
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
 VIDEO_HANDLING_CHOICES = {"audio_only"}
 TERMINAL_STATUSES = {"done", "error", "stopped"}
@@ -971,7 +1090,6 @@ SUPPORTED_MEDIA_SUFFIXES = {
     ".mkv",
     ".avi",
 }
-OVERLAP_RATIO = 0.12
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 RUNTIME_CLEANUP_MAX_AGE_SEC = 24 * 60 * 60
 
@@ -1027,6 +1145,53 @@ def _locate_case_insensitive(path: Path) -> Path | None:
 compat_settings_lock = threading.RLock()
 
 
+def _coerce_gain_db(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    if not math.isfinite(parsed):
+        parsed = float(default)
+    clamped = max(PRESET_GAIN_DB_MIN, min(PRESET_GAIN_DB_MAX, parsed))
+    return round(clamped * 10.0) / 10.0
+
+
+def _boost_harmonies_settings_payload(settings: dict[str, Any] | None = None) -> dict[str, float]:
+    source = settings or {}
+    return {
+        "overlay_gain_db": _coerce_gain_db(
+            source.get("boost_harmonies_background_vocals_gain_db"),
+            BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
+        ),
+        "base_song_gain_db": _coerce_gain_db(
+            source.get("boost_harmonies_base_song_gain_db"),
+            BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
+        ),
+    }
+
+
+def _boost_guitar_settings_payload(settings: dict[str, Any] | None = None) -> dict[str, float]:
+    source = settings or {}
+    return {
+        "overlay_gain_db": _coerce_gain_db(
+            source.get("boost_guitar_guitar_gain_db"),
+            BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
+        ),
+        "base_song_gain_db": _coerce_gain_db(
+            source.get("boost_guitar_base_song_gain_db"),
+            BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
+        ),
+    }
+
+
+def _preset_settings_payload_for_mode(mode: str, settings: dict[str, Any] | None = None) -> dict[str, float] | None:
+    if mode == "preset_boost_harmonies":
+        return _boost_harmonies_settings_payload(settings)
+    if mode == "preset_boost_guitar":
+        return _boost_guitar_settings_payload(settings)
+    return None
+
+
 def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(COMPAT_SETTINGS_DEFAULTS)
     normalized.update(settings)
@@ -1047,6 +1212,12 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
         normalized["lan_passcode_ttl"] = "1d"
     if str(normalized.get("video_handling") or "") not in VIDEO_HANDLING_CHOICES:
         normalized["video_handling"] = "audio_only"
+    boost_harmonies_settings = _boost_harmonies_settings_payload(normalized)
+    normalized["boost_harmonies_background_vocals_gain_db"] = boost_harmonies_settings["overlay_gain_db"]
+    normalized["boost_harmonies_base_song_gain_db"] = boost_harmonies_settings["base_song_gain_db"]
+    boost_guitar_settings = _boost_guitar_settings_payload(normalized)
+    normalized["boost_guitar_guitar_gain_db"] = boost_guitar_settings["overlay_gain_db"]
+    normalized["boost_guitar_base_song_gain_db"] = boost_guitar_settings["base_song_gain_db"]
     normalized["structure_mode"] = "flat"
     return normalized
 
@@ -1324,26 +1495,15 @@ def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
 
 
 def _mode_to_stems(mode: str) -> list[str]:
-    if mode == "vocals":
-        return ["vocals"]
-    if mode == "instrumental":
-        return ["instrumental"]
-    if mode == "both_deux":
-        return ["deux"]
-    if mode == "both_separate":
-        return ["vocals", "instrumental"]
-    return []
+    return list(MODE_TO_STEMS.get(mode, ()))
 
 
 def _stems_to_mode(stems_raw: str) -> str:
     stems = [item.strip().lower() for item in stems_raw.split(",") if item.strip()]
-    if stems == ["vocals"]:
-        return "vocals"
-    if stems == ["instrumental"]:
-        return "instrumental"
-    if stems == ["deux"]:
-        return "both_deux"
-    if stems == ["vocals", "instrumental"] or stems == ["instrumental", "vocals"]:
+    for mode, expected in MODE_TO_STEMS.items():
+        if stems == list(expected):
+            return mode
+    if sorted(stems) == ["instrumental", "vocals"]:
         return "both_separate"
     raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.")
 
@@ -1407,15 +1567,7 @@ def _cleanup_old_runtime_entries(path: Path, max_age_seconds: int = RUNTIME_CLEA
 
 
 def _required_models_for_mode(mode: str) -> list[str]:
-    if mode == "vocals":
-        return ["vocals"]
-    if mode == "instrumental":
-        return ["instrumental"]
-    if mode == "both_deux":
-        return ["deux"]
-    if mode == "both_separate":
-        return ["vocals", "instrumental"]
-    return []
+    return list(MODE_REQUIRED_MODELS.get(mode, ()))
 
 
 def _model_file_exists(filename: str) -> bool:
@@ -1949,7 +2101,14 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Roformer import failed: {_model_import_error}")
     with config_path.open("r", encoding="utf-8") as handle:
         cfg = yaml.unsafe_load(handle)
-    model = MelBandRoformer(**(cfg.get("model") or {}))
+    raw_model_cfg = dict(cfg.get("model") or {})
+    valid_params = set(inspect.signature(MelBandRoformer.__init__).parameters)
+    valid_params.discard("self")
+    model_kwargs = {key: value for key, value in raw_model_cfg.items() if key in valid_params}
+    ignored = sorted(set(raw_model_cfg) - set(model_kwargs))
+    if ignored:
+        logger.info("ignoring unsupported model config keys for %s: %s", config_path.name, ", ".join(ignored))
+    model = MelBandRoformer(**model_kwargs)
     state = torch.load(model_path, map_location="cpu")
     model.load_state_dict(state.get("state_dict", state), strict=False)
     return model.to(device).eval()
@@ -2011,48 +2170,243 @@ def _run_model_chunks(
     model: torch.nn.Module,
     waveform: torch.Tensor,
     segment: int,
+    overlap: int,
     progress_cb: Callable[[float], None],
     stop_check: Callable[[], None],
 ) -> torch.Tensor:
     working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
     input_channels = working.shape[0]
     length = working.shape[1]
-    step = max(1, int(segment * (1.0 - OVERLAP_RATIO)))
+    overlap = max(1, int(overlap))
+    step = max(1, segment // overlap)
+    border = max(0, segment - step)
+    padded = working
+
+    # Each config carries its own overlap-add expectations instead of using one global ratio.
+    if border > 0:
+        if padded.shape[-1] > 1:
+            remaining = border
+            while remaining > 0:
+                pad_amount = min(remaining, max(1, padded.shape[-1] - 1))
+                padded = F.pad(padded.unsqueeze(0), (pad_amount, pad_amount), mode="reflect").squeeze(0)
+                remaining -= pad_amount
+        else:
+            padded = F.pad(padded, (border, border))
+    if padded.shape[-1] < segment:
+        padded = F.pad(padded, (0, segment - padded.shape[-1]))
+
+    padded_length = padded.shape[-1]
+    starts = list(range(0, max(1, padded_length - segment + 1), step))
+    last_start = max(0, padded_length - segment)
+    if not starts or starts[-1] != last_start:
+        starts.append(last_start)
+
     acc: torch.Tensor | None = None
-    counts = torch.zeros((1, length), device=working.device, dtype=working.dtype)
+    counts = torch.zeros(padded_length, device=working.device, dtype=working.dtype)
+    if len(starts) <= 1 or step >= segment:
+        window = torch.ones(segment, device=working.device, dtype=working.dtype)
+    else:
+        window = torch.hann_window(segment, periodic=False, device=working.device, dtype=working.dtype).clamp_min(1e-6)
+    window_view = window.view(1, 1, -1)
 
     progress_cb(0.0)
     with torch.no_grad():
-        for start in range(0, length, step):
+        for index, start in enumerate(starts, start=1):
             stop_check()
-            end = min(start + segment, length)
-            chunk = working[:, start:end]
-            if chunk.shape[1] < segment:
-                padded = torch.zeros((input_channels, segment), device=working.device, dtype=working.dtype)
-                padded[:, : chunk.shape[1]] = chunk
-            else:
-                padded = chunk
-            pred = model(padded.unsqueeze(0))[0]
-            pred = _normalize_prediction(pred, input_channels, chunk.shape[1])
+            end = start + segment
+            chunk = padded[:, start:end]
+            pred = model(chunk.unsqueeze(0))[0]
+            pred = _normalize_prediction(pred, input_channels, segment)
+            pred_len = pred.shape[-1]
             if acc is None:
                 acc = torch.zeros(
-                    (pred.shape[0], pred.shape[1], length),
+                    (pred.shape[0], pred.shape[1], padded_length),
                     device=working.device,
                     dtype=pred.dtype,
                 )
-            acc[:, :, start : start + pred.shape[-1]] += pred
-            counts[:, start : start + pred.shape[-1]] += 1
-            progress_cb(end / max(1, length))
+            acc[:, :, start : start + pred_len] += pred * window_view[:, :, :pred_len]
+            counts[start : start + pred_len] += window[:pred_len]
+            progress_cb(index / max(1, len(starts)))
 
     if acc is None:
         raise AppError(ErrorCode.SEPARATION_FAILED, "Model produced no output.")
 
-    denom = counts.clamp_min(1).unsqueeze(0)
+    denom = counts.clamp_min(1e-6).view(1, 1, -1)
     restored = acc / denom
+    crop_start = border
+    crop_end = crop_start + length
+    restored = restored[:, :, crop_start:crop_end]
     outputs = []
     for index in range(restored.shape[0]):
         outputs.append(_restore_output_channels(restored[index], original_channels))
     return torch.stack(outputs, dim=0)
+
+
+def _waveform_like(source: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+    sliced = source[: reference.shape[0], : reference.shape[1]]
+    return sliced.to(device=reference.device, dtype=reference.dtype)
+
+
+def _residual_output(source: torch.Tensor, predicted: torch.Tensor) -> torch.Tensor:
+    return _waveform_like(source, predicted) - predicted
+
+
+def _db_to_gain(db_value: float) -> float:
+    return float(10.0 ** (float(db_value) / 20.0))
+
+
+def _boost_overlay_mix(
+    source_waveform: torch.Tensor,
+    overlay_tensor: torch.Tensor,
+    *,
+    base_song_gain_db: float,
+    overlay_gain_db: float,
+) -> torch.Tensor:
+    base_song = _waveform_like(source_waveform, overlay_tensor)
+    return (base_song * _db_to_gain(base_song_gain_db)) + (
+        overlay_tensor * _db_to_gain(overlay_gain_db)
+    )
+
+
+def _temp_audio_name(label: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    return f"{cleaned or 'stem'}.wav"
+
+
+def _append_named_output(
+    outputs: list[tuple[str, Path]],
+    work_dir: Path,
+    label: str,
+    tensor: torch.Tensor,
+) -> None:
+    outputs.append((label, _write_temp_wave(work_dir, _temp_audio_name(label), tensor)))
+
+
+def _cache_intermediate_output(task_id: str, label: str, tensor: torch.Tensor) -> Path | None:
+    cache_dir = _ensure_dir(INTERMEDIATE_CACHE_DIR / task_id)
+    try:
+        return _write_temp_wave(cache_dir, _temp_audio_name(label), tensor)
+    except Exception:
+        logger.warning("failed to cache intermediate output %s for task %s", label, task_id, exc_info=True)
+        return None
+
+
+def _cached_intermediate_output_path(task_id: str, label: str) -> Path | None:
+    candidate = INTERMEDIATE_CACHE_DIR / task_id / _temp_audio_name(label)
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
+def _preset_overlay_cache_label(mode: str) -> str | None:
+    if mode == "preset_boost_harmonies":
+        return "background_vocals"
+    if mode == "preset_boost_guitar":
+        return "guitar"
+    return None
+
+
+def _preset_output_label(mode: str) -> str | None:
+    labels = MODE_OUTPUT_LABELS.get(mode)
+    if labels:
+        return str(labels[0])
+    return None
+
+
+def _task_can_adjust_preset(task: dict[str, Any]) -> bool:
+    mode = str(task.get("mode") or "")
+    cache_label = _preset_overlay_cache_label(mode)
+    if cache_label is None:
+        return False
+    if str(task.get("status") or "").lower() != "done":
+        return False
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        return False
+    return _cached_intermediate_output_path(str(task.get("id") or ""), cache_label) is not None
+
+
+def _export_cached_boost_harmonies_mix(task_id: str, preset_settings: dict[str, float]) -> dict[str, Any]:
+    task = _require_task(task_id)
+    mode = str(task.get("mode") or "")
+    cache_label = _preset_overlay_cache_label(mode)
+    output_label = _preset_output_label(mode)
+    if cache_label is None or output_label is None:
+        raise AppError(ErrorCode.INVALID_REQUEST, "This preset export is not available for this task.")
+    if not _task_can_adjust_preset(task):
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "Cached preset files are unavailable. Run the preset again to create a new adjustable export.",
+        )
+
+    overlay_cache = _cached_intermediate_output_path(task_id, cache_label)
+    if overlay_cache is None:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "Cached preset overlay is unavailable. Run the preset again to recreate it.",
+        )
+
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    work_dir = Path(tempfile.mkdtemp(prefix=f"presetmix_{task_id[:8]}_", dir=str(WORK_DIR)))
+    try:
+        source_info = _probe_source(source_path)
+        decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
+        waveform = _load_waveform(decoded_path)
+        overlay_tensor = _load_waveform(overlay_cache)
+        boost_mix_tensor = _boost_overlay_mix(
+            waveform,
+            overlay_tensor,
+            base_song_gain_db=preset_settings["base_song_gain_db"],
+            overlay_gain_db=preset_settings["overlay_gain_db"],
+        )
+        temp_mix_path = _write_temp_wave(work_dir, _temp_audio_name(output_label), boost_mix_tensor)
+
+        output_dir = Path(str(task.get("out_dir") or "")).expanduser()
+        if not output_dir.exists() or not output_dir.is_dir():
+            output_dir = _create_output_dir(task)
+
+        export_plan = _resolve_export_plan(source_info, str(task.get("output_format") or _compat_settings_payload()["output_format"]))
+        final_path = output_dir / f"{_safe_stem(str(task['original_name']))} - {output_label}{export_plan.suffix}"
+        exported = _export_stem(temp_mix_path, source_path, final_path, export_plan, source_info.has_cover)
+
+        with tasks_lock:
+            current = tasks[task_id]
+            current["out_dir"] = str(output_dir)
+            current["preset_settings_snapshot"] = {
+                "overlay_gain_db": preset_settings["overlay_gain_db"],
+                "base_song_gain_db": preset_settings["base_song_gain_db"],
+            }
+            outputs = list(current.get("outputs") or [])
+            if exported.name not in outputs:
+                outputs.append(exported.name)
+            current["outputs"] = outputs
+            current["finished_at"] = time.time()
+            current["version"] += 1
+            snapshot = _public_task(current)
+        return snapshot
+    finally:
+        _cleanup_path(work_dir)
+
+
+def _expected_output_count(mode: str) -> int:
+    return len(MODE_OUTPUT_LABELS.get(mode, ()))
+
+
+def _stage_model_key(stage_text: str) -> str | None:
+    stage = str(stage_text or "").lower()
+    mapping = {
+        "running vocals model": "vocals",
+        "running instrumental model": "instrumental",
+        "running deux model": "deux",
+        "running guitar model": "guitar",
+        "running mel-band karaoke model": "mel_band_karaoke",
+        "running harmony background model": "mel_band_karaoke",
+        "running denoise model": "denoise",
+    }
+    for prefix, model_key in mapping.items():
+        if prefix in stage:
+            return model_key
+    return None
 
 
 app = FastAPI()
@@ -2140,6 +2494,47 @@ def _settings_response_payload(request: Request | None = None) -> dict[str, Any]
     return payload
 
 
+def _task_boost_harmonies_settings(task: dict[str, Any]) -> dict[str, float]:
+    snapshot = task.get("preset_settings_snapshot")
+    if isinstance(snapshot, dict):
+        return {
+            "overlay_gain_db": _coerce_gain_db(
+                snapshot.get("overlay_gain_db", snapshot.get("background_vocals_gain_db")),
+                BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
+            ),
+            "base_song_gain_db": _coerce_gain_db(
+                snapshot.get("base_song_gain_db"),
+                BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
+            ),
+        }
+    return _boost_harmonies_settings_payload(_compat_settings_payload())
+
+
+def _task_boost_guitar_settings(task: dict[str, Any]) -> dict[str, float]:
+    snapshot = task.get("preset_settings_snapshot")
+    if isinstance(snapshot, dict):
+        return {
+            "overlay_gain_db": _coerce_gain_db(
+                snapshot.get("overlay_gain_db", snapshot.get("guitar_gain_db")),
+                BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
+            ),
+            "base_song_gain_db": _coerce_gain_db(
+                snapshot.get("base_song_gain_db"),
+                BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
+            ),
+        }
+    return _boost_guitar_settings_payload(_compat_settings_payload())
+
+
+def _task_preset_settings(task: dict[str, Any]) -> dict[str, float] | None:
+    mode = str(task.get("mode") or "")
+    if mode == "preset_boost_harmonies":
+        return _task_boost_harmonies_settings(task)
+    if mode == "preset_boost_guitar":
+        return _task_boost_guitar_settings(task)
+    return None
+
+
 def _set_model_download_state(**patch: Any) -> None:
     with model_download_lock:
         model_download_state.update(patch)
@@ -2208,7 +2603,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
     def _progress(update: dict[str, Any]) -> None:
         tag = str(update.get("tag") or "")
         filename = str(update.get("filename") or "")
-        pretty = tag or filename
+        pretty = MODEL_DISPLAY_NAMES.get(tag, tag.replace("_", " ")) if tag else filename
         downloaded_bytes = int(update.get("downloaded_bytes") or 0)
         total_bytes = int(update.get("total_bytes") or 0)
         with model_download_lock:
@@ -2293,6 +2688,8 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "outputs": list(task["outputs"]),
         "error": task["error"],
         "version": task["version"],
+        "preset_settings": _task_preset_settings(task),
+        "can_adjust_preset": _task_can_adjust_preset(task),
     }
 
 
@@ -2315,7 +2712,7 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
     stage_started_at = task.get("stage_started_at")
     stage_elapsed = max(0.0, now - float(stage_started_at or started_at))
     audio_seconds = float(task.get("audio_seconds") or 0.0)
-    export_outputs = 2 if mode in {"both_deux", "both_separate"} else 1
+    export_outputs = max(1, _expected_output_count(mode))
     export_budget = ETA_EXPORT_PER_OUTPUT_SECONDS * export_outputs
     raw_estimate: float | None = None
 
@@ -2340,15 +2737,35 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
                     0.0,
                     ETA_PREP_OVERHEAD_SECONDS + vocals_total + instrumental_total + export_budget - elapsed,
                 )
+    elif mode == "preset_boost_harmonies" and audio_seconds > 0:
+        vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
+        background_total = _predict_model_runtime_seconds("mel_band_karaoke", audio_seconds)
+        if vocals_total is not None or background_total is not None:
+            vocals_total = float(vocals_total or 0.0)
+            background_total = float(background_total or 0.0)
+            if "harmony background" in stage_text and background_total > 0:
+                raw_estimate = max(0.0, background_total - stage_elapsed) + export_budget
+            elif "vocals" in stage_text and vocals_total > 0:
+                raw_estimate = max(0.0, vocals_total - stage_elapsed) + background_total + export_budget
+            else:
+                raw_estimate = max(
+                    0.0,
+                    ETA_PREP_OVERHEAD_SECONDS + vocals_total + background_total + export_budget - elapsed,
+                )
+    elif mode == "preset_boost_guitar" and audio_seconds > 0:
+        guitar_total = _predict_model_runtime_seconds("guitar", audio_seconds)
+        if guitar_total is not None:
+            guitar_total = float(guitar_total)
+            if "guitar" in stage_text and guitar_total > 0:
+                raw_estimate = max(0.0, guitar_total - stage_elapsed) + export_budget
+            else:
+                raw_estimate = max(
+                    0.0,
+                    ETA_PREP_OVERHEAD_SECONDS + guitar_total + export_budget - elapsed,
+                )
 
     if audio_seconds > 0:
-        stage_model_key: str | None = None
-        if "running vocals model" in stage_text:
-            stage_model_key = "vocals"
-        elif "running instrumental model" in stage_text:
-            stage_model_key = "instrumental"
-        elif "running deux model" in stage_text:
-            stage_model_key = "deux"
+        stage_model_key = _stage_model_key(stage_text)
         if stage_model_key is not None:
             stage_total = _predict_model_runtime_seconds(stage_model_key, audio_seconds)
             if stage_total is not None:
@@ -2360,6 +2777,9 @@ def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
         stage_progress_remaining = max(0.0, (stage_elapsed / progress_fraction) - stage_elapsed)
         if mode == "both_separate" and "running vocals model" in stage_text:
             next_stage_total = _predict_model_runtime_seconds("instrumental", audio_seconds) or stage_progress_remaining
+            progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
+        elif mode == "preset_boost_harmonies" and "running vocals model" in stage_text:
+            next_stage_total = _predict_model_runtime_seconds("mel_band_karaoke", audio_seconds) or stage_progress_remaining
             progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
         else:
             progress_estimate = stage_progress_remaining + export_budget
@@ -2427,37 +2847,49 @@ def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> floa
 def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
     if audio_seconds <= 0:
         return None
-    if mode == "vocals":
-        return _predict_model_runtime_seconds("vocals", audio_seconds)
-    if mode == "instrumental":
-        return _predict_model_runtime_seconds("instrumental", audio_seconds)
-    if mode == "both_deux":
-        return _predict_model_runtime_seconds("deux", audio_seconds)
     if mode == "both_separate":
         vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
         instrumental = _predict_model_runtime_seconds("instrumental", audio_seconds)
         if vocals is None and instrumental is None:
             return None
         return float(vocals or 0.0) + float(instrumental or 0.0)
+    if mode == "preset_boost_harmonies":
+        vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
+        background = _predict_model_runtime_seconds("mel_band_karaoke", audio_seconds)
+        if vocals is None and background is None:
+            return None
+        return float(vocals or 0.0) + float(background or 0.0)
+    if mode == "preset_boost_guitar":
+        return _predict_model_runtime_seconds("guitar", audio_seconds)
+    required = _required_models_for_mode(mode)
+    if len(required) == 1:
+        return _predict_model_runtime_seconds(required[0], audio_seconds)
     return None
 
 
 def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | None:
     stage = str(stage_text or "").lower()
     clamped = max(0, min(100, int(pct)))
-    if "running vocals model" in stage:
+    stage_model = _stage_model_key(stage)
+    if stage_model == "vocals":
         if mode == "both_separate":
             span = max(1, BOTH_SEPARATE_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
+        if mode == "preset_boost_harmonies":
+            span = max(1, BOOST_HARMONIES_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
+            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-    if "running instrumental model" in stage:
+    if stage_model == "instrumental":
         if mode == "both_separate":
             span = max(1, BOTH_SEPARATE_INSTRUMENTAL_END_PCT - BOTH_SEPARATE_INSTRUMENTAL_START_PCT)
             return max(0.0, min(1.0, (clamped - BOTH_SEPARATE_INSTRUMENTAL_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-    if "running deux model" in stage:
+    if stage_model in {"deux", "guitar", "mel_band_karaoke", "denoise"}:
+        if mode == "preset_boost_harmonies" and stage_model == "mel_band_karaoke":
+            span = max(1, BOOST_HARMONIES_BACKGROUND_END_PCT - BOOST_HARMONIES_BACKGROUND_START_PCT)
+            return max(0.0, min(1.0, (clamped - BOOST_HARMONIES_BACKGROUND_START_PCT) / span))
         span = max(1, DEUX_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if "exporting" in stage:
@@ -2965,6 +3397,7 @@ def _build_task_payload(
         "video_handling": video_handling,
         "output_root_snapshot": None,
         "output_same_as_input_snapshot": None,
+        "preset_settings_snapshot": None,
         "delivery": delivery,
         "status": "queued" if auto_start else "ready",
         "stage": "Waiting in queue" if auto_start else "Ready",
@@ -3114,6 +3547,7 @@ def _apply_task_start_settings(
         task["output_same_as_input_snapshot"] = bool(output_same_as_input)
     elif task.get("output_same_as_input_snapshot") is None:
         task["output_same_as_input_snapshot"] = bool(_compat_settings_payload().get("output_same_as_input"))
+    task["preset_settings_snapshot"] = _preset_settings_payload_for_mode(mode, _compat_settings_payload())
 
 
 def _register_task(
@@ -3140,6 +3574,7 @@ def _register_task(
         delivery=delivery,
         auto_start=auto_start,
     )
+    _apply_task_start_settings(payload)
     with tasks_lock:
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
@@ -3196,6 +3631,7 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "task_id": public["id"],
         "id": public["id"],
         "name": public["name"],
+        "mode": public["mode"],
         "stage": stage,
         "pct": pct,
         "eta_seconds": public["eta_seconds"],
@@ -3205,6 +3641,8 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "delivery": public["delivery"],
         "error": public["error"],
         "outputs": public["outputs"],
+        "preset_settings": public["preset_settings"],
+        "can_adjust_preset": public["can_adjust_preset"],
         "artwork_url": f"/api/tasks/{public['id']}/artwork",
     }
 
@@ -3352,6 +3790,7 @@ def _process_task(task_id: str) -> None:
                 vocals_model,
                 waveform,
                 MODEL_SPECS["vocals"].segment,
+                MODEL_SPECS["vocals"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running vocals model",
@@ -3360,7 +3799,7 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
-            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
+            _append_named_output(temp_outputs, work_dir, "vocals", vocals_pred[0])
         elif mode == "instrumental":
             instrumental_model = manager.get("instrumental")
             instrumental_started_at = time.time()
@@ -3368,6 +3807,7 @@ def _process_task(task_id: str) -> None:
                 instrumental_model,
                 waveform,
                 MODEL_SPECS["instrumental"].segment,
+                MODEL_SPECS["instrumental"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running instrumental model",
@@ -3376,7 +3816,7 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
-            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
+            _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_pred[0])
         elif mode == "both_deux":
             deux_model = manager.get("deux")
             deux_started_at = time.time()
@@ -3384,6 +3824,7 @@ def _process_task(task_id: str) -> None:
                 deux_model,
                 waveform,
                 MODEL_SPECS["deux"].segment,
+                MODEL_SPECS["deux"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running deux model",
@@ -3396,10 +3837,10 @@ def _process_task(task_id: str) -> None:
             instrumental_tensor = (
                 pair_pred[1]
                 if pair_pred.shape[0] > 1
-                else waveform[: vocals_tensor.shape[0], : vocals_tensor.shape[1]] - vocals_tensor
+                else _residual_output(waveform, vocals_tensor)
             )
-            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_tensor)))
-            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_tensor)))
+            _append_named_output(temp_outputs, work_dir, "vocals", vocals_tensor)
+            _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_tensor)
         elif mode == "both_separate":
             vocals_model = manager.get("vocals")
             instrumental_model = manager.get("instrumental")
@@ -3408,6 +3849,7 @@ def _process_task(task_id: str) -> None:
                 vocals_model,
                 waveform,
                 MODEL_SPECS["vocals"].segment,
+                MODEL_SPECS["vocals"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running vocals model",
@@ -3416,12 +3858,12 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
-            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
             instrumental_started_at = time.time()
             instrumental_pred = _run_model_chunks(
                 instrumental_model,
                 waveform,
                 MODEL_SPECS["instrumental"].segment,
+                MODEL_SPECS["instrumental"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running instrumental model",
@@ -3430,7 +3872,144 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
-            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
+            _append_named_output(temp_outputs, work_dir, "vocals", vocals_pred[0])
+            _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_pred[0])
+        elif mode == "guitar":
+            guitar_model = manager.get("guitar")
+            guitar_started_at = time.time()
+            guitar_pred = _run_model_chunks(
+                guitar_model,
+                waveform,
+                MODEL_SPECS["guitar"].segment,
+                MODEL_SPECS["guitar"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running guitar model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
+            _append_named_output(temp_outputs, work_dir, "guitar", guitar_pred[0])
+        elif mode == "mel_band_karaoke":
+            karaoke_model = manager.get("mel_band_karaoke")
+            karaoke_started_at = time.time()
+            karaoke_pred = _run_model_chunks(
+                karaoke_model,
+                waveform,
+                MODEL_SPECS["mel_band_karaoke"].segment,
+                MODEL_SPECS["mel_band_karaoke"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running mel-band karaoke model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - karaoke_started_at)
+            vocals_tensor = karaoke_pred[0]
+            karaoke_tensor = karaoke_pred[1] if karaoke_pred.shape[0] > 1 else _residual_output(waveform, vocals_tensor)
+            _append_named_output(temp_outputs, work_dir, "vocals", vocals_tensor)
+            _append_named_output(temp_outputs, work_dir, "karaoke", karaoke_tensor)
+        elif mode == "preset_boost_harmonies":
+            vocals_model = manager.get("vocals")
+            harmony_model = manager.get("mel_band_karaoke")
+            preset_settings = _task_boost_harmonies_settings(task)
+
+            vocals_started_at = time.time()
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                MODEL_SPECS["vocals"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running vocals model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, BOOST_HARMONIES_VOCALS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
+            vocals_tensor = vocals_pred[0]
+
+            harmony_started_at = time.time()
+            harmony_pred = _run_model_chunks(
+                harmony_model,
+                vocals_tensor,
+                MODEL_SPECS["mel_band_karaoke"].segment,
+                MODEL_SPECS["mel_band_karaoke"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running harmony background model",
+                    _map_fraction(BOOST_HARMONIES_BACKGROUND_START_PCT, BOOST_HARMONIES_BACKGROUND_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - harmony_started_at)
+            background_vocals_tensor = (
+                harmony_pred[1]
+                if harmony_pred.shape[0] > 1
+                else _residual_output(vocals_tensor, harmony_pred[0])
+            )
+
+            _cache_intermediate_output(task_id, "vocals", vocals_tensor)
+            _cache_intermediate_output(task_id, "background_vocals", background_vocals_tensor)
+
+            _set_task_progress(task_id, "Mixing boost harmonies", 95)
+            boost_mix_tensor = _boost_overlay_mix(
+                waveform,
+                background_vocals_tensor,
+                base_song_gain_db=preset_settings["base_song_gain_db"],
+                overlay_gain_db=preset_settings["overlay_gain_db"],
+            )
+            _append_named_output(temp_outputs, work_dir, "boost harmonies", boost_mix_tensor)
+        elif mode == "preset_boost_guitar":
+            guitar_model = manager.get("guitar")
+            preset_settings = _task_boost_guitar_settings(task)
+
+            guitar_started_at = time.time()
+            guitar_pred = _run_model_chunks(
+                guitar_model,
+                waveform,
+                MODEL_SPECS["guitar"].segment,
+                MODEL_SPECS["guitar"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running guitar model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, BOOST_GUITAR_MODEL_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
+            guitar_tensor = guitar_pred[0]
+
+            _cache_intermediate_output(task_id, "guitar", guitar_tensor)
+
+            _set_task_progress(task_id, "Mixing boost guitar", 95)
+            boost_mix_tensor = _boost_overlay_mix(
+                waveform,
+                guitar_tensor,
+                base_song_gain_db=preset_settings["base_song_gain_db"],
+                overlay_gain_db=preset_settings["overlay_gain_db"],
+            )
+            _append_named_output(temp_outputs, work_dir, "boost guitar", boost_mix_tensor)
+        elif mode == "preset_denoise":
+            denoise_model = manager.get("denoise")
+            denoise_started_at = time.time()
+            denoise_pred = _run_model_chunks(
+                denoise_model,
+                waveform,
+                MODEL_SPECS["denoise"].segment,
+                MODEL_SPECS["denoise"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running denoise model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("denoise", audio_seconds, time.time() - denoise_started_at)
+            _append_named_output(temp_outputs, work_dir, "denoise", denoise_pred[0])
         else:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
 
@@ -3499,6 +4078,7 @@ async def _startup_cleanup() -> None:
     _close_installer_ui()
     _cleanup_old_runtime_entries(WORK_DIR)
     _cleanup_old_runtime_entries(UPLOAD_DIR)
+    _cleanup_old_runtime_entries(INTERMEDIATE_CACHE_DIR, INTERMEDIATE_CACHE_RETENTION_SECONDS)
     if _selected_missing_models():
         _set_model_download_state(
             status="idle",
@@ -3901,6 +4481,43 @@ async def update_task_selection(task_id: str, request: Request):
     return _public_task(task)
 
 
+@app.post("/api/tasks/{task_id}/preset_mix")
+async def export_task_preset_mix(task_id: str, request: Request):
+    _require_local_request(request, "LAN clients cannot adjust completed presets.")
+    task = _require_task(task_id)
+    mode = str(task.get("mode") or "")
+    if mode not in {"preset_boost_harmonies", "preset_boost_guitar"}:
+        raise AppError(ErrorCode.INVALID_REQUEST, "This task does not support preset gain adjustments.").to_http()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    current_settings = _task_preset_settings(task) or {
+        "overlay_gain_db": PRESET_DEFAULT_OVERLAY_GAIN_DB,
+        "base_song_gain_db": PRESET_DEFAULT_BASE_GAIN_DB,
+    }
+    preset_settings = {
+        "overlay_gain_db": _coerce_gain_db(
+            body.get(
+                "overlay_gain_db",
+                body.get("background_vocals_gain_db", body.get("guitar_gain_db")),
+            ),
+            current_settings["overlay_gain_db"],
+        ),
+        "base_song_gain_db": _coerce_gain_db(
+            body.get("base_song_gain_db"),
+            current_settings["base_song_gain_db"],
+        ),
+    }
+    try:
+        return _export_cached_boost_harmonies_mix(task_id, preset_settings)
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+
+
 @app.post("/api/tasks/{task_id}/reveal")
 async def reveal_output(task_id: str, request: Request):
     _require_local_request(request, "LAN clients cannot control the host machine.")
@@ -3986,6 +4603,26 @@ async def update_settings(request: Request) -> dict[str, Any]:
         patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
     if "video_handling" in body:
         patch["video_handling"] = _validate_video_handling(str(body.get("video_handling") or "audio_only"))
+    if "boost_harmonies_background_vocals_gain_db" in body:
+        patch["boost_harmonies_background_vocals_gain_db"] = _coerce_gain_db(
+            body.get("boost_harmonies_background_vocals_gain_db"),
+            BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
+        )
+    if "boost_harmonies_base_song_gain_db" in body:
+        patch["boost_harmonies_base_song_gain_db"] = _coerce_gain_db(
+            body.get("boost_harmonies_base_song_gain_db"),
+            BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
+        )
+    if "boost_guitar_guitar_gain_db" in body:
+        patch["boost_guitar_guitar_gain_db"] = _coerce_gain_db(
+            body.get("boost_guitar_guitar_gain_db"),
+            BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
+        )
+    if "boost_guitar_base_song_gain_db" in body:
+        patch["boost_guitar_base_song_gain_db"] = _coerce_gain_db(
+            body.get("boost_guitar_base_song_gain_db"),
+            BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
+        )
     if not _is_remote_client(request):
         if "lan_passcode_enabled" in body:
             patch["lan_passcode_enabled"] = bool(body.get("lan_passcode_enabled"))
@@ -4025,7 +4662,8 @@ async def compat_upload(
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=False,
         )
-        return {"task_id": payload["id"], "stems": _mode_to_stems(mode), "delivery": payload["delivery"]}
+        public = _compat_public_task(payload)
+        return public
     except AppError as exc:
         raise exc.to_http()
 
@@ -4135,7 +4773,7 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
-    return {"task_id": payload["id"], "stems": _mode_to_stems(payload["mode"]), "delivery": payload["delivery"]}
+    return _compat_public_task(payload)
 
 
 @app.post("/reveal/{task_id}")
@@ -5004,6 +5642,27 @@ INDEX_HTML = """<!DOCTYPE html>
                 <strong>both (separate)</strong>
               </div>
             </label>
+            <label class="mode-card" data-mode="guitar">
+              <input type="radio" name="split-mode" value="guitar">
+              <div class="checkbox"></div>
+              <div>
+                <strong>mel-band guitar</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="mel_band_karaoke">
+              <input type="radio" name="split-mode" value="mel_band_karaoke">
+              <div class="checkbox"></div>
+              <div>
+                <strong>mel-band karaoke</strong>
+              </div>
+            </label>
+            <label class="mode-card" data-mode="preset_denoise">
+              <input type="radio" name="split-mode" value="preset_denoise">
+              <div class="checkbox"></div>
+              <div>
+                <strong>denoise</strong>
+              </div>
+            </label>
           </div>
 
         </section>
@@ -5050,6 +5709,9 @@ INDEX_HTML = """<!DOCTYPE html>
       instrumental: 'instrumental',
       both_deux: 'both (deux)',
       both_separate: 'both (separate)',
+      guitar: 'mel-band guitar',
+      mel_band_karaoke: 'mel-band karaoke',
+      preset_denoise: 'denoise',
     };
 
     const OUTPUT_LABELS = {
@@ -5096,6 +5758,9 @@ INDEX_HTML = """<!DOCTYPE html>
       if (mode === 'both_separate') {
         return ['vocals', 'instrumental'].filter((name) => missingModels.includes(name));
       }
+      if (mode === 'guitar') return missingModels.includes('guitar') ? ['guitar'] : [];
+      if (mode === 'mel_band_karaoke') return missingModels.includes('mel_band_karaoke') ? ['mel_band_karaoke'] : [];
+      if (mode === 'preset_denoise') return missingModels.includes('denoise') ? ['denoise'] : [];
       return [];
     }
 

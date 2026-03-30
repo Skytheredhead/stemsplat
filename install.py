@@ -51,7 +51,10 @@ ALIAS_MAP = {
     "models": {
         "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
         "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
-        "becruily_deux.ckpt": ["becruily_deux.ckpt"],
+        "becruily_deux.ckpt": ["Mel Band Roformer Deux.ckpt"],
+        "becruily_guitar.ckpt": ["Mel Band Roformer Guitar.ckpt"],
+        "mel_band_roformer_karaoke_becruily.ckpt": ["Mel Band Roformer Karaoke.ckpt"],
+        "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt": ["Mel Band Roformer Denoise.ckpt"],
     },
 }
 
@@ -208,21 +211,25 @@ def _missing_required_models() -> list[str]:
         Path("Models"),
         Path.home() / "Library/Application Support" / "stems",
     ]
-    required_terms = ["instrumental", "vocals", "deux"]
-    found = {term: False for term in required_terms}
-    for models_dir in model_roots:
-        if not models_dir.exists():
-            continue
-        for path in models_dir.rglob("*"):
-            if not path.is_file():
+    required_files = [item["filename"] for item in DL_FILES]
+    missing: list[str] = []
+    for filename in required_files:
+        search_names = [filename, *ALIAS_MAP.get("models", {}).get(filename, [])]
+        found = False
+        for models_dir in model_roots:
+            if not models_dir.exists():
                 continue
-            name = path.name.lower()
-            if not name.endswith(".ckpt"):
-                continue
-            for term in required_terms:
-                if term in name:
-                    found[term] = True
-    return [term for term, present in found.items() if not present]
+            for path in models_dir.rglob("*"):
+                if not path.is_file():
+                    continue
+                if path.name in search_names:
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            missing.append(filename)
+    return missing
 
 
 def _models_missing() -> bool:
@@ -309,7 +316,7 @@ def install():
 
         if _models_missing():
             logger.info("models missing; skipping downloads per v0.1 flow")
-            progress['step'] = 'models missing; add vocals, instrumental, and deux to the models folder'
+            progress['step'] = 'models missing; download them in the app or add them to the models folder'
             progress['pct'] = 100
             _start_server()
             return
