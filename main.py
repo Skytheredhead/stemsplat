@@ -2837,6 +2837,7 @@ model_download_state: dict[str, Any] = {
     "current_model": "",
     "downloaded_bytes": 0,
     "total_bytes": 0,
+    "download_rate_bytes_per_sec": 0.0,
     "eta_seconds": None,
     "retry_count": 0,
     "retry_label": "0",
@@ -3219,6 +3220,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             current_model="",
             downloaded_bytes=0,
             total_bytes=0,
+            download_rate_bytes_per_sec=0.0,
             retry_count=0,
             retry_label="0",
             error="",
@@ -3233,6 +3235,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         current_model="",
         downloaded_bytes=0,
         total_bytes=0,
+        download_rate_bytes_per_sec=0.0,
         eta_seconds=None,
         retry_count=0,
         retry_label="0",
@@ -3251,10 +3254,12 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             started_at = model_download_state.get("started_at")
             retry_count = int(model_download_state.get("retry_count") or 0)
         eta_seconds: int | None = None
+        download_rate_bytes_per_sec = 0.0
         if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
             elapsed = max(1.0, time.time() - float(started_at))
             remaining = max(0, total_bytes - downloaded_bytes)
-            eta_seconds = int(round(remaining / max(downloaded_bytes / elapsed, 1)))
+            download_rate_bytes_per_sec = max(downloaded_bytes / elapsed, 0.0)
+            eta_seconds = int(round(remaining / max(download_rate_bytes_per_sec, 1)))
         _set_model_download_state(
             status="downloading",
             pct=int(update.get("pct") or 0),
@@ -3262,6 +3267,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             current_model=pretty,
             downloaded_bytes=downloaded_bytes,
             total_bytes=total_bytes,
+            download_rate_bytes_per_sec=download_rate_bytes_per_sec,
             eta_seconds=eta_seconds,
             retry_label=_model_retry_label(retry_count),
             error="",
@@ -3283,6 +3289,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
                 status="retrying",
                 step="waiting to retry",
                 current_model="",
+                download_rate_bytes_per_sec=0.0,
                 eta_seconds=5,
                 retry_count=retry_count,
                 retry_label=retry_label,
@@ -3295,6 +3302,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         pct=100,
         step="models ready",
         current_model="",
+        download_rate_bytes_per_sec=0.0,
         eta_seconds=0,
         retry_count=retry_count,
         retry_label=_model_retry_label(retry_count),

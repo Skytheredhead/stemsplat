@@ -699,20 +699,23 @@
     .mode-switcher-pill {
       position: absolute;
       top: 6px;
-      left: 6px;
+      left: 0;
       height: calc(100% - 12px);
-      width: calc(25% - 4.5px);
+      width: calc((100% - 12px) / 4);
       border-radius: 999px;
       border: 1px solid rgba(255,255,255,.34);
       background:
         linear-gradient(135deg, rgba(163,214,239,.28), rgba(102,166,200,.16)),
         rgba(255,255,255,.08);
       box-shadow: 0 10px 22px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.12);
-      transition: transform .34s cubic-bezier(.2,.7,.2,1);
+      transition: transform .34s cubic-bezier(.2,.7,.2,1), width .34s cubic-bezier(.2,.7,.2,1);
       pointer-events: none;
     }
     .mode-switch-btn {
       position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       z-index: 1;
       border: 0;
       background: transparent;
@@ -721,6 +724,7 @@
       font-weight: 700;
       padding: 10px 8px;
       border-radius: 999px;
+      text-align: center;
       transition: color .24s ease, transform .2s ease;
     }
     .mode-switch-btn:hover {
@@ -732,6 +736,10 @@
     }
     .modes-card-shifting #mode-choices {
       animation: modeChoicesSwap .34s cubic-bezier(.2,.7,.2,1);
+    }
+    .modes-card-height-animating {
+      overflow: hidden;
+      transition: height .34s cubic-bezier(.2,.7,.2,1);
     }
     .mode-choice-enter {
       opacity: 0;
@@ -932,6 +940,7 @@
     .action-square-btn {
       width: 88px;
       min-width: 88px;
+      height: 88px;
       border-radius: 24px;
       display: inline-flex;
       align-items: center;
@@ -947,6 +956,12 @@
       right: 28px;
       bottom: 26px;
       z-index: 38;
+    }
+    #settings-btn {
+      width: 58px;
+      min-width: 58px;
+      height: 58px;
+      border-radius: 18px;
     }
     .previous-files-list {
       display: flex;
@@ -1179,15 +1194,15 @@
   <!-- header -->
   <h1 id="title" class="text-6xl md:text-7xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
   <!-- controls -->
-  <div class="w-11/12 max-w-6xl flex gap-6">
-    <div id="dropzone" class="glass pre-hide relative flex-1 px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
+  <div id="primary-controls" class="w-11/12 max-w-[1000px] flex items-start gap-6">
+    <div id="dropzone" class="glass pre-hide relative flex-1 max-w-[680px] min-h-[392px] px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
       </svg>
       <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
       <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,.mp4,.m4v,.mov,.webm,.mkv,.avi,audio/*,video/*" multiple aria-label="choose media files" class="sr-only" />
     </div>
-    <div id="action-column" class="flex flex-col gap-4 w-64">
+    <div id="action-column" class="flex flex-col gap-4 w-[272px]">
       <div id="mode-switcher" class="pre-hide fade-in mode-switcher glass">
         <span id="mode-switcher-pill" class="mode-switcher-pill"></span>
         <button type="button" class="mode-switch-btn active" data-tab="fast" data-tooltip="fast models">fast</button>
@@ -1195,7 +1210,7 @@
         <button type="button" class="mode-switch-btn" data-tab="special" data-tooltip="special models">special</button>
         <button type="button" class="mode-switch-btn" data-tab="presets" data-tooltip="presets">presets</button>
       </div>
-      <div id="modes-card" class="glass pre-hide w-64 p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
+      <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
         <button id="preset-settings-btn" data-tooltip="preset gains" title="preset settings" class="card-icon-btn focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer" hidden>
           <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="4" y1="21" x2="4" y2="14"></line>
@@ -1209,7 +1224,7 @@
             <line x1="17" y1="16" x2="23" y2="16"></line>
           </svg>
         </button>
-        <p id="modes-card-title" class="text-sm text-[var(--txt-main)] mt-0">quality</p>
+        <p id="modes-card-title" class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <div id="mode-choices" class="flex flex-col gap-2"></div>
       </div>
       <div class="action-row">
@@ -1428,7 +1443,7 @@
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
-      deux: 'both',
+      deux: 'deux',
       guitar: 'guitar',
       mel_band_karaoke: 'karaoke',
       denoise: 'denoise',
@@ -1604,6 +1619,7 @@
     let startLock = false;
     let queueStarted = false;
     let activeModeTab = 'quality';
+    let modesCardHeightTimer = null;
     let selectedStemModes = new Set(['vocals']);
     let selectedPresetMode = null;
     let settingsState = {
@@ -1685,19 +1701,23 @@
       }
     }
 
+    function positionModeSwitcherPill(){
+      if(!modeSwitcher || !modeSwitcherPill) return;
+      const activeButton = modeSwitcher.querySelector(`.mode-switch-btn[data-tab="${activeModeTab}"]`) || modeSwitcher.querySelector('.mode-switch-btn.active');
+      if(!activeButton) return;
+      modeSwitcherPill.style.width = `${Math.round(activeButton.offsetWidth)}px`;
+      modeSwitcherPill.style.transform = `translateX(${Math.round(activeButton.offsetLeft)}px)`;
+    }
+
     function updateModeTabUI(){
       const tabs = Array.from(document.querySelectorAll('.mode-switch-btn'));
-      const activeIndex = Math.max(0, ['fast', 'quality', 'special', 'presets'].indexOf(activeModeTab));
       tabs.forEach((button) => {
         const active = button.dataset.tab === activeModeTab;
         button.classList.toggle('active', active);
         button.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
-      if(modeSwitcherPill){
-        modeSwitcherPill.style.transform = `translateX(${activeIndex * 100}%)`;
-      }
       if(modesCardTitle){
-        modesCardTitle.textContent = MODE_TAB_LABELS[activeModeTab] || activeModeTab;
+        modesCardTitle.textContent = 'stems';
       }
       if(presetSettingsBtn){
         const visible = activeModeTab === 'presets';
@@ -1705,6 +1725,7 @@
         presetSettingsBtn.disabled = !visible || isLanClient;
         presetSettingsBtn.classList.toggle('dimmed-control', visible && isLanClient);
       }
+      requestAnimationFrame(positionModeSwitcherPill);
     }
 
     function updateModeChoiceUI(){
@@ -1721,6 +1742,18 @@
       if(!modeChoices) return;
       if(modesCard){
         modesCard.classList.toggle('modes-card-shifting', animate);
+        if(animate){
+          if(modesCardHeightTimer){
+            clearTimeout(modesCardHeightTimer);
+            modesCardHeightTimer = null;
+          }
+          modesCard.style.height = `${modesCard.offsetHeight}px`;
+          modesCard.classList.add('modes-card-height-animating');
+          void modesCard.offsetHeight;
+        }else{
+          modesCard.classList.remove('modes-card-height-animating');
+          modesCard.style.height = '';
+        }
       }
       modeChoices.innerHTML = '';
       (MODE_TAB_OPTIONS[activeModeTab] || []).forEach((option, index) => {
@@ -1742,7 +1775,22 @@
       updateModeTabUI();
       updateModeChoiceUI();
       if(animate && modesCard){
-        window.setTimeout(() => modesCard.classList.remove('modes-card-shifting'), 360);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const endHeight = modesCard.scrollHeight;
+            modesCard.style.height = `${endHeight}px`;
+          });
+        });
+        modesCardHeightTimer = window.setTimeout(() => {
+          modesCard.classList.remove('modes-card-shifting');
+          modesCard.classList.remove('modes-card-height-animating');
+          modesCard.style.height = '';
+          modesCardHeightTimer = null;
+        }, 380);
+      }else if(modesCard){
+        modesCard.classList.remove('modes-card-shifting');
+        modesCard.classList.remove('modes-card-height-animating');
+        modesCard.style.height = '';
       }
     }
 
@@ -1767,6 +1815,12 @@
     function formatStorageUsage(bytes){
       const numeric = Number(bytes || 0);
       return `${(numeric / (1024 ** 3)).toFixed(1).replace(/\.0$/, '')} GB`;
+    }
+
+    function formatDownloadRate(bytesPerSecond){
+      const numeric = Number(bytesPerSecond || 0);
+      if(!(numeric > 0)) return '';
+      return `${(numeric / (1024 * 1024)).toFixed(1)} mb/s`;
     }
 
     function ensureTooltip(){
@@ -4104,6 +4158,7 @@
       window.addEventListener('resize', () => {
         updateSettingsScrollIndicator();
         settleFullscreenTransition();
+        positionModeSwitcherPill();
       });
     });
     window.addEventListener('pywebviewready', applyDesktopShellState);
@@ -4809,6 +4864,8 @@
           bits.push(`${pct}%`);
           bits.push(`${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`);
         }
+        const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
+        if(rate) bits.push(rate);
         const eta = formatDuration(status.eta_seconds);
         if(eta) bits.push(eta);
         toast.body.textContent = bits.join(' · ');
@@ -5135,6 +5192,8 @@
               `${Math.max(0, status.pct || 0)}%`,
               `${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`,
             ];
+            const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
+            if(rate) bits.push(rate);
             const eta = formatDuration(status.eta_seconds);
             if(eta) bits.push(eta);
             modelsProgressMeta.textContent = bits.join(' · ');
