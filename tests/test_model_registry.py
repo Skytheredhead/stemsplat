@@ -63,13 +63,6 @@ NEW_MODEL_EXPECTATIONS = {
         "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
         "filename": "92cfc3b6-ef3bcb9c.th",
     },
-    "htdemucs_ft_vocals": {
-        "config": "config_musdb18_htdemucs.yaml",
-        "segment": 485_100,
-        "overlap": 4,
-        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
-        "filename": "04573f0d-f3cf25b2.th",
-    },
     "htdemucs_6s": {
         "config": "config_htdemucs_6stems.yaml",
         "segment": 485_100,
@@ -94,20 +87,20 @@ NEW_MODEL_EXPECTATIONS = {
 }
 
 PRESET_MODE_EXPECTATIONS = {
-    "preset_voc_instrum": {
-        "stems": ["voc_instrum"],
-        "required_models": ["vocals", "instrumental"],
-        "output_labels": ["vocals", "instrumental"],
+    "preset_all_stems": {
+        "stems": ["all_stems"],
+        "required_models": ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "drumsep_6s"],
+        "output_labels": ["vocals", "background vocals", "bass", "drums", "other", "guitar", "piano", "kick", "snare", "toms", "hh", "ride", "crash"],
     },
     "preset_boost_harmonies": {
         "stems": ["boost_harmonies"],
         "required_models": ["vocals", "mel_band_karaoke"],
         "output_labels": ["boost harmonies"],
     },
-    "preset_boost_guitar": {
-        "stems": ["boost_guitar"],
-        "required_models": ["guitar"],
-        "output_labels": ["boost guitar"],
+    "preset_denoise": {
+        "stems": ["preset_denoise"],
+        "required_models": ["denoise"],
+        "output_labels": ["denoise"],
     },
 }
 
@@ -233,7 +226,10 @@ class ModelRegistryTests(unittest.TestCase):
         for mode in NEW_MODEL_EXPECTATIONS:
             if mode in self.mode_to_stems:
                 self.assertEqual(list(self.mode_to_stems[mode]), [mode])
-                self.assertEqual(list(self.mode_required_models[mode]), [mode])
+                expected_required = [mode]
+                if mode == "htdemucs_ft_other":
+                    expected_required = ["guitar", "htdemucs_ft_other"]
+                self.assertEqual(list(self.mode_required_models[mode]), expected_required)
 
         self.assertEqual(list(self.mode_to_stems["both_separate"]), ["vocals", "instrumental"])
         self.assertEqual(list(self.mode_required_models["both_separate"]), ["vocals", "instrumental"])
@@ -252,8 +248,6 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertEqual(self.compat_defaults["previous_files_warn_gb"], 8.0)
         self.assertEqual(self.compat_defaults["boost_harmonies_background_vocals_gain_db"], 3.0)
         self.assertEqual(self.compat_defaults["boost_harmonies_base_song_gain_db"], -3.0)
-        self.assertEqual(self.compat_defaults["boost_guitar_guitar_gain_db"], 3.0)
-        self.assertEqual(self.compat_defaults["boost_guitar_base_song_gain_db"], -3.0)
 
     def test_downloader_entries_match_model_specs(self) -> None:
         by_tag = {item["tag"]: item for item in self.downloader_files}

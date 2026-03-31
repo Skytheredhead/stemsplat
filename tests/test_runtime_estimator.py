@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,6 +17,42 @@ import main
 
 
 class RuntimeEstimatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        with main.tasks_lock:
+            main.tasks.clear()
+        while True:
+            try:
+                main.task_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                main.task_queue.task_done()
+        main._resume_queue_processing()
+
+    def tearDown(self) -> None:
+        with main.tasks_lock:
+            main.tasks.clear()
+        while True:
+            try:
+                main.task_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                main.task_queue.task_done()
+        main._resume_queue_processing()
+
+    def _build_task(self, task_id: str, source_path: Path) -> dict[str, object]:
+        return main._build_task_payload(
+            task_id=task_id,
+            original_name=source_path.name,
+            source_path=source_path,
+            source_dir=str(source_path.parent),
+            mode="vocals",
+            output_format="wav",
+            video_handling="audio_only",
+            auto_start=False,
+        )
+
     def test_load_runtime_stats_migrates_legacy_eta_history_and_caps_entries(self) -> None:
         entries = [
             {"audio_seconds": float(index + 1), "elapsed_seconds": float(index + 2)}
@@ -172,6 +211,61 @@ class RuntimeEstimatorTests(unittest.TestCase):
             self.assertFalse(drums.exists())
             with zipfile.ZipFile(archive_path) as archive:
                 self.assertEqual(sorted(archive.namelist()), ["song - drums.wav", "song - vocals.wav"])
+
+    def test_request_task_stop_pauses_queue_processing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "song.wav"
+            source_path.write_bytes(b"data")
+            task = self._build_task("task-1", source_path)
+            task["status"] = "running"
+            task["stage"] = "Running vocals model"
+            with main.tasks_lock:
+                main.tasks["task-1"] = task
+
+            main._request_task_stop("task-1")
+
+        self.assertTrue(main._queue_processing_paused())
+        self.assertTrue(task["stop_event"].is_set())
+        self.assertEqual(task["stage"], "Stopping")
+
+    def test_worker_waits_for_resume_and_retry_can_take_front_of_queue(self) -> None:
+        main._pause_queue_processing()
+        main._queue_task("queued-later")
+
+        result: list[str] = []
+
+        def _read_next() -> None:
+            result.append(main._next_task_id_for_worker())
+
+        worker = threading.Thread(target=_read_next, daemon=True)
+        worker.start()
+        time.sleep(0.15)
+        self.assertEqual(result, [])
+
+        main._queue_task("retry-front", front=True)
+        main._resume_queue_processing()
+
+        worker.join(timeout=1.0)
+        self.assertEqual(result, ["retry-front"])
+
+        main.task_queue.task_done()
+        self.assertEqual(main.task_queue.get_nowait(), "queued-later")
+        main.task_queue.task_done()
+
+    def test_restart_task_rejects_retry_while_original_is_still_processing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "song.wav"
+            source_path.write_bytes(b"data")
+            task = self._build_task("task-1", source_path)
+            task["status"] = "running"
+            task["stage"] = "Running vocals model"
+            with main.tasks_lock:
+                main.tasks["task-1"] = task
+
+            with self.assertRaises(main.AppError) as ctx:
+                main._restart_task_payload("task-1")
+
+        self.assertEqual(ctx.exception.message, "Task is still processing.")
 
 
 if __name__ == "__main__":

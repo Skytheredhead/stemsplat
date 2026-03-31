@@ -321,11 +321,39 @@
     .copy-button[data-copied="1"] .icon-check { opacity:1; }
     .settings-row { display:flex; align-items:center; gap:10px; }
     .model-list { display:flex; flex-direction:column; gap:10px; }
-    .model-item { display:flex; align-items:center; gap:10px; font-size:13px; color: var(--txt-main); }
+    .model-item {
+      display:flex;
+      align-items:center;
+      gap:10px;
+      font-size:13px;
+      color: var(--txt-main);
+      padding:10px 12px;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.03);
+    }
+    .model-item-main { min-width: 0; display:flex; align-items:center; gap:10px; flex:1 1 auto; }
+    .model-item-copy { min-width: 0; display:flex; flex-direction:column; gap:3px; flex:1 1 auto; }
+    .model-item-label { line-height: 1.15; }
+    .model-item-size { font-size:11px; color: rgba(223,236,244,.58); }
+    .model-item-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+    .model-action-btn {
+      width:32px;
+      height:32px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.05);
+      color: rgba(245,251,255,.86);
+    }
+    .model-action-btn svg { width:15px; height:15px; }
     .model-state { width:18px; height:18px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); display:flex; align-items:center; justify-content:center; color:#b9f4d7; }
     .model-state svg { width:12px; height:12px; opacity:0; transition: opacity .18s ease; }
     .model-item.ready .model-state svg { opacity:1; }
     .model-note { font-size:12px; opacity:.65; }
+    .model-total { margin-top:12px; text-align:right; font-size:12px; color: rgba(223,236,244,.74); }
     .models-cta-wrap { position:relative; display:flex; gap:8px; }
     .models-cta-wrap > * { position:relative; z-index:1; }
     .settings-disclosure {
@@ -433,7 +461,7 @@
     .mode-switcher {
       position: relative;
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       width: 100%;
       padding: 6px;
       border-radius: 999px;
@@ -444,7 +472,7 @@
       top: 6px;
       left: 0;
       height: calc(100% - 12px);
-      width: calc((100% - 12px) / 4);
+      width: calc((100% - 12px) / 3);
       border-radius: 999px;
       border: 1px solid rgba(255,255,255,.34);
       background:
@@ -719,8 +747,42 @@
       flex-direction: column;
       gap: 12px;
       max-height: min(62vh, 520px);
-      overflow: auto;
-      padding-right: 4px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 10px;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .previous-files-list::-webkit-scrollbar { display: none; }
+    .overlay-scroll-shell {
+      position: relative;
+      padding-right: 12px;
+    }
+    .overlay-scroll-indicator {
+      position: absolute;
+      top: 4px;
+      right: 0;
+      bottom: 4px;
+      width: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .16s ease;
+    }
+    .overlay-scroll-indicator.visible { opacity: 1; }
+    .overlay-scroll-thumb {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 0;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(245,251,255,.9), rgba(206,229,239,.84));
+      box-shadow: 0 0 0 1px rgba(255,255,255,.10);
+      transform: translateY(0);
+      transition: transform .1s ease-out, height .14s ease-out, opacity .12s ease;
     }
     .previous-history-item {
       display: flex;
@@ -1103,9 +1165,8 @@
     <div id="action-column" class="flex flex-col gap-4 w-[272px]">
       <div id="mode-switcher" class="pre-hide fade-in mode-switcher glass">
         <span id="mode-switcher-pill" class="mode-switcher-pill"></span>
-        <button type="button" class="mode-switch-btn active" data-tab="quality">quality</button>
-        <button type="button" class="mode-switch-btn" data-tab="fast">fast</button>
-        <button type="button" class="mode-switch-btn" data-tab="special">special</button>
+        <button type="button" class="mode-switch-btn active" data-tab="single">single</button>
+        <button type="button" class="mode-switch-btn" data-tab="multi">multi</button>
         <button type="button" class="mode-switch-btn" data-tab="presets">presets</button>
       </div>
       <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
@@ -1263,6 +1324,7 @@
     let modelsCtaWrap = null;
     let modelsFolderBtn = null;
     let modelsProgressWrap = null;
+    let modelsTotal = null;
     let modelsProgressBar = null;
     let modelsProgressMeta = null;
     let presetSettingsBtn = null;
@@ -1299,53 +1361,48 @@
     let tooltipTimer = null;
     let tooltipTarget = null;
     const MODE_TAB_LABELS = {
-      fast: 'fast',
-      quality: 'quality',
-      special: 'special',
+      single: 'single',
+      multi: 'multi',
       presets: 'presets',
     };
+    const BS_6S_TOOLTIP = `splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits`;
+    const DRUMSEP_6S_TOOLTIP = `splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s`;
+    const DRUMSEP_4S_TOOLTIP = `splits into:\n- cymbals\n- kick\n- snare\n- toms`;
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
-      deux: 'deux',
       guitar: 'guitar',
       mel_band_karaoke: 'karaoke',
       denoise: 'denoise',
       bs_roformer_6s: '6 stems',
-      htdemucs_ft_drums: 'htdemucs4 ft drums',
-      htdemucs_ft_bass: 'htdemucs4 ft bass',
-      htdemucs_ft_other: 'htdemucs4 ft other',
-      htdemucs_ft_vocals: 'htdemucs4 ft vocals',
-      htdemucs_6s: 'htdemucs4 (6 stem)',
-      drumsep_6s: 'drumsep (6 stem)',
-      drumsep_4s: 'drum sep (4 stem)',
+      htdemucs_ft_drums: 'drums',
+      htdemucs_ft_bass: 'bass',
+      htdemucs_ft_other: 'other',
+      htdemucs_6s: '6 stems faster',
+      drumsep_6s: 'drums 6 stems',
+      drumsep_4s: 'drums 4 stems',
     };
     const MODEL_CHECKLIST_ORDER = [
-      'htdemucs_ft_drums',
-      'htdemucs_ft_bass',
-      'htdemucs_ft_other',
-      'htdemucs_ft_vocals',
-      'htdemucs_6s',
       'vocals',
       'instrumental',
-      'deux',
       'guitar',
       'mel_band_karaoke',
-      'bs_roformer_6s',
-      'drumsep_6s',
-      'drumsep_4s',
       'denoise',
-    ];
-    const EXCLUSIVE_STEM_MODES = new Set([
-      'both_deux',
-      'guitar',
-      'mel_band_karaoke',
       'bs_roformer_6s',
-      'denoise',
       'htdemucs_ft_drums',
       'htdemucs_ft_bass',
       'htdemucs_ft_other',
-      'htdemucs_ft_vocals',
+      'htdemucs_6s',
+      'drumsep_6s',
+      'drumsep_4s',
+    ];
+    const EXCLUSIVE_STEM_MODES = new Set([
+      'guitar',
+      'mel_band_karaoke',
+      'bs_roformer_6s',
+      'htdemucs_ft_drums',
+      'htdemucs_ft_bass',
+      'htdemucs_ft_other',
       'htdemucs_6s',
       'drumsep_6s',
       'drumsep_4s',
@@ -1353,67 +1410,56 @@
     const STEM_TO_REQUIRED_MODELS = {
       vocals: ['vocals'],
       instrumental: ['instrumental'],
-      deux: ['deux'],
       guitar: ['guitar'],
       mel_band_karaoke: ['mel_band_karaoke'],
       bs_roformer_6s: ['bs_roformer_6s'],
       htdemucs_ft_drums: ['htdemucs_ft_drums'],
       htdemucs_ft_bass: ['htdemucs_ft_bass'],
-      htdemucs_ft_other: ['htdemucs_ft_other'],
-      htdemucs_ft_vocals: ['htdemucs_ft_vocals'],
+      htdemucs_ft_other: ['guitar', 'htdemucs_ft_other'],
       htdemucs_6s: ['htdemucs_6s'],
       drumsep_6s: ['drumsep_6s'],
       drumsep_4s: ['drumsep_4s'],
+      all_stems: ['vocals', 'instrumental', 'mel_band_karaoke', 'bs_roformer_6s', 'drumsep_6s'],
       denoise: ['denoise'],
-      voc_instrum: ['vocals', 'instrumental'],
       boost_harmonies: ['vocals', 'mel_band_karaoke'],
-      boost_guitar: ['guitar'],
     };
     const MODE_TAB_OPTIONS = {
-      fast: [
-        { kind: 'stem', id: 'htdemucs_ft_drums', label: 'htdemucs4 ft drums', tooltip: 'fast drums' },
-        { kind: 'stem', id: 'htdemucs_ft_bass', label: 'htdemucs4 ft bass', tooltip: 'fast bass' },
-        { kind: 'stem', id: 'htdemucs_ft_other', label: 'htdemucs4 ft other', tooltip: 'fast other' },
-        { kind: 'stem', id: 'htdemucs_ft_vocals', label: 'htdemucs4 ft vocals', tooltip: 'fast vocals' },
-        { kind: 'stem', id: 'htdemucs_6s', label: 'htdemucs4 (6 stem)', tooltip: 'fast 6 stems' },
-      ],
-      quality: [
-        { kind: 'stem', id: 'vocals', label: 'vocals', tooltip: 'fast - recommended vocals' },
-        { kind: 'stem', id: 'instrumental', label: 'instrumental', tooltip: 'fast - recommended instrumental' },
-        { kind: 'stem', id: 'both_deux', label: 'both', tooltip: 'slower separate pair' },
+      single: [
+        { kind: 'stem', id: 'vocals', label: 'vocal', tooltip: 'recommended vocal split' },
+        { kind: 'stem', id: 'instrumental', label: 'instrumental', tooltip: 'recommended instrumental split' },
+        { kind: 'stem', id: 'htdemucs_ft_drums', label: 'drums', tooltip: 'fast drums' },
+        { kind: 'stem', id: 'htdemucs_ft_bass', label: 'bass', tooltip: 'fast bass' },
         { kind: 'stem', id: 'guitar', label: 'guitar', tooltip: 'medium guitar split' },
-        { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'medium karaoke split' },
-        { kind: 'stem', id: 'bs_roformer_6s', label: '6 stems', tooltip: 'splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits' },
+        { kind: 'stem', id: 'htdemucs_ft_other', label: 'other', tooltip: 'other stem with guitar removed first' },
+        { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'karaoke split' },
       ],
-      special: [
-        { kind: 'stem', id: 'drumsep_6s', label: 'drumsep (6 stem)', tooltip: 'splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s' },
-        { kind: 'stem', id: 'drumsep_4s', label: 'drum sep (4 stem)', tooltip: 'splits into:\n- cymbals\n- kick\n- snare\n- toms' },
-        { kind: 'stem', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
+      multi: [
+        { kind: 'stem', id: 'bs_roformer_6s', label: '6 stems', tooltip: BS_6S_TOOLTIP },
+        { kind: 'stem', id: 'htdemucs_6s', label: '6 stems faster', tooltip: 'faster 6 stems' },
+        { kind: 'stem', id: 'drumsep_4s', label: 'drums 4 stems', tooltip: DRUMSEP_4S_TOOLTIP },
+        { kind: 'stem', id: 'drumsep_6s', label: 'drums 6 stems', tooltip: DRUMSEP_6S_TOOLTIP },
       ],
       presets: [
-        { kind: 'preset', id: 'voc_instrum', label: 'voc+instrum', tooltip: 'vocals + instrumental' },
+        { kind: 'preset', id: 'all_stems', label: 'all stems', tooltip: 'full stem graph' },
+        { kind: 'preset', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
         { kind: 'preset', id: 'boost_harmonies', label: 'boost harmonies', tooltip: 'boost harmonies' },
-        { kind: 'preset', id: 'boost_guitar', label: 'boost guitar', tooltip: 'boost guitar' },
       ],
     };
     const MODE_TO_TAB = {
-      vocals: 'quality',
-      instrumental: 'quality',
-      both_deux: 'quality',
-      guitar: 'quality',
-      mel_band_karaoke: 'quality',
-      bs_roformer_6s: 'quality',
-      htdemucs_ft_drums: 'fast',
-      htdemucs_ft_bass: 'fast',
-      htdemucs_ft_other: 'fast',
-      htdemucs_ft_vocals: 'fast',
-      htdemucs_6s: 'fast',
-      drumsep_6s: 'special',
-      drumsep_4s: 'special',
-      denoise: 'special',
-      voc_instrum: 'presets',
+      vocals: 'single',
+      instrumental: 'single',
+      guitar: 'single',
+      mel_band_karaoke: 'single',
+      htdemucs_ft_drums: 'single',
+      htdemucs_ft_bass: 'single',
+      htdemucs_ft_other: 'single',
+      bs_roformer_6s: 'multi',
+      htdemucs_6s: 'multi',
+      drumsep_6s: 'multi',
+      drumsep_4s: 'multi',
+      all_stems: 'presets',
+      denoise: 'presets',
       boost_harmonies: 'presets',
-      boost_guitar: 'presets',
     };
     const PRESET_CONFIGS = {
       boost_harmonies: {
@@ -1425,15 +1471,20 @@
         defaultOverlayGain: 3,
         defaultBaseGain: -3,
       },
-      boost_guitar: {
-        label: 'boost guitar',
-        stem: 'boost_guitar',
-        overlayKey: 'boost_guitar_guitar_gain_db',
-        baseKey: 'boost_guitar_base_song_gain_db',
-        overlayLabel: 'guitar',
-        defaultOverlayGain: 3,
-        defaultBaseGain: -3,
-      },
+    };
+    const MODEL_SOURCE_URLS = {
+      vocals: 'https://huggingface.co/becruily/mel-band-roformer-vocals',
+      instrumental: 'https://huggingface.co/becruily/mel-band-roformer-instrumental',
+      guitar: 'https://huggingface.co/becruily/mel-band-roformer-guitar',
+      mel_band_karaoke: 'https://huggingface.co/becruily/mel-band-roformer-karaoke',
+      denoise: 'https://huggingface.co/jarredou/aufr33_MelBand_Denoise',
+      bs_roformer_6s: 'https://huggingface.co/jarredou/BS-ROFO-SW-Fixed',
+      htdemucs_ft_drums: 'https://github.com/facebookresearch/demucs',
+      htdemucs_ft_bass: 'https://github.com/facebookresearch/demucs',
+      htdemucs_ft_other: 'https://github.com/facebookresearch/demucs',
+      htdemucs_6s: 'https://github.com/facebookresearch/demucs',
+      drumsep_6s: 'https://github.com/jarredou/models/releases/tag/aufr33-jarredou_MDX23C_DrumSep_model_v0.1',
+      drumsep_4s: 'https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.5',
     };
     const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
     const isLanClient = true;
@@ -1442,7 +1493,7 @@
     let startGeneration = 0;
     let startLock = false;
     let queueStarted = false;
-    let activeModeTab = 'quality';
+    let activeModeTab = 'single';
     let modesCardHeightTimer = null;
     let selectedStemModes = new Set(['vocals']);
     let selectedPresetMode = null;
@@ -1456,8 +1507,6 @@
       video_handling: 'audio_only',
       boost_harmonies_background_vocals_gain_db: 3,
       boost_harmonies_base_song_gain_db: -3,
-      boost_guitar_guitar_gain_db: 3,
-      boost_guitar_base_song_gain_db: -3,
       runtime: null,
     };
     let defaultOutputPath = '';
@@ -1791,12 +1840,6 @@
           baseSlider: boostHarmoniesBaseSlider,
           overlayValue: boostHarmoniesBackgroundValue,
           baseValue: boostHarmoniesBaseValue,
-        },
-        boost_guitar: {
-          overlaySlider: boostGuitarOverlaySlider,
-          baseSlider: boostGuitarBaseSlider,
-          overlayValue: boostGuitarOverlayValue,
-          baseValue: boostGuitarBaseValue,
         },
       };
       Object.entries(PRESET_CONFIGS).forEach(([mode, config]) => {
@@ -2400,23 +2443,20 @@
       const grid = document.createElement('div');
       grid.className = 'grid grid-cols-1 gap-2';
       const options = [
-        { label: 'htdemucs4 ft drums', stems: ['htdemucs_ft_drums'], tooltip: 'fast drums' },
-        { label: 'htdemucs4 ft bass', stems: ['htdemucs_ft_bass'], tooltip: 'fast bass' },
-        { label: 'htdemucs4 ft other', stems: ['htdemucs_ft_other'], tooltip: 'fast other' },
-        { label: 'htdemucs4 ft vocals', stems: ['htdemucs_ft_vocals'], tooltip: 'fast vocals' },
-        { label: 'htdemucs4 (6 stem)', stems: ['htdemucs_6s'], tooltip: 'fast 6 stems' },
+        { label: 'drums', stems: ['htdemucs_ft_drums'], tooltip: 'fast drums' },
+        { label: 'bass', stems: ['htdemucs_ft_bass'], tooltip: 'fast bass' },
+        { label: 'other', stems: ['htdemucs_ft_other'], tooltip: 'other stem with guitar removed first' },
+        { label: '6 stems faster', stems: ['htdemucs_6s'], tooltip: 'faster 6 stems' },
         { label: 'vocals', stems: ['vocals'], tooltip: 'vocals' },
         { label: 'instrumental', stems: ['instrumental'], tooltip: 'instrumental' },
-        { label: 'both', stems: ['deux'], tooltip: 'both' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
         { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
-        { label: '6 stems', stems: ['bs_roformer_6s'], tooltip: 'splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits' },
-        { label: 'drumsep (6 stem)', stems: ['drumsep_6s'], tooltip: 'splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s' },
-        { label: 'drum sep (4 stem)', stems: ['drumsep_4s'], tooltip: 'splits into:\n- cymbals\n- kick\n- snare\n- toms' },
-        { label: 'voc+instrum', stems: ['voc_instrum'], tooltip: 'vocals + instrumental' },
+        { label: '6 stems', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
+        { label: 'drums 6 stems', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
+        { label: 'drums 4 stems', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
+        { label: 'all stems', stems: ['all_stems'], tooltip: 'full stem graph' },
         { label: 'boost harmonies', stems: ['boost_harmonies'], tooltip: 'boost harmonies' },
-        { label: 'boost guitar', stems: ['boost_guitar'], tooltip: 'boost guitar' },
-        { label: 'denoise', stems: ['denoise'], tooltip: 'denoise' },
+        { label: 'denoise', stems: ['preset_denoise'], tooltip: 'denoise' },
       ];
       options.forEach((option) => {
         const btn = document.createElement('button');
@@ -2522,9 +2562,21 @@
     async function openPreviousFilesCard(){
       const { overlay, card } = createOverlayCard('previous files');
       card.style.maxWidth = '760px';
+      const shell = document.createElement('div');
+      shell.className = 'overlay-scroll-shell';
       const list = document.createElement('div');
       list.className = 'previous-files-list';
-      card.appendChild(list);
+      const indicator = document.createElement('div');
+      indicator.className = 'overlay-scroll-indicator';
+      indicator.setAttribute('aria-hidden', 'true');
+      const thumb = document.createElement('div');
+      thumb.className = 'overlay-scroll-thumb';
+      indicator.appendChild(thumb);
+      shell.append(list, indicator);
+      card.appendChild(shell);
+      const syncScroll = () => updateScrollIndicator(list, indicator, thumb);
+      overlay.__cleanupFns = overlay.__cleanupFns || [];
+      overlay.__cleanupFns.push(attachSoftWheelScroll(list, syncScroll));
       const items = await loadPreviousFiles();
       if(previousFilesStorageState && (previousFilesStorageState.near_limit || previousFilesStorageState.at_limit)){
         const alert = document.createElement('div');
@@ -2538,11 +2590,13 @@
         empty.className = 'history-empty';
         empty.textContent = 'no saved songs yet';
         list.appendChild(empty);
+        requestAnimationFrame(syncScroll);
         return;
       }
       items.forEach((entry) => {
         list.appendChild(createPreviousFileRow(entry));
       });
+      requestAnimationFrame(syncScroll);
     }
     function closeSettings(){
       if(!settingsOverlay) settingsOverlay = document.getElementById('settings-overlay');
@@ -2575,6 +2629,92 @@
     }
 
     // --- Progress Smoother Helper ---
+    function updateScrollIndicator(scrollBody, indicator, thumb){
+      if(!scrollBody || !indicator || !thumb) return;
+      const clientHeight = scrollBody.clientHeight || 0;
+      const scrollHeight = scrollBody.scrollHeight || 0;
+      const maxScroll = Math.max(0, scrollHeight - clientHeight);
+      const visible = maxScroll > 4;
+      indicator.classList.toggle('visible', visible);
+      if(!visible){
+        thumb.style.height = '0px';
+        thumb.style.transform = 'translateY(0)';
+        return;
+      }
+      const trackHeight = indicator.clientHeight || Math.max(0, clientHeight - 40);
+      const thumbHeight = Math.max(40, Math.round((clientHeight / scrollHeight) * trackHeight));
+      const thumbTravel = Math.max(0, trackHeight - thumbHeight);
+      const thumbOffset = maxScroll > 0 ? (scrollBody.scrollTop / maxScroll) * thumbTravel : 0;
+      thumb.style.height = `${thumbHeight}px`;
+      thumb.style.transform = `translateY(${thumbOffset}px)`;
+    }
+
+    function wantsSoftPanelScroll(){
+      if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+        return false;
+      }
+      return !window.matchMedia || window.matchMedia('(pointer:fine)').matches;
+    }
+
+    function attachSoftWheelScroll(scrollBody, updateIndicator = null){
+      if(!scrollBody || !wantsSoftPanelScroll()){
+        return () => {};
+      }
+      let raf = null;
+      let target = scrollBody.scrollTop || 0;
+      const syncTarget = () => {
+        if(!raf){
+          target = scrollBody.scrollTop || 0;
+        }
+        if(updateIndicator){
+          updateIndicator();
+        }
+      };
+      const step = () => {
+        const maxScroll = Math.max(0, (scrollBody.scrollHeight || 0) - (scrollBody.clientHeight || 0));
+        target = Math.max(0, Math.min(maxScroll, target));
+        const current = scrollBody.scrollTop || 0;
+        const delta = target - current;
+        if(Math.abs(delta) < 0.5){
+          scrollBody.scrollTop = target;
+          if(updateIndicator){
+            updateIndicator();
+          }
+          raf = null;
+          return;
+        }
+        scrollBody.scrollTop = current + (delta * 0.16);
+        if(updateIndicator){
+          updateIndicator();
+        }
+        raf = requestAnimationFrame(step);
+      };
+      const onWheel = (event) => {
+        if(event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)){
+          return;
+        }
+        const maxScroll = Math.max(0, (scrollBody.scrollHeight || 0) - (scrollBody.clientHeight || 0));
+        if(maxScroll <= 0){
+          return;
+        }
+        event.preventDefault();
+        target = Math.max(0, Math.min(maxScroll, target + event.deltaY));
+        if(!raf){
+          raf = requestAnimationFrame(step);
+        }
+      };
+      scrollBody.addEventListener('scroll', syncTarget, { passive: true });
+      scrollBody.addEventListener('wheel', onWheel, { passive: false });
+      return () => {
+        if(raf){
+          cancelAnimationFrame(raf);
+          raf = null;
+        }
+        scrollBody.removeEventListener('scroll', syncTarget);
+        scrollBody.removeEventListener('wheel', onWheel);
+      };
+    }
+
     function makeProgressSmoother(bar){
       let raf = null;
       let value = 0;     // currently displayed percent
@@ -2921,21 +3061,19 @@
       if(!container || !stemsList) return;
       container.innerHTML='';
       const pretty = {
-        deux: 'both',
         guitar: 'guitar',
         mel_band_karaoke: 'karaoke',
-        voc_instrum: 'voc+instrum',
+        all_stems: 'all stems',
+        preset_denoise: 'denoise',
         denoise: 'denoise',
         bs_roformer_6s: '6 stems',
-        htdemucs_ft_drums: 'htdemucs4 ft drums',
-        htdemucs_ft_bass: 'htdemucs4 ft bass',
-        htdemucs_ft_other: 'htdemucs4 ft other',
-        htdemucs_ft_vocals: 'htdemucs4 ft vocals',
-        htdemucs_6s: 'htdemucs4 (6 stem)',
-        drumsep_6s: 'drumsep (6 stem)',
-        drumsep_4s: 'drum sep (4 stem)',
+        htdemucs_ft_drums: 'drums',
+        htdemucs_ft_bass: 'bass',
+        htdemucs_ft_other: 'other',
+        htdemucs_6s: '6 stems faster',
+        drumsep_6s: 'drums 6 stems',
+        drumsep_4s: 'drums 4 stems',
         boost_harmonies: 'boost harmonies',
-        boost_guitar: 'boost guitar',
       };
       stemsList.forEach(name => {
         const base = name.split(' - ').pop() || name;
@@ -3441,16 +3579,13 @@
       modelsCtaWrap = document.getElementById('models-cta-wrap');
       modelsFolderBtn = document.getElementById('models-folder-open');
       modelsProgressWrap = document.getElementById('models-progress-wrap');
+      modelsTotal = document.getElementById('models-total');
       modelsProgressBar = document.getElementById('models-progress-bar');
       modelsProgressMeta = document.getElementById('models-progress-meta');
       boostHarmoniesBackgroundSlider = document.getElementById('boost-harmonies-background-slider');
       boostHarmoniesBaseSlider = document.getElementById('boost-harmonies-base-slider');
       boostHarmoniesBackgroundValue = document.getElementById('boost-harmonies-background-value');
       boostHarmoniesBaseValue = document.getElementById('boost-harmonies-base-value');
-      boostGuitarOverlaySlider = document.getElementById('boost-guitar-overlay-slider');
-      boostGuitarBaseSlider = document.getElementById('boost-guitar-base-slider');
-      boostGuitarOverlayValue = document.getElementById('boost-guitar-overlay-value');
-      boostGuitarBaseValue = document.getElementById('boost-guitar-base-value');
       const closeBtn = document.getElementById('settings-close');
       const presetCloseBtn = document.getElementById('preset-settings-close');
       const forceBtn = document.getElementById('force-clear');
@@ -3491,8 +3626,6 @@
       [
         [boostHarmoniesBackgroundSlider, 'boost_harmonies_background_vocals_gain_db'],
         [boostHarmoniesBaseSlider, 'boost_harmonies_base_song_gain_db'],
-        [boostGuitarOverlaySlider, 'boost_guitar_guitar_gain_db'],
-        [boostGuitarBaseSlider, 'boost_guitar_base_song_gain_db'],
       ].forEach(([slider, key]) => {
         if(!slider) return;
         slider.addEventListener('input', () => {
@@ -3689,7 +3822,7 @@
       modeSwitcher.addEventListener('click', (event) => {
         const button = event.target.closest('.mode-switch-btn');
         if(!button) return;
-        const nextTab = button.dataset.tab || 'quality';
+        const nextTab = button.dataset.tab || 'single';
         if(nextTab === activeModeTab) return;
         activeModeTab = nextTab;
         ensureSelectionForActiveTab();
@@ -3792,6 +3925,12 @@
 
     function closeOverlay(overlay){
       if(!overlay || !overlay.parentNode) return;
+      if(Array.isArray(overlay.__cleanupFns)){
+        overlay.__cleanupFns.forEach((cleanup) => {
+          try { cleanup(); } catch(_) {}
+        });
+        overlay.__cleanupFns = [];
+      }
       if(overlay === activeHostClosedOverlay){
         activeHostClosedOverlay = null;
       }
@@ -3980,19 +4119,57 @@
     function renderModelChecklist(status){
       if(!modelsList) return;
       const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
+      const modelMap = new Map(
+        (Array.isArray(status && status.models) ? status.models : []).map((item) => [item.key, item])
+      );
+      let totalBytes = 0;
       modelsList.innerHTML = '';
       MODEL_CHECKLIST_ORDER.forEach((key) => {
-        const row = document.createElement('label');
+        const detail = modelMap.get(key) || null;
+        const row = document.createElement('div');
         const ready = !missing.has(key);
         row.className = `model-item${ready ? ' ready' : ''}`;
+        const main = document.createElement('div');
+        main.className = 'model-item-main';
         const box = document.createElement('span');
         box.className = 'model-state';
         box.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4L9 15"></path><path d="M21 19L3 19"></path><path d="M9 15L4 10"></path></svg>`;
+        const copy = document.createElement('span');
+        copy.className = 'model-item-copy';
         const label = document.createElement('span');
+        label.className = 'model-item-label';
         label.textContent = MODEL_LABELS[key] || key;
-        row.append(box, label);
+        copy.appendChild(label);
+        if(ready && detail && Number(detail.size_bytes) > 0){
+          totalBytes += Number(detail.size_bytes) || 0;
+          const size = document.createElement('span');
+          size.className = 'model-item-size';
+          size.textContent = formatBytes(detail.size_bytes);
+          copy.appendChild(size);
+        }
+        main.append(box, copy);
+        row.appendChild(main);
+        const repoUrl = MODEL_SOURCE_URLS[key];
+        if(repoUrl){
+          const actions = document.createElement('div');
+          actions.className = 'model-item-actions';
+          const repoLink = document.createElement('a');
+          repoLink.className = 'model-action-btn';
+          repoLink.href = repoUrl;
+          repoLink.target = '_blank';
+          repoLink.rel = 'noopener noreferrer';
+          repoLink.title = `open ${MODEL_LABELS[key] || key} page`;
+          repoLink.setAttribute('aria-label', `open ${MODEL_LABELS[key] || key} page`);
+          repoLink.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path></svg>`;
+          actions.appendChild(repoLink);
+          row.appendChild(actions);
+        }
         modelsList.appendChild(row);
       });
+      if(modelsTotal){
+        modelsTotal.textContent = totalBytes > 0 ? `total ${formatBytes(totalBytes)}` : '';
+        modelsTotal.hidden = totalBytes <= 0;
+      }
     }
 
     async function refreshRuntimeStatus({ showPortNotice = false } = {}){
@@ -4395,7 +4572,7 @@
         updateModelSettings({
           status: pct >= 100 ? 'done' : 'downloading',
           pct,
-          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : 'both (highest quality)'),
+          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : '6 stems'),
           downloaded_bytes: Math.round(totalBytes * (pct / 100)),
           total_bytes: Math.round(totalBytes),
           eta_seconds: pct >= 100 ? 0 : Math.max(0, Math.round((100 - pct) * 0.55)),
@@ -4475,7 +4652,7 @@
         modelsDownloadBtn.textContent = isError ? 'retry download' : 'download models';
       }
       if(modelsFolderBtn){
-        modelsFolderBtn.hidden = missing.length === 0 && !isError;
+        modelsFolderBtn.hidden = isLanClient;
       }
       if(modelsCtaWrap){
         const allChildrenHidden = Array.from(modelsCtaWrap.children).every((child) => child.hidden);
@@ -4634,6 +4811,7 @@
     function markTaskStopped(taskRef, ui){
       if(!taskRef || !ui) return;
       const {st, dl, stopPad, smooth, bar} = ui;
+      taskRef.stopRequested = false;
       taskRef.stage = 'stopped';
       taskRef.pct = 0;
       saveTasks();
@@ -4655,11 +4833,54 @@
       updateUI();
     }
 
+    function markTaskStopping(taskRef, ui){
+      if(!taskRef || !ui) return;
+      const {st, dl, stopPad} = ui;
+      taskRef.stopRequested = true;
+      taskRef.stage = 'stopping';
+      saveTasks();
+      if(st){
+        showStatus(st);
+        st.textContent = 'stopping';
+        st.classList.remove('hidden');
+      }
+      if(dl){
+        dl.classList.remove('show');
+      }
+      if(stopPad){
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        stopPad.title = 'rerun';
+        setRetryIcon(stopPad);
+        guardClick(stopPad, (ev) => {
+          ev.preventDefault();
+          showPopup('waiting for the current stop to finish');
+        });
+      }
+      if(ui.item){
+        applyRowState(ui.item, taskRef);
+      }
+      updateUI();
+    }
+
     async function requestStop(taskId, taskRef, ui){
       if(!taskId || !taskRef || !ui) return;
-      closeTaskStream(taskId);
-      markTaskStopped(taskRef, ui);
-      try{ await fetch('/stop/' + taskId, { method:'POST' }); }catch(_){ }
+      markTaskStopping(taskRef, ui);
+      try{
+        const res = await fetch('/stop/' + taskId, { method:'POST' });
+        if(res.ok){
+          const data = await res.json().catch(() => null);
+          if(data && data.status === 'stopped'){
+            markTaskStopped(taskRef, ui);
+          }
+        }else{
+          taskRef.stopRequested = false;
+          saveTasks();
+        }
+      }catch(_){
+        taskRef.stopRequested = false;
+        saveTasks();
+      }
     }
     function normalizeStemList(stems){
       return Array.isArray(stems) ? stems.map((item) => String(item || '').toLowerCase()).filter(Boolean) : [];
@@ -4857,11 +5078,11 @@
       if(selectedPresetMode === 'boost_harmonies'){
         return [['boost_harmonies']];
       }
-      if(selectedPresetMode === 'voc_instrum'){
-        return [['voc_instrum']];
+      if(selectedPresetMode === 'all_stems'){
+        return [['all_stems']];
       }
-      if(selectedPresetMode === 'boost_guitar'){
-        return [['boost_guitar']];
+      if(selectedPresetMode === 'denoise'){
+        return [['preset_denoise']];
       }
       const groups = [];
       const pushGroup = (modeKey, stems) => {
@@ -4871,18 +5092,15 @@
       };
       pushGroup('vocals', ['vocals']);
       pushGroup('instrumental', ['instrumental']);
-      pushGroup('both_deux', ['deux']);
       pushGroup('guitar', ['guitar']);
       pushGroup('mel_band_karaoke', ['mel_band_karaoke']);
       pushGroup('bs_roformer_6s', ['bs_roformer_6s']);
       pushGroup('htdemucs_ft_drums', ['htdemucs_ft_drums']);
       pushGroup('htdemucs_ft_bass', ['htdemucs_ft_bass']);
       pushGroup('htdemucs_ft_other', ['htdemucs_ft_other']);
-      pushGroup('htdemucs_ft_vocals', ['htdemucs_ft_vocals']);
       pushGroup('htdemucs_6s', ['htdemucs_6s']);
       pushGroup('drumsep_6s', ['drumsep_6s']);
       pushGroup('drumsep_4s', ['drumsep_4s']);
-      pushGroup('denoise', ['denoise']);
       return groups;
     }
 
@@ -5443,6 +5661,11 @@
           const rawStage = data.stage;
           const stage = rawStage === 'errored' ? 'error' : rawStage;
           const pct = data.pct;
+          const stopPending = !!(taskRef && taskRef.stopRequested);
+          const stopTerminal = stage === 'stopped' || stage === 'error' || stage === 'done';
+          if(stopPending && !stopTerminal){
+            return;
+          }
           if(taskRef){
             taskRef.stage = stage;
             taskRef.pct = pct;
@@ -5472,6 +5695,7 @@
           if(st){ showStatus(st); }
           if(stage === 'error'){
             if(taskRef){
+              taskRef.stopRequested = false;
               taskRef.stage = 'error';
               taskRef.pct = -1;
               saveTasks();
@@ -5504,6 +5728,9 @@
           }
           if(stage === 'done'){
             const hasRemainingGroupTasks = !!(taskRef && groupHasRemainingTasks(taskRef, taskId));
+            if(taskRef){
+              taskRef.stopRequested = false;
+            }
             smooth.setTarget(100);
             dropPendingById(taskId);
             es.close();
@@ -5545,7 +5772,12 @@
             updateUI(); return;
           }
           if (stage === 'stopped') {
-            if (taskRef) { taskRef.stage = 'stopped'; taskRef.pct = 0; saveTasks(); }
+            if (taskRef) {
+              taskRef.stopRequested = false;
+              taskRef.stage = 'stopped';
+              taskRef.pct = 0;
+              saveTasks();
+            }
             showStatus(st);
             st.textContent = 'stopped';
             st.classList.remove('hidden');
@@ -5609,6 +5841,7 @@
             errMsg = errPayload.message || (errPayload.detail && errPayload.detail.message);
           }
           if (taskRef) {
+            taskRef.stopRequested = false;
             taskRef.stage = 'error';
             taskRef.pct = -1;
             saveTasks();
@@ -5645,10 +5878,15 @@
           }
           updateUI();
         });
-              }catch(e){
+      }catch(e){
         showStatus(st);
         st.textContent = 'error';
-        if(taskRef){ taskRef.stage = 'error'; taskRef.pct = -1; saveTasks(); }
+        if(taskRef){
+          taskRef.stopRequested = false;
+          taskRef.stage = 'error';
+          taskRef.pct = -1;
+          saveTasks();
+        }
         updateUI();
       }
     }
@@ -5718,6 +5956,7 @@
           <div class="space-y-2">
             <div class="text-sm opacity-80">models</div>
             <div id="models-list" class="model-list"></div>
+            <div id="models-total" class="model-total" hidden></div>
             <div id="models-note" class="model-note" hidden></div>
             <div id="models-progress-wrap" class="space-y-2" hidden>
               <div class="bar"><div id="models-progress-bar" class="bar-fill"></div></div>
@@ -5808,35 +6047,6 @@
               <div class="preset-slider-row">
                 <span class="preset-slider-bound">-18</span>
                 <input id="boost-harmonies-base-slider" class="preset-range" type="range" min="-18" max="18" step="0.5" value="-3">
-                <span class="preset-slider-bound">+18</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="preset-slider-shell">
-          <div class="preset-slider-topline">
-            <div class="preset-slider-label">boost guitar</div>
-          </div>
-          <div class="preset-slider-stack">
-            <div class="preset-slider-block">
-              <div class="preset-slider-topline">
-                <div class="preset-slider-label">guitar</div>
-                <div id="boost-guitar-overlay-value" class="preset-slider-value">+3.0 dB</div>
-              </div>
-              <div class="preset-slider-row">
-                <span class="preset-slider-bound">-18</span>
-                <input id="boost-guitar-overlay-slider" class="preset-range" type="range" min="-18" max="18" step="0.5" value="3">
-                <span class="preset-slider-bound">+18</span>
-              </div>
-            </div>
-            <div class="preset-slider-block">
-              <div class="preset-slider-topline">
-                <div class="preset-slider-label">base song</div>
-                <div id="boost-guitar-base-value" class="preset-slider-value">-3.0 dB</div>
-              </div>
-              <div class="preset-slider-row">
-                <span class="preset-slider-bound">-18</span>
-                <input id="boost-guitar-base-slider" class="preset-range" type="range" min="-18" max="18" step="0.5" value="-3">
                 <span class="preset-slider-bound">+18</span>
               </div>
             </div>

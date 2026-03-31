@@ -76,12 +76,6 @@ FILES = [
         "tag": "htdemucs_ft_other",
     },
     {
-        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
-        "subdir": "models",
-        "filename": "04573f0d-f3cf25b2.th",
-        "tag": "htdemucs_ft_vocals",
-    },
-    {
         "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
         "subdir": "models",
         "filename": "5c90dfd2-34c22ccb.th",

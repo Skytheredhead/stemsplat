@@ -977,6 +977,18 @@ BOOST_HARMONIES_VOCALS_END_PCT = 44
 BOOST_HARMONIES_BACKGROUND_START_PCT = 48
 BOOST_HARMONIES_BACKGROUND_END_PCT = 92
 BOOST_GUITAR_MODEL_END_PCT = 92
+OTHER_FILTER_GUITAR_END_PCT = 44
+OTHER_FILTER_OTHER_START_PCT = 48
+OTHER_FILTER_OTHER_END_PCT = 92
+ALL_STEMS_VOCALS_END_PCT = 20
+ALL_STEMS_INSTRUMENTAL_START_PCT = 22
+ALL_STEMS_INSTRUMENTAL_END_PCT = 36
+ALL_STEMS_BACKGROUND_START_PCT = 38
+ALL_STEMS_BACKGROUND_END_PCT = 52
+ALL_STEMS_MULTI_START_PCT = 54
+ALL_STEMS_MULTI_END_PCT = 76
+ALL_STEMS_DRUMS_START_PCT = 78
+ALL_STEMS_DRUMS_END_PCT = 92
 INTERMEDIATE_CACHE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 COMPAT_SETTINGS_DEFAULTS = {
     "output_format": "same_as_input",
@@ -1074,14 +1086,6 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         kind="demucs",
         target="other",
     ),
-    "htdemucs_ft_vocals": ModelSpec(
-        filename="04573f0d-f3cf25b2.th",
-        config="config_musdb18_htdemucs.yaml",
-        segment=485_100,
-        overlap=4,
-        kind="demucs",
-        target="vocals",
-    ),
     "htdemucs_6s": ModelSpec(
         filename="5c90dfd2-34c22ccb.th",
         config="config_htdemucs_6stems.yaml",
@@ -1126,7 +1130,6 @@ MODEL_URLS = {
     "htdemucs_ft_drums": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
     "htdemucs_ft_bass": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
     "htdemucs_ft_other": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
-    "htdemucs_ft_vocals": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
     "htdemucs_6s": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
     "drumsep_6s": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
     "drumsep_4s": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
@@ -1139,13 +1142,12 @@ MODEL_DISPLAY_NAMES = {
     "mel_band_karaoke": "karaoke",
     "denoise": "denoise",
     "bs_roformer_6s": "6 stems",
-    "htdemucs_ft_drums": "htdemucs4 ft drums",
-    "htdemucs_ft_bass": "htdemucs4 ft bass",
-    "htdemucs_ft_other": "htdemucs4 ft other",
-    "htdemucs_ft_vocals": "htdemucs4 ft vocals",
-    "htdemucs_6s": "htdemucs4 (6 stem)",
-    "drumsep_6s": "drumsep (6 stem)",
-    "drumsep_4s": "drum sep (4 stem)",
+    "htdemucs_ft_drums": "drums",
+    "htdemucs_ft_bass": "bass",
+    "htdemucs_ft_other": "other",
+    "htdemucs_6s": "6 stems faster",
+    "drumsep_6s": "drums 6 stems",
+    "drumsep_4s": "drums 4 stems",
 }
 MODE_TO_STEMS = {
     "vocals": ("vocals",),
@@ -1159,14 +1161,14 @@ MODE_TO_STEMS = {
     "htdemucs_ft_drums": ("htdemucs_ft_drums",),
     "htdemucs_ft_bass": ("htdemucs_ft_bass",),
     "htdemucs_ft_other": ("htdemucs_ft_other",),
-    "htdemucs_ft_vocals": ("htdemucs_ft_vocals",),
     "htdemucs_6s": ("htdemucs_6s",),
     "drumsep_6s": ("drumsep_6s",),
     "drumsep_4s": ("drumsep_4s",),
+    "preset_all_stems": ("all_stems",),
     "preset_voc_instrum": ("voc_instrum",),
     "preset_boost_harmonies": ("boost_harmonies",),
     "preset_boost_guitar": ("boost_guitar",),
-    "preset_denoise": ("denoise",),
+    "preset_denoise": ("preset_denoise",),
 }
 MODE_REQUIRED_MODELS = {
     "vocals": ("vocals",),
@@ -1179,11 +1181,11 @@ MODE_REQUIRED_MODELS = {
     "bs_roformer_6s": ("bs_roformer_6s",),
     "htdemucs_ft_drums": ("htdemucs_ft_drums",),
     "htdemucs_ft_bass": ("htdemucs_ft_bass",),
-    "htdemucs_ft_other": ("htdemucs_ft_other",),
-    "htdemucs_ft_vocals": ("htdemucs_ft_vocals",),
+    "htdemucs_ft_other": ("guitar", "htdemucs_ft_other"),
     "htdemucs_6s": ("htdemucs_6s",),
     "drumsep_6s": ("drumsep_6s",),
     "drumsep_4s": ("drumsep_4s",),
+    "preset_all_stems": ("vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "drumsep_6s"),
     "preset_voc_instrum": ("vocals", "instrumental"),
     "preset_boost_harmonies": ("vocals", "mel_band_karaoke"),
     "preset_boost_guitar": ("guitar",),
@@ -1201,10 +1203,10 @@ MODE_OUTPUT_LABELS = {
     "htdemucs_ft_drums": ("drums",),
     "htdemucs_ft_bass": ("bass",),
     "htdemucs_ft_other": ("other",),
-    "htdemucs_ft_vocals": ("vocals",),
     "htdemucs_6s": ("drums", "bass", "other", "vocals", "guitar", "piano"),
     "drumsep_6s": ("kick", "snare", "toms", "hh", "ride", "crash"),
     "drumsep_4s": ("kick", "snare", "cymbals", "toms"),
+    "preset_all_stems": ("vocals", "background vocals", "bass", "drums", "other", "guitar", "piano", "kick", "snare", "toms", "hh", "ride", "crash"),
     "preset_voc_instrum": ("vocals", "instrumental"),
     "preset_boost_harmonies": ("boost harmonies",),
     "preset_boost_guitar": ("boost guitar",),
@@ -3113,7 +3115,6 @@ def _stage_model_key(stage_text: str) -> str | None:
         "running htdemucs4 ft drums model": "htdemucs_ft_drums",
         "running htdemucs4 ft bass model": "htdemucs_ft_bass",
         "running htdemucs4 ft other model": "htdemucs_ft_other",
-        "running htdemucs4 ft vocals model": "htdemucs_ft_vocals",
         "running htdemucs4 6 stem model": "htdemucs_6s",
         "running drumsep 6 stem model": "drumsep_6s",
         "running drum sep 4 stem model": "drumsep_4s",
@@ -3140,12 +3141,16 @@ def _runtime_stage_key_for_display(stage_text: str) -> str | None:
 def _runtime_model_sequence(mode: str) -> list[str]:
     if mode in {"vocals", "instrumental", "deux", "guitar", "mel_band_karaoke", "denoise", "bs_roformer_6s"}:
         return [mode]
-    if mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_ft_other", "htdemucs_ft_vocals", "htdemucs_6s"}:
+    if mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_6s"}:
         return [mode]
+    if mode == "htdemucs_ft_other":
+        return ["guitar", "htdemucs_ft_other"]
     if mode in {"drumsep_6s", "drumsep_4s"}:
         return [mode]
     if mode == "both_deux":
         return ["deux"]
+    if mode == "preset_all_stems":
+        return ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "drumsep_6s"]
     if mode in {"both_separate", "preset_voc_instrum"}:
         return ["vocals", "instrumental"]
     if mode == "preset_boost_harmonies":
@@ -3576,6 +3581,8 @@ app.state.runtime_status_provider = None
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
 task_queue: queue.Queue[str] = queue.Queue()
+queue_resume_event = threading.Event()
+queue_resume_event.set()
 previous_files_lock = threading.RLock()
 previous_files_index: list[dict[str, Any]] = _load_previous_files_index()
 model_download_lock = threading.RLock()
@@ -4168,12 +4175,18 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         if mode == "preset_boost_harmonies":
             span = max(1, BOOST_HARMONIES_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
+        if mode == "preset_all_stems":
+            span = max(1, ALL_STEMS_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
+            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if stage_model == "instrumental":
         if mode in {"both_separate", "preset_voc_instrum"}:
             span = max(1, BOTH_SEPARATE_INSTRUMENTAL_END_PCT - BOTH_SEPARATE_INSTRUMENTAL_START_PCT)
             return max(0.0, min(1.0, (clamped - BOTH_SEPARATE_INSTRUMENTAL_START_PCT) / span))
+        if mode == "preset_all_stems":
+            span = max(1, ALL_STEMS_INSTRUMENTAL_END_PCT - ALL_STEMS_INSTRUMENTAL_START_PCT)
+            return max(0.0, min(1.0, (clamped - ALL_STEMS_INSTRUMENTAL_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if stage_model in {
@@ -4185,14 +4198,28 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         "htdemucs_ft_drums",
         "htdemucs_ft_bass",
         "htdemucs_ft_other",
-        "htdemucs_ft_vocals",
         "htdemucs_6s",
         "drumsep_6s",
         "drumsep_4s",
     }:
+        if mode == "htdemucs_ft_other" and stage_model == "guitar":
+            span = max(1, OTHER_FILTER_GUITAR_END_PCT - MODEL_PROGRESS_START_PCT)
+            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
+        if mode == "htdemucs_ft_other" and stage_model == "htdemucs_ft_other":
+            span = max(1, OTHER_FILTER_OTHER_END_PCT - OTHER_FILTER_OTHER_START_PCT)
+            return max(0.0, min(1.0, (clamped - OTHER_FILTER_OTHER_START_PCT) / span))
         if mode == "preset_boost_harmonies" and stage_model == "mel_band_karaoke":
             span = max(1, BOOST_HARMONIES_BACKGROUND_END_PCT - BOOST_HARMONIES_BACKGROUND_START_PCT)
             return max(0.0, min(1.0, (clamped - BOOST_HARMONIES_BACKGROUND_START_PCT) / span))
+        if mode == "preset_all_stems" and stage_model == "mel_band_karaoke":
+            span = max(1, ALL_STEMS_BACKGROUND_END_PCT - ALL_STEMS_BACKGROUND_START_PCT)
+            return max(0.0, min(1.0, (clamped - ALL_STEMS_BACKGROUND_START_PCT) / span))
+        if mode == "preset_all_stems" and stage_model == "bs_roformer_6s":
+            span = max(1, ALL_STEMS_MULTI_END_PCT - ALL_STEMS_MULTI_START_PCT)
+            return max(0.0, min(1.0, (clamped - ALL_STEMS_MULTI_START_PCT) / span))
+        if mode == "preset_all_stems" and stage_model == "drumsep_6s":
+            span = max(1, ALL_STEMS_DRUMS_END_PCT - ALL_STEMS_DRUMS_START_PCT)
+            return max(0.0, min(1.0, (clamped - ALL_STEMS_DRUMS_START_PCT) / span))
         span = max(1, DEUX_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if "exporting" in stage:
@@ -4518,7 +4545,20 @@ def _mark_task_stopped(task_id: str) -> None:
     _prune_terminal_tasks()
 
 
+def _pause_queue_processing() -> None:
+    queue_resume_event.clear()
+
+
+def _resume_queue_processing() -> None:
+    queue_resume_event.set()
+
+
+def _queue_processing_paused() -> bool:
+    return not queue_resume_event.is_set()
+
+
 def _request_task_stop(task_id: str) -> None:
+    _pause_queue_processing()
     should_forget = False
     should_prune = False
     with tasks_lock:
@@ -4614,6 +4654,7 @@ def _stop_all_tasks() -> list[str]:
                 task["eta_finish_at"] = None
                 task["eta_stage"] = None
             task["version"] += 1
+    _resume_queue_processing()
     return task_ids
 
 
@@ -4629,6 +4670,9 @@ def _restart_task_payload(
     prioritize: bool = False,
 ) -> dict[str, Any]:
     old_task = _require_task(task_id)
+    old_status = str(old_task.get("status") or "")
+    if old_status in {"queued", "running"}:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
     source_path = Path(old_task["source_path"])
     if not source_path.exists():
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
@@ -5450,7 +5494,7 @@ def _process_task(task_id: str) -> None:
                 raise AppError(ErrorCode.SEPARATION_FAILED, "6-stem model returned incomplete output.")
             for label, tensor in zip(expected_labels, bs_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_ft_other", "htdemucs_ft_vocals"}:
+        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass"}:
             fast_model = manager.get(mode)
             fast_started_at = time.time()
             fast_pred = _run_model_for_spec(
@@ -5470,6 +5514,45 @@ def _process_task(task_id: str) -> None:
                 work_dir,
                 MODE_OUTPUT_LABELS[mode][0],
                 _extract_target_tensor(mode, fast_model, fast_pred),
+            )
+        elif mode == "htdemucs_ft_other":
+            guitar_model = manager.get("guitar")
+            filtered_other_model = manager.get("htdemucs_ft_other")
+
+            guitar_started_at = time.time()
+            guitar_pred = _run_model_for_spec(
+                "guitar",
+                guitar_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running guitar model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, OTHER_FILTER_GUITAR_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
+            guitar_tensor = guitar_pred[0]
+            non_guitar_waveform = _residual_output(waveform, guitar_tensor)
+
+            filtered_other_started_at = time.time()
+            filtered_other_pred = _run_model_for_spec(
+                "htdemucs_ft_other",
+                filtered_other_model,
+                non_guitar_waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    f"Running {MODEL_DISPLAY_NAMES['htdemucs_ft_other']} model",
+                    _map_fraction(OTHER_FILTER_OTHER_START_PCT, OTHER_FILTER_OTHER_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("htdemucs_ft_other", audio_seconds, time.time() - filtered_other_started_at)
+            _append_named_output(
+                temp_outputs,
+                work_dir,
+                "other",
+                _extract_target_tensor("htdemucs_ft_other", filtered_other_model, filtered_other_pred),
             )
         elif mode == "htdemucs_6s":
             htdemucs_6s_model = manager.get("htdemucs_6s")
@@ -5521,6 +5604,108 @@ def _process_task(task_id: str) -> None:
             )
             _record_eta_sample("drumsep_4s", audio_seconds, time.time() - drumsep_4s_started_at)
             for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_4s"], drumsep_4s_pred, strict=False):
+                _append_named_output(temp_outputs, work_dir, label, tensor)
+        elif mode == "preset_all_stems":
+            vocals_model = manager.get("vocals")
+            instrumental_model = manager.get("instrumental")
+            karaoke_model = manager.get("mel_band_karaoke")
+            bs_6s_model = manager.get("bs_roformer_6s")
+            drumsep_6s_model = manager.get("drumsep_6s")
+
+            vocals_started_at = time.time()
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                MODEL_SPECS["vocals"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running vocals model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, ALL_STEMS_VOCALS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
+            vocals_tensor = vocals_pred[0]
+
+            instrumental_started_at = time.time()
+            instrumental_pred = _run_model_chunks(
+                instrumental_model,
+                waveform,
+                MODEL_SPECS["instrumental"].segment,
+                MODEL_SPECS["instrumental"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running instrumental model",
+                    _map_fraction(ALL_STEMS_INSTRUMENTAL_START_PCT, ALL_STEMS_INSTRUMENTAL_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
+            instrumental_tensor = instrumental_pred[0]
+
+            background_started_at = time.time()
+            background_pred = _run_model_for_spec(
+                "mel_band_karaoke",
+                karaoke_model,
+                vocals_tensor,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running harmony background model",
+                    _map_fraction(ALL_STEMS_BACKGROUND_START_PCT, ALL_STEMS_BACKGROUND_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - background_started_at)
+            lead_vocals_tensor = background_pred[0]
+            background_vocals_tensor = (
+                background_pred[1]
+                if background_pred.shape[0] > 1
+                else _residual_output(vocals_tensor, background_pred[0])
+            )
+            _append_named_output(temp_outputs, work_dir, "vocals", lead_vocals_tensor)
+            _append_named_output(temp_outputs, work_dir, "background vocals", background_vocals_tensor)
+
+            bs_6s_started_at = time.time()
+            bs_6s_pred = _run_model_for_spec(
+                "bs_roformer_6s",
+                bs_6s_model,
+                instrumental_tensor,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running 6 stems model",
+                    _map_fraction(ALL_STEMS_MULTI_START_PCT, ALL_STEMS_MULTI_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("bs_roformer_6s", audio_seconds, time.time() - bs_6s_started_at)
+            bs_outputs = {
+                label: tensor
+                for label, tensor in zip(MODE_OUTPUT_LABELS["bs_roformer_6s"], bs_6s_pred, strict=False)
+            }
+            for label in ("bass", "drums", "other", "guitar", "piano"):
+                tensor = bs_outputs.get(label)
+                if tensor is not None:
+                    _append_named_output(temp_outputs, work_dir, label, tensor)
+
+            drums_tensor = bs_outputs.get("drums")
+            if drums_tensor is None:
+                raise AppError(ErrorCode.SEPARATION_FAILED, "6-stem model did not return a drums stem.")
+
+            drumsep_6s_started_at = time.time()
+            drumsep_6s_pred = _run_model_for_spec(
+                "drumsep_6s",
+                drumsep_6s_model,
+                drums_tensor,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running drumsep 6 stem model",
+                    _map_fraction(ALL_STEMS_DRUMS_START_PCT, ALL_STEMS_DRUMS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("drumsep_6s", audio_seconds, time.time() - drumsep_6s_started_at)
+            for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_6s"], drumsep_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
         else:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
@@ -5586,9 +5771,19 @@ def _process_task(task_id: str) -> None:
         _safe_mps_empty_cache()
 
 
+def _next_task_id_for_worker() -> str:
+    while True:
+        queue_resume_event.wait()
+        task_id = task_queue.get()
+        if not _queue_processing_paused():
+            return task_id
+        _queue_task(task_id, front=True)
+        task_queue.task_done()
+
+
 def _task_worker() -> None:
     while True:
-        task_id = task_queue.get()
+        task_id = _next_task_id_for_worker()
         try:
             _process_task(task_id)
         finally:
@@ -6022,7 +6217,7 @@ async def retry_task(task_id: str, request: Request):
     multi_stem_export = body.get("multi_stem_export")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
-    prioritize = bool(body.get("prioritize"))
+    prioritize = True if "prioritize" not in body else bool(body.get("prioritize"))
     output_same_as_input = body.get("output_same_as_input")
     try:
         payload = _restart_task_payload(
@@ -6039,6 +6234,7 @@ async def retry_task(task_id: str, request: Request):
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
+    _resume_queue_processing()
     return _public_task(payload)
 
 
@@ -6444,6 +6640,7 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
                     else None,
                 )
         task = _enqueue_task(task_id)
+        _resume_queue_processing()
         return _compat_public_task(task)
     except AppError as exc:
         raise exc.to_http(404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400)
@@ -6510,7 +6707,7 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
     output_format = body.get("output_format")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
-    prioritize = bool(body.get("prioritize"))
+    prioritize = True if "prioritize" not in body else bool(body.get("prioritize"))
     output_same_as_input = body.get("output_same_as_input")
     try:
         payload = _restart_task_payload(
@@ -6524,6 +6721,7 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
+    _resume_queue_processing()
     return _compat_public_task(payload)
 
 
