@@ -937,6 +937,23 @@
       gap: 16px;
       align-items: stretch;
     }
+    .upload-column {
+      flex: 1;
+      max-width: 580px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: stretch;
+    }
+    .bottom-left-controls {
+      position: fixed;
+      left: 28px;
+      bottom: 26px;
+      z-index: 38;
+      display: flex;
+      gap: 16px;
+      align-items: stretch;
+    }
     .action-square-btn {
       width: 88px;
       min-width: 88px;
@@ -1097,7 +1114,7 @@
       position:fixed;
       left:0;
       right:0;
-      height:96px;
+      height:132px;
       opacity:0;
       transition:opacity .45s ease;
     }
@@ -1105,9 +1122,11 @@
       top:0;
       bottom:auto;
       transform:none;
-      background: linear-gradient(to bottom, rgba(7,12,16,.18), rgba(7,12,16,.08) 54%, transparent 100%);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
+      background: linear-gradient(to bottom, rgba(7,12,16,.10) 0%, rgba(7,12,16,.05) 34%, rgba(7,12,16,.015) 62%, transparent 100%);
+      backdrop-filter: blur(16px) saturate(104%);
+      -webkit-backdrop-filter: blur(16px) saturate(104%);
+      -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.98) 0%, rgba(0,0,0,.82) 30%, rgba(0,0,0,.38) 62%, transparent 100%);
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,.98) 0%, rgba(0,0,0,.82) 30%, rgba(0,0,0,.38) 62%, transparent 100%);
     }
     #bot-vig{
       top:auto;
@@ -1195,12 +1214,14 @@
   <h1 id="title" class="text-6xl md:text-7xl font-light text-[var(--txt-main)] select-none tracking-tight">stemsplat</h1>
   <!-- controls -->
   <div id="primary-controls" class="w-11/12 max-w-[1000px] flex items-start gap-6">
-    <div id="dropzone" class="glass pre-hide relative flex-1 max-w-[680px] min-h-[392px] px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
-      </svg>
-      <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
-      <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,.mp4,.m4v,.mov,.webm,.mkv,.avi,audio/*,video/*" multiple aria-label="choose media files" class="sr-only" />
+    <div class="upload-column">
+      <div id="dropzone" class="glass pre-hide relative w-full min-h-[392px] px-10 py-14 rounded-3xl text-center fade-in flex flex-col items-center justify-center gap-6 cursor-pointer transition-transform duration-200 hover:scale-105" role="button" tabindex="0">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14 stroke-[var(--icon)]" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z" />
+        </svg>
+        <p class="text-lg text-[var(--txt-main)]">drag audio here <br>or click to choose files</p>
+        <input id="file-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,.mp4,.m4v,.mov,.webm,.mkv,.avi,audio/*,video/*" multiple aria-label="choose media files" class="sr-only" />
+      </div>
     </div>
     <div id="action-column" class="flex flex-col gap-4 w-[272px]">
       <div id="mode-switcher" class="pre-hide fade-in mode-switcher glass">
@@ -1227,22 +1248,12 @@
         <p id="modes-card-title" class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <div id="mode-choices" class="flex flex-col gap-2"></div>
       </div>
-      <div class="action-row">
-        <button id="history-btn" data-tooltip="previous files" class="glass pre-hide action-square-btn fade-in focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
+      <button id="start-btn" data-tooltip="start queue" class="glass-light pre-hide w-full px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
           <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-            <path d="M14 3v6h6"></path>
-            <path d="M8 13h8"></path>
-            <path d="M8 17h5"></path>
-          </svg>
-        </button>
-        <button id="start-btn" data-tooltip="start queue" class="glass-light pre-hide flex-1 px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
-            <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 5v14l11-7z"/>
-          </svg>
-          <span class="btn-title mt-1 text-sm font-semibold">start</span>
-        </button>
-      </div>
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        <span class="btn-title mt-1 text-sm font-semibold">start</span>
+      </button>
     </div>
   </div>
 
@@ -1251,12 +1262,22 @@
   <div id="queue-spacer" class="w-11/12 max-w-2xl"></div>
   <button id="clear-btn" class="pre-hide mt-4 text-white underline">clear all</button>
   <div id="queue-bottom-pad" class="w-11/12 max-w-2xl"></div>
-  <button id="settings-btn" data-tooltip="settings" title="settings" class="glass pre-hide action-square-btn floating-settings-btn fade-in focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
-    <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3"></circle>
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82h0c.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
-    </svg>
-  </button>
+  <div class="bottom-left-controls">
+    <button id="settings-btn" data-tooltip="settings" title="settings" class="glass pre-hide action-square-btn fade-in focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
+      <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82h0c.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
+      </svg>
+    </button>
+    <button id="history-btn" data-tooltip="previous files" class="glass pre-hide action-square-btn fade-in focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer">
+      <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+        <path d="M14 3v6h6"></path>
+        <path d="M8 13h8"></path>
+        <path d="M8 17h5"></path>
+      </svg>
+    </button>
+  </div>
   </main>
   <div id="top-vig"></div>
   <div id="bot-vig"></div>
@@ -1622,6 +1643,7 @@
     let modesCardHeightTimer = null;
     let selectedStemModes = new Set(['vocals']);
     let selectedPresetMode = null;
+    let lastStemSelectionAnchor = 'vocals';
     let settingsState = {
       output_root: '',
       structure_mode: 'flat',
@@ -1685,9 +1707,46 @@
       selectedPresetMode = null;
       if(modeKey === 'both_separate'){
         selectedStemModes = new Set(['vocals', 'instrumental']);
+        lastStemSelectionAnchor = 'instrumental';
       }else{
         selectedStemModes = new Set([modeKey]);
+        lastStemSelectionAnchor = modeKey;
       }
+    }
+
+    function visibleStemModeIdsForTab(tabKey = activeModeTab){
+      return (MODE_TAB_OPTIONS[tabKey] || [])
+        .filter((option) => option.kind === 'stem')
+        .map((option) => option.id);
+    }
+
+    function stemSelectionAnchorForTab(tabKey = activeModeTab){
+      const visibleModeIds = visibleStemModeIdsForTab(tabKey);
+      if(visibleModeIds.includes(lastStemSelectionAnchor)){
+        return lastStemSelectionAnchor;
+      }
+      return visibleModeIds.find((modeId) => selectedStemModes.has(modeId)) || visibleModeIds[0] || null;
+    }
+
+    function selectStemModeRange(modeKey){
+      if(!modeKey) return;
+      const visibleModeIds = visibleStemModeIdsForTab();
+      const targetIndex = visibleModeIds.indexOf(modeKey);
+      if(targetIndex === -1){
+        setSelectionForModeKey(modeKey);
+        return;
+      }
+      const anchorMode = stemSelectionAnchorForTab();
+      const anchorIndex = anchorMode ? visibleModeIds.indexOf(anchorMode) : -1;
+      if(anchorIndex === -1){
+        setSelectionForModeKey(modeKey);
+        return;
+      }
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      selectedPresetMode = null;
+      selectedStemModes = new Set(visibleModeIds.slice(start, end + 1));
+      lastStemSelectionAnchor = modeKey;
     }
 
     function ensureSelectionForActiveTab(){
@@ -1728,6 +1787,7 @@
         next.add(modeKey);
       }
       selectedStemModes = next;
+      lastStemSelectionAnchor = modeKey;
     }
 
     function positionModeSwitcherPill(){
@@ -3163,13 +3223,26 @@
       return remain ? `${hours}h ${remain}m` : `${hours}h`;
     }
 
-    function formatProgressChip(pct, etaSeconds){
+    function formatProgressChip(pct, etaSeconds, etaState){
       const clamped = Math.round(Math.max(0, Math.min(100, Number(pct) || 0)));
       const eta = formatEta(etaSeconds);
-      if(!eta && (queueStarted || startPressed)){
-        return `${clamped}% • ${clamped >= 92 ? 'finishing up' : 'estimating'}`;
+      const state = String(etaState || '').toLowerCase();
+      if(eta){
+        return `${clamped}% • ${eta}`;
       }
-      return eta ? `${clamped}% • ${eta}` : `${clamped}%`;
+      if(state === 'finishing'){
+        return `${clamped}% • finishing`;
+      }
+      if(state === 'steady' && (queueStarted || startPressed)){
+        return `${clamped}% • estimating`;
+      }
+      if(state === 'calibrating'){
+        return `${clamped}% • calibrating`;
+      }
+      if(state === 'estimating' && (queueStarted || startPressed)){
+        return `${clamped}% • estimating`;
+      }
+      return `${clamped}%`;
     }
 
     function shouldUseProgressSummary(stage){
@@ -3255,7 +3328,7 @@
       topVig.style.top = '0px';
       topVig.style.bottom = 'auto';
       topVig.style.transform = 'none';
-      topVig.style.opacity = appShell.scrollTop > 0 ? '0.68' : '0';
+      topVig.style.opacity = appShell.scrollTop > 0 ? '0.56' : '0';
       botVig.style.opacity = rect.bottom > shellRect.bottom ? '1' : '0';
     }
 
@@ -3603,6 +3676,14 @@
     }
 
     function createItem(task){
+      const existing = task && task.tempKey ? Array.from(queue.children).find((row) => row.__tempKey === task.tempKey) : null;
+      if(existing){
+        applyLabels(existing.querySelector('.labels'), displayStemsForTask(task));
+        applyRowState(existing, task);
+        ensureTaskProgressTracking(task);
+        updateUI();
+        return taskUiForRow(existing);
+      }
       const node = template.content.cloneNode(true);
       const li   = node.querySelector('.filename');
       const bar  = node.querySelector('.bar-fill');
@@ -3659,7 +3740,7 @@
           st.textContent = displayStage(task.stage) || 'queued';
           smooth.setImmediate(0);
         }else{
-          st.textContent = formatProgressChip(sp, task.eta_seconds);
+          st.textContent = formatProgressChip(sp, task.eta_seconds, task.eta_state);
           if(normalizedStage === 'ready' || normalizedStage === 'queued'){
             smooth.setImmediate(0);
           }else{
@@ -3699,7 +3780,7 @@
         inserted.classList.add('enter-active');
       });
       // Apply any stem labels if present
-      applyLabels(inserted.querySelector('.labels'), task.stems);
+      applyLabels(inserted.querySelector('.labels'), displayStemsForTask(task));
       applyRowState(inserted, task);
       ensureTaskProgressTracking(task);
       updateUI();
@@ -4008,6 +4089,11 @@
           closeLanTtlMenu();
           closePreviousFilesRetentionMenu();
           closePresetSettings();
+          return;
+        }
+        if(shouldHandleStartShortcut(event)){
+          event.preventDefault();
+          void startSequentialProcessing();
         }
       });
       if(outputSameAsInput){
@@ -4276,7 +4362,11 @@
           return;
         }
         const nextMode = button.dataset.mode || 'vocals';
-        toggleStemModeSelection(nextMode, !!(event.metaKey || event.ctrlKey || event.shiftKey));
+        if(event.shiftKey){
+          selectStemModeRange(nextMode);
+        }else{
+          toggleStemModeSelection(nextMode, !!(event.metaKey || event.ctrlKey));
+        }
         updateModeChoiceUI();
         Promise.resolve(syncQueuedStemSelection()).catch(() => {});
       });
@@ -4986,6 +5076,7 @@
         downloaded_bytes: 0,
         total_bytes: 0,
         eta_seconds: null,
+        eta_state: null,
         missing: list,
       });
       await startModelDownload(list.length ? list : null);
@@ -5040,6 +5131,7 @@
         downloaded_bytes: 0,
         total_bytes: 0,
         eta_seconds: null,
+        eta_state: null,
         error: '',
         missing: MODEL_CHECKLIST_ORDER,
       });
@@ -5455,6 +5547,12 @@
     function normalizeStemList(stems){
       return Array.isArray(stems) ? stems.map((item) => String(item || '').toLowerCase()).filter(Boolean) : [];
     }
+    function displayStemsForTask(task){
+      if(task && Array.isArray(task.groupStems) && task.groupStems.length){
+        return task.groupStems;
+      }
+      return Array.isArray(task && task.stems) ? task.stems : [];
+    }
     function stemsMatch(a, b){
       const left = normalizeStemList(a);
       const right = normalizeStemList(b);
@@ -5509,8 +5607,12 @@
     }
     function dropPendingByTempKey(tempKey){
       if(!tempKey) return;
-      const idx = pendingItems.findIndex(p => p && p.tempKey === tempKey);
-      if(idx >= 0) pendingItems.splice(idx,1);
+      for(let index = pendingItems.length - 1; index >= 0; index -= 1){
+        const pending = pendingItems[index];
+        if(pending && pending.tempKey === tempKey){
+          pendingItems.splice(index, 1);
+        }
+      }
     }
     function getTaskById(id){
       return tasks.find(t => t && t.id === id);
@@ -5518,7 +5620,19 @@
 
     function getTaskByTempKey(tempKey){
       if(!tempKey) return null;
-      return tasks.find(t => t && t.tempKey === tempKey);
+      return tasks.find(t => t && t.tempKey === tempKey && !isFinished(t) && String(t.stage || '').toLowerCase() !== 'error')
+        || tasks.find(t => t && t.tempKey === tempKey)
+        || null;
+    }
+
+    function groupHasRemainingTasks(task, excludeTaskId = null){
+      if(!task || !task.tempKey) return false;
+      return tasks.some((candidate) => {
+        if(!candidate || candidate.tempKey !== task.tempKey) return false;
+        if(excludeTaskId && candidate.id === excludeTaskId) return false;
+        const stage = String(candidate.stage || '').toLowerCase();
+        return !(candidate.pct >= 100 || stage === 'stopped' || stage === 'error');
+      });
     }
 
     function failPendingUpload(pending, message){
@@ -5667,6 +5781,31 @@
       return stems;
     }
 
+    function hasQueuedUploadReadyToStart(){
+      if(pendingItems.some((pending) => !!pending)) return true;
+      return tasks.some((task) => {
+        if(!task || isFinished(task)) return false;
+        return String(task.stage || '').toLowerCase() !== 'error';
+      });
+    }
+
+    function hasOpenBlockingOverlay(){
+      if(settingsOverlay && !settingsOverlay.classList.contains('hidden')) return true;
+      if(presetSettingsOverlay && !presetSettingsOverlay.classList.contains('hidden')) return true;
+      return !!document.getElementById('cfm-ok');
+    }
+
+    function shouldHandleStartShortcut(event){
+      if(event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.repeat) return false;
+      if(event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      if(hasOpenBlockingOverlay()) return false;
+      const target = event.target;
+      if(target instanceof Element && target.closest('input, textarea, select, button, a, [contenteditable=""], [contenteditable="true"], [role="button"]')){
+        return false;
+      }
+      return hasQueuedUploadReadyToStart() && selectedStemGroups().length > 0;
+    }
+
     function selectedStems(){
       const groups = selectedStemGroups();
       return groups[0] ? groups[0].slice() : [];
@@ -5709,6 +5848,36 @@
       return index > 0 ? normalized.slice(0, index) : '';
     }
 
+    function createPendingQueueRow(name, stems, tempKey){
+      const frag = template.content.cloneNode(true);
+      const item = frag.firstElementChild;
+      const li   = item.querySelector('.filename');
+      const bar  = item.querySelector('.bar-fill');
+      const st   = item.querySelector('.chip.status');
+      const dl   = item.querySelector('.dl-pad');
+      const card = item.querySelector('.card');
+      const stopPad = item.querySelector('.stop-pad');
+      applyFilename(li, name);
+      applyLabels(item.querySelector('.labels'), stems);
+      st.textContent = 'checking';
+      st.classList.add('chip-dim');
+      st.classList.add('hidden');
+      if(startPressed){ st.classList.remove('hidden'); }
+      dl.classList.remove('show');
+      if (stopPad) stopPad.style.display = 'none';
+      item.classList.add('enter-pre');
+      item.__tempKey = tempKey;
+      queue.insertBefore(item, queue.firstChild);
+      requestAnimationFrame(() => {
+        item.classList.add('enter-active');
+      });
+      updateVigs();
+      const smooth = makeProgressSmoother(bar);
+      smooth.setImmediate(0);
+      applyRowState(item, { stage: 'ready', pct: 0, id: null, stems, groupStems: stems });
+      return {item, li, bar, st, dl, card, stopPad, smooth};
+    }
+
     async function handleFiles(fileList){
       if(modelsBlocked){
         showPopup(currentModelBlockMessage());
@@ -5730,6 +5899,7 @@
       }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
       const stemGroups = selectedStemGroups();
+      const displayStems = selectedStemUnion();
       if(stemGroups.length === 0){
         showPopup('please select at least one stem before uploading');
         if (fileInput) fileInput.value = '';
@@ -5758,38 +5928,13 @@
         // accept common audio even when type is empty
         const looksMedia = (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
         if(!looksMedia) continue;
+        const tempKey = makeTempKey();
+        const sharedUi = createPendingQueueRow(file.name, displayStems, tempKey);
         for(const stems of stemGroups){
           if(availableSlots <= 0) break;
-          const tempKey = makeTempKey();
           availableSlots -= 1;
-          // build UI row (ready state)
-          const frag = template.content.cloneNode(true);
-          const item = frag.firstElementChild;
-          const li   = item.querySelector('.filename');
-          const bar  = item.querySelector('.bar-fill');
-          const st   = item.querySelector('.chip.status');
-          const dl   = item.querySelector('.dl-pad');
-          const card = item.querySelector('.card');
-          const stopPad = item.querySelector('.stop-pad');
-          applyFilename(li, file.name);
-          applyLabels(item.querySelector('.labels'), stems);
-          st.textContent = 'checking';
-          st.classList.add('chip-dim');
-          st.classList.add('hidden');
-          if(startPressed){ st.classList.remove('hidden'); }
-          dl.classList.remove('show');
-          if (stopPad) stopPad.style.display = 'none';
-          item.classList.add('enter-pre');
-          item.__tempKey = tempKey;
-          queue.insertBefore(item, queue.firstChild);
-          requestAnimationFrame(() => {
-            item.classList.add('enter-active');
-          });
-          updateVigs();
-          const smooth = makeProgressSmoother(bar);
-          smooth.setImmediate(0);
           // record pending entry
-          const pending = { file, ui:{item, li, bar, st, dl, card, stopPad, smooth}, started:false, id:null, stems:stems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false };
+          const pending = { file, ui:sharedUi, started:false, id:null, stems:stems.slice(), groupStems: displayStems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false };
           pending.validationPromise = (async () => {
             const duration = await getAudioDuration(file);
             if(duration > 0){
@@ -5804,11 +5949,10 @@
             }
             return true;
           })();
-          applyRowState(item, { stage: 'ready', pct: 0, id: null });
           pendingItems.push(pending);
           newPending.push(pending);
           // persist placeholder task (no id yet)
-          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
+          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), groupStems: displayStems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
           saveTasks();
           updateUI();
         }
@@ -5882,7 +6026,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, tempKey: pending.tempKey, out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
+          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, groupStems: pending.groupStems || parsed.stems, tempKey: pending.tempKey, out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           if(startPressed || pending.autoStart){
             t.stage = 'queued';
@@ -6257,6 +6401,7 @@
           taskRef.stage = stage;
           taskRef.pct = typeof data.pct === 'number' ? data.pct : taskRef.pct;
           taskRef.eta_seconds = data.eta_seconds;
+          taskRef.eta_state = data.eta_state ?? taskRef.eta_state ?? null;
           taskRef.mode = data.mode || taskRef.mode;
           taskRef.out_dir = data.out_dir || null;
           taskRef.delivery = data.delivery || taskRef.delivery;
@@ -6321,7 +6466,7 @@
         if(st){
           showStatus(st);
           if(shouldUseProgressSummary(stage)){
-            st.textContent = formatProgressChip(data.pct || 0, data.eta_seconds);
+            st.textContent = formatProgressChip(data.pct || 0, data.eta_seconds, data.eta_state);
           }else{
             st.textContent = displayStage(stage) || 'queued';
           }
@@ -6355,6 +6500,7 @@
             if(typeof data.eta_seconds === 'number' || data.eta_seconds === null){
               taskRef.eta_seconds = data.eta_seconds;
             }
+            taskRef.eta_state = data.eta_state ?? taskRef.eta_state ?? null;
             if(data.mode) taskRef.mode = data.mode;
             if(data.stems) taskRef.stems = data.stems;
             if(data.out_dir) taskRef.out_dir = data.out_dir;
@@ -6372,7 +6518,7 @@
           }
           if(data.stems && st){
             const parentRow = st.closest('.item-row');
-            applyLabels(parentRow ? parentRow.querySelector('.labels') : null, data.stems);
+            applyLabels(parentRow ? parentRow.querySelector('.labels') : null, displayStemsForTask(taskRef || { stems: data.stems }));
           }
           if(st){ showStatus(st); }
           if(stage === 'error'){
@@ -6409,10 +6555,31 @@
             updateUI(); return;
           }
           if(stage === 'done'){
+            const hasRemainingGroupTasks = !!(taskRef && groupHasRemainingTasks(taskRef, taskId));
             if(taskRef){
               taskRef.stopRequested = false;
             }
             smooth.setTarget(100);
+            dropPendingById(taskId);
+            es.close();
+            activeStreams.delete(taskId);
+            if(hasRemainingGroupTasks){
+              showStatus(st);
+              st.textContent = 'queued';
+              st.classList.remove('hidden');
+              smooth.setImmediate(0);
+              if(dl) dl.classList.remove('show');
+              if(stopPad){
+                stopPad.style.display = 'none';
+                stopPad.classList.remove('show');
+              }
+              const parent = st.closest('.card'); if(parent) parent.classList.remove('done');
+              if(currentRow){
+                applyLabels(currentRow.querySelector('.labels'), displayStemsForTask(taskRef));
+                applyRowState(currentRow, getTaskByTempKey(taskRef.tempKey) || taskRef);
+              }
+              updateUI(); return;
+            }
             hideStatus(st);
             if(dl){
               const ref = taskRef || { id: taskId, out_dir: data.out_dir, zip: data.zip, downloaded:false, delivery: data.delivery || 'folder', autoDownloaded:false };
@@ -6427,9 +6594,6 @@
             }
             if(stopPad) stopPad.remove();
             const parent = st.closest('.card'); if(parent) parent.classList.add('done');
-            dropPendingById(taskId);
-            es.close();
-            activeStreams.delete(taskId);
             if(currentRow){
               applyRowState(currentRow, taskRef || { id: taskId, stage: 'done', pct: 100 });
             }
@@ -6454,7 +6618,7 @@
               smooth.setImmediate(0);
             } else {
               const etaValue = typeof data.eta_seconds === 'number' ? data.eta_seconds : (taskRef ? taskRef.eta_seconds : null);
-              st.textContent = formatProgressChip(sp, etaValue);
+              st.textContent = formatProgressChip(sp, etaValue, data.eta_state || (taskRef ? taskRef.eta_state : null));
               if(normalizedStage === 'ready' || normalizedStage === 'queued'){
                 smooth.setImmediate(0);
               }else{

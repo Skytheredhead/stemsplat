@@ -97,6 +97,14 @@ else:
     _model_import_error = None
 
 try:  # pragma: no cover - import failure is surfaced at runtime
+    from split.bs_roformer import BSRoformer
+except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
+    BSRoformer = None  # type: ignore[assignment]
+    _bs_model_import_error = exc
+else:
+    _bs_model_import_error = None
+
+try:  # pragma: no cover - import failure is surfaced at runtime
     from split.drumsep_mdx23c import (
         TFC_TDF_net,
         config_namespace,
@@ -1037,6 +1045,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         config="BS-Rofo-SW-Fixed.yaml",
         segment=588_800,
         overlap=2,
+        kind="bs_roformer",
     ),
     "htdemucs_ft_drums": ModelSpec(
         filename="f7e0c4bc-ba3fe64a.th",
@@ -1199,9 +1208,12 @@ MODE_OUTPUT_LABELS = {
     "preset_denoise": ("denoise",),
 }
 ETA_HISTORY_KEYS = tuple(MODEL_SPECS.keys())
-ETA_HISTORY_LIMIT = 10
-ETA_PREP_OVERHEAD_SECONDS = 5.0
-ETA_EXPORT_PER_OUTPUT_SECONDS = 2.5
+RUNTIME_STATS_VERSION = 2
+RUNTIME_STATS_STAGE_LIMIT = 30
+RUNTIME_STATS_TASK_LIMIT = 30
+ETA_FINISHING_THRESHOLD_SECONDS = 15.0
+ETA_MIN_LIVE_FRACTION = 0.15
+ETA_MIN_LIVE_SECONDS = 5.0
 MODEL_PROGRESS_START_PCT = 6
 SINGLE_MODEL_PROGRESS_END_PCT = 95
 DEUX_MODEL_PROGRESS_END_PCT = 95
@@ -1408,8 +1420,34 @@ def _load_compat_settings() -> dict[str, Any]:
     return _normalize_settings_payload(settings)
 
 
-def _load_eta_history() -> dict[str, list[dict[str, float]]]:
-    payload: dict[str, list[dict[str, float]]] = {key: [] for key in ETA_HISTORY_KEYS}
+def _normalize_runtime_sample(entry: Any) -> dict[str, float] | None:
+    if not isinstance(entry, dict):
+        return None
+    try:
+        audio_seconds = float(entry.get("audio_seconds") or 0.0)
+        elapsed_seconds = float(entry.get("elapsed_seconds") or 0.0)
+        recorded_at = float(entry.get("recorded_at") or 0.0)
+    except Exception:
+        return None
+    if elapsed_seconds <= 0:
+        return None
+    return {
+        "audio_seconds": max(0.0, audio_seconds),
+        "elapsed_seconds": elapsed_seconds,
+        "recorded_at": recorded_at if recorded_at > 0 else time.time(),
+    }
+
+
+def _blank_runtime_stats() -> dict[str, Any]:
+    return {
+        "version": RUNTIME_STATS_VERSION,
+        "stage_samples": {},
+        "task_samples": {},
+    }
+
+
+def _load_runtime_stats() -> dict[str, Any]:
+    payload = _blank_runtime_stats()
     if not ETA_HISTORY_PATH.exists():
         return payload
     try:
@@ -1419,29 +1457,51 @@ def _load_eta_history() -> dict[str, list[dict[str, float]]]:
         return payload
     if not isinstance(data, dict):
         return payload
+
+    if int(data.get("version") or 0) >= RUNTIME_STATS_VERSION:
+        raw_stage_samples = data.get("stage_samples")
+        if isinstance(raw_stage_samples, dict):
+            for key, raw_entries in raw_stage_samples.items():
+                if not isinstance(key, str) or not isinstance(raw_entries, list):
+                    continue
+                entries = [
+                    normalized
+                    for normalized in (_normalize_runtime_sample(entry) for entry in raw_entries[-RUNTIME_STATS_STAGE_LIMIT:])
+                    if normalized is not None
+                ]
+                if entries:
+                    payload["stage_samples"][key] = entries[-RUNTIME_STATS_STAGE_LIMIT:]
+        raw_task_samples = data.get("task_samples")
+        if isinstance(raw_task_samples, dict):
+            for key, raw_entries in raw_task_samples.items():
+                if not isinstance(key, str) or not isinstance(raw_entries, list):
+                    continue
+                entries = [
+                    normalized
+                    for normalized in (_normalize_runtime_sample(entry) for entry in raw_entries[-RUNTIME_STATS_TASK_LIMIT:])
+                    if normalized is not None
+                ]
+                if entries:
+                    payload["task_samples"][key] = entries[-RUNTIME_STATS_TASK_LIMIT:]
+        return payload
+
+    # Backward compatibility for the previous per-model ETA history shape.
     for key in ETA_HISTORY_KEYS:
         raw_entries = data.get(key)
         if not isinstance(raw_entries, list):
             continue
-        normalized_entries: list[dict[str, float]] = []
-        for entry in raw_entries[-ETA_HISTORY_LIMIT:]:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                audio_seconds = float(entry.get("audio_seconds") or 0.0)
-                elapsed_seconds = float(entry.get("elapsed_seconds") or 0.0)
-            except Exception:
-                continue
-            if audio_seconds <= 0 or elapsed_seconds <= 0:
-                continue
-            normalized_entries.append(
-                {
-                    "audio_seconds": audio_seconds,
-                    "elapsed_seconds": elapsed_seconds,
-                }
-            )
-        payload[key] = normalized_entries[-ETA_HISTORY_LIMIT:]
+        normalized_entries = [
+            normalized
+            for normalized in (_normalize_runtime_sample(entry) for entry in raw_entries[-RUNTIME_STATS_STAGE_LIMIT:])
+            if normalized is not None
+        ]
+        if normalized_entries:
+            payload["stage_samples"][f"model:{key}"] = normalized_entries[-RUNTIME_STATS_STAGE_LIMIT:]
     return payload
+
+
+def _save_runtime_stats(stats: dict[str, Any]) -> None:
+    ETA_HISTORY_PATH.write_text(json.dumps(stats, indent=2), encoding="utf-8")
 
 
 def _normalize_previous_file_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -1508,10 +1568,6 @@ def _load_previous_files_index() -> list[dict[str, Any]]:
 
 def _save_previous_files_index(entries: list[dict[str, Any]]) -> None:
     PREVIOUS_FILES_INDEX_PATH.write_text(json.dumps(entries, indent=2), encoding="utf-8")
-
-
-def _save_eta_history(history: dict[str, list[dict[str, float]]]) -> None:
-    ETA_HISTORY_PATH.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
 def _save_compat_settings(settings: dict[str, Any]) -> None:
@@ -1746,8 +1802,8 @@ def _stems_to_mode(stems_raw: str) -> str:
 
 
 _compat_settings = _load_compat_settings()
-eta_history_lock = threading.RLock()
-eta_history = _load_eta_history()
+runtime_stats_lock = threading.RLock()
+runtime_stats = _load_runtime_stats()
 lan_auth_lock = threading.RLock()
 lan_auth_sessions: dict[str, dict[str, Any]] = {}
 
@@ -2245,6 +2301,29 @@ def _restore_output_channels(tensor: torch.Tensor, original_channels: int) -> to
     return tensor[: max(1, original_channels)]
 
 
+def _normalize_audio_tensor(audio: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    mono = audio.mean(dim=0)
+    mean = mono.mean()
+    std = mono.std().clamp_min(1e-8)
+    return (audio - mean) / std, (mean, std)
+
+
+def _denormalize_audio_tensor(audio: torch.Tensor, norm_params: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+    mean, std = norm_params
+    return (audio * std) + mean
+
+
+def _bs_windowing_array(window_size: int, fade_size: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    if fade_size <= 0:
+        return torch.ones(window_size, device=device, dtype=dtype)
+    fadein = torch.linspace(0, 1, fade_size, device=device, dtype=dtype)
+    fadeout = torch.linspace(1, 0, fade_size, device=device, dtype=dtype)
+    window = torch.ones(window_size, device=device, dtype=dtype)
+    window[-fade_size:] = fadeout
+    window[:fade_size] = fadein
+    return window
+
+
 def _map_fraction(start_pct: int, end_pct: int, fraction: float) -> int:
     fraction = max(0.0, min(1.0, fraction))
     return int(round(start_pct + ((end_pct - start_pct) * fraction)))
@@ -2351,6 +2430,35 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
     return model.to(device).eval()
 
 
+def _load_bs_roformer_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
+    if BSRoformer is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"BS-Roformer import failed: {_bs_model_import_error}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        cfg = yaml.unsafe_load(handle)
+    raw_model_cfg = dict(cfg.get("model") or {})
+    valid_params = set(inspect.signature(BSRoformer.__init__).parameters)
+    valid_params.discard("self")
+    model_kwargs = {key: value for key, value in raw_model_cfg.items() if key in valid_params}
+    ignored = sorted(set(raw_model_cfg) - set(model_kwargs))
+    if ignored:
+        logger.info(
+            "ignoring unsupported bs-roformer config keys for %s: %s",
+            config_path.name,
+            ", ".join(ignored),
+        )
+    model = BSRoformer(**model_kwargs)
+    state = _torch_load_compat(model_path, map_location="cpu", weights_only=None)
+    missing, unexpected = model.load_state_dict(state.get("state_dict", state), strict=False)
+    if missing or unexpected:
+        raise AppError(
+            ErrorCode.MODEL_IMPORT_FAILED,
+            "BS-Roformer checkpoint does not match the expected architecture. "
+            f"Missing keys: {len(missing)}, unexpected keys: {len(unexpected)}.",
+        )
+    setattr(model, "_stemsplat_config", cfg)
+    return model.to(device).eval()
+
+
 def _load_model_config(config_path: Path) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.unsafe_load(handle) or {}
@@ -2441,6 +2549,8 @@ def _load_mdx23c_model(model_path: Path, config_path: Path, device: torch.device
 def _load_model_from_spec(spec: ModelSpec, model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
     if spec.kind == "roformer":
         return _load_roformer_model(model_path, config_path, device)
+    if spec.kind == "bs_roformer":
+        return _load_bs_roformer_model(model_path, config_path, device)
     if spec.kind == "demucs":
         return _load_demucs_model(model_path, device)
     if spec.kind == "mdx23c":
@@ -2576,6 +2686,96 @@ def _run_model_chunks(
     return torch.stack(outputs, dim=0)
 
 
+def _run_bs_roformer_chunks(
+    model: torch.nn.Module,
+    waveform: torch.Tensor,
+    progress_cb: Callable[[float], None],
+    stop_check: Callable[[], None],
+) -> torch.Tensor:
+    config = getattr(model, "_stemsplat_config", None) or {}
+    inference_cfg = dict(config.get("inference") or {})
+    audio_cfg = dict(config.get("audio") or {})
+
+    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
+    normalize = bool(inference_cfg.get("normalize", False))
+    norm_params: tuple[torch.Tensor, torch.Tensor] | None = None
+    if normalize:
+        working, norm_params = _normalize_audio_tensor(working)
+
+    chunk_size = int(inference_cfg.get("chunk_size") or audio_cfg.get("chunk_size") or working.shape[-1])
+    num_overlap = max(1, int(inference_cfg.get("num_overlap") or 1))
+    batch_size = max(1, int(inference_cfg.get("batch_size") or 1))
+    num_instruments = int(getattr(model, "num_stems", 1))
+    fade_size = max(0, chunk_size // 10)
+    step = max(1, chunk_size // num_overlap)
+    border = max(0, chunk_size - step)
+    length_init = int(working.shape[-1])
+
+    if length_init > 2 * border and border > 0:
+        working = F.pad(working, (border, border), mode="reflect")
+
+    total_samples = int(working.shape[-1])
+    total_chunks = max(1, math.ceil(total_samples / step))
+    result = torch.zeros(
+        (num_instruments, working.shape[0], total_samples),
+        device=working.device,
+        dtype=torch.float32,
+    )
+    counter = torch.zeros_like(result)
+    base_window = _bs_windowing_array(chunk_size, fade_size, working.device, torch.float32)
+
+    progress_cb(0.0)
+    batch_data: list[torch.Tensor] = []
+    batch_locations: list[tuple[int, int]] = []
+    processed_chunks = 0
+    index = 0
+
+    with torch.inference_mode():
+        while index < total_samples:
+            stop_check()
+            part = working[:, index : index + chunk_size]
+            chunk_len = int(part.shape[-1])
+            pad_mode = "reflect" if chunk_len > chunk_size // 2 else "constant"
+            part = F.pad(part, (0, chunk_size - chunk_len), mode=pad_mode, value=0.0)
+            batch_data.append(part)
+            batch_locations.append((index, chunk_len))
+            index += step
+
+            if len(batch_data) < batch_size and index < total_samples:
+                continue
+
+            batch_tensor = torch.stack(batch_data, dim=0)
+            predicted = model(batch_tensor)
+
+            for batch_index, (start, seg_len) in enumerate(batch_locations):
+                chunk_window = base_window.clone()
+                if start == 0:
+                    chunk_window[:fade_size] = 1.0
+                if start + step >= total_samples:
+                    chunk_window[-fade_size:] = 1.0
+                piece = predicted[batch_index, ..., :seg_len].to(dtype=torch.float32)
+                result[..., start : start + seg_len] += piece * chunk_window[:seg_len]
+                counter[..., start : start + seg_len] += chunk_window[:seg_len]
+                processed_chunks += 1
+                progress_cb(processed_chunks / total_chunks)
+
+            batch_data.clear()
+            batch_locations.clear()
+
+    estimated = result / counter.clamp_min(1e-8)
+
+    if length_init > 2 * border and border > 0:
+        estimated = estimated[..., border:-border]
+
+    if norm_params is not None:
+        estimated = _denormalize_audio_tensor(estimated, norm_params)
+
+    outputs = []
+    for stem_index in range(estimated.shape[0]):
+        outputs.append(_restore_output_channels(estimated[stem_index], original_channels))
+    return torch.stack(outputs, dim=0)
+
+
 def _overlap_fraction(overlap_count: int) -> float:
     overlap_count = max(1, int(overlap_count))
     return max(0.0, min(0.95, 1.0 - (1.0 / float(overlap_count))))
@@ -2595,6 +2795,10 @@ def _run_demucs_chunks(
     mix = working.unsqueeze(0)
     length = int(mix.shape[-1])
     segment_seconds = max(1.0 / 44100.0, float(segment) / 44100.0)
+    model_segment = getattr(model, "segment", None)
+    with contextlib.suppress(Exception):
+        if model_segment is not None:
+            segment_seconds = min(segment_seconds, float(model_segment))
     segment_length = max(1, int(round(segment_seconds * float(getattr(model, "samplerate", 44100)))))
     stride = max(1, int((1.0 - _overlap_fraction(overlap)) * segment_length))
     offsets = list(range(0, length, stride)) or [0]
@@ -2664,6 +2868,8 @@ def _run_model_for_spec(
     spec = MODEL_SPECS[model_key]
     if spec.kind == "roformer":
         return _run_model_chunks(model, waveform, spec.segment, spec.overlap, progress_cb, stop_check)
+    if spec.kind == "bs_roformer":
+        return _run_bs_roformer_chunks(model, waveform, progress_cb, stop_check)
     if spec.kind == "demucs":
         return _run_demucs_chunks(model, waveform, spec.segment, spec.overlap, progress_cb, stop_check)
     if spec.kind == "mdx23c":
@@ -2857,6 +3063,453 @@ def _stage_model_key(stage_text: str) -> str | None:
         if prefix in stage:
             return model_key
     return None
+
+
+def _runtime_stage_key_for_display(stage_text: str) -> str | None:
+    stage = str(stage_text or "").lower()
+    if "loading models" in stage:
+        return "load_models"
+    if "preparing audio" in stage:
+        return "prepare_audio"
+    if "mixing boost harmonies" in stage or "mixing boost guitar" in stage:
+        return "mix_preset"
+    if "exporting" in stage:
+        return "export"
+    return _stage_model_key(stage)
+
+
+def _runtime_model_sequence(mode: str) -> list[str]:
+    if mode in {"vocals", "instrumental", "deux", "guitar", "mel_band_karaoke", "denoise", "bs_roformer_6s"}:
+        return [mode]
+    if mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_ft_other", "htdemucs_ft_vocals", "htdemucs_6s"}:
+        return [mode]
+    if mode in {"drumsep_6s", "drumsep_4s"}:
+        return [mode]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode in {"both_separate", "preset_voc_instrum"}:
+        return ["vocals", "instrumental"]
+    if mode == "preset_boost_harmonies":
+        return ["vocals", "mel_band_karaoke"]
+    if mode == "preset_boost_guitar":
+        return ["guitar"]
+    if mode == "preset_denoise":
+        return ["denoise"]
+    return []
+
+
+def _runtime_stage_samples(stats_key: str) -> list[dict[str, float]]:
+    with runtime_stats_lock:
+        return list(runtime_stats.get("stage_samples", {}).get(stats_key) or [])
+
+
+def _runtime_task_samples(task_key: str) -> list[dict[str, float]]:
+    with runtime_stats_lock:
+        return list(runtime_stats.get("task_samples", {}).get(task_key) or [])
+
+
+def _append_runtime_sample(bucket: str, stats_key: str, sample: dict[str, float]) -> None:
+    normalized = _normalize_runtime_sample(sample)
+    if normalized is None:
+        return
+    limit = RUNTIME_STATS_STAGE_LIMIT if bucket == "stage_samples" else RUNTIME_STATS_TASK_LIMIT
+    with runtime_stats_lock:
+        target = runtime_stats.setdefault(bucket, {})
+        entries = list(target.get(stats_key) or [])
+        entries.append(normalized)
+        target[stats_key] = entries[-limit:]
+        _save_runtime_stats(runtime_stats)
+
+
+def _weighted_quantile(pairs: list[tuple[float, float]], quantile: float) -> float | None:
+    if not pairs:
+        return None
+    sorted_pairs = sorted(((float(value), max(1e-6, float(weight))) for value, weight in pairs), key=lambda item: item[0])
+    total_weight = sum(weight for _, weight in sorted_pairs)
+    if total_weight <= 0:
+        return None
+    threshold = max(0.0, min(1.0, quantile)) * total_weight
+    cumulative = 0.0
+    for value, weight in sorted_pairs:
+        cumulative += weight
+        if cumulative >= threshold:
+            return value
+    return sorted_pairs[-1][0]
+
+
+def _sample_weight(audio_seconds: float, sample: dict[str, float], *, index: int, total: int) -> float:
+    sample_audio = max(0.0, float(sample.get("audio_seconds") or 0.0))
+    if audio_seconds > 0 and sample_audio > 0:
+        rel_distance = abs(sample_audio - audio_seconds) / max(audio_seconds, sample_audio, 1.0)
+        audio_weight = 1.0 / max(0.12, 0.22 + (rel_distance * 1.8))
+    else:
+        audio_weight = 1.0
+    recency_weight = 0.65 + (0.35 * ((index + 1) / max(1, total)))
+    return audio_weight * recency_weight
+
+
+def _scaled_sample_elapsed(sample: dict[str, float], audio_seconds: float, *, scale_by_audio: bool) -> float:
+    elapsed_seconds = max(0.1, float(sample.get("elapsed_seconds") or 0.0))
+    if not scale_by_audio or audio_seconds <= 0:
+        return elapsed_seconds
+    sample_audio = max(0.1, float(sample.get("audio_seconds") or 0.0))
+    return max(0.1, elapsed_seconds * (audio_seconds / sample_audio))
+
+
+def _predict_from_samples(
+    samples: list[dict[str, float]],
+    *,
+    audio_seconds: float,
+    scale_by_audio: bool,
+    conservative: bool,
+) -> tuple[float | None, int]:
+    if not samples:
+        return None, 0
+    recent_samples = samples[-RUNTIME_STATS_STAGE_LIMIT:]
+    weighted_predictions = [
+        (
+            _scaled_sample_elapsed(sample, audio_seconds, scale_by_audio=scale_by_audio),
+            _sample_weight(audio_seconds, sample, index=index, total=len(recent_samples)),
+        )
+        for index, sample in enumerate(recent_samples)
+    ]
+    median = _weighted_quantile(weighted_predictions, 0.5)
+    if median is None:
+        return None, len(recent_samples)
+    if not conservative:
+        return max(0.1, median), len(recent_samples)
+    p70 = _weighted_quantile(weighted_predictions, 0.7)
+    if p70 is None:
+        p70 = median
+    return max(0.1, (median * 0.7) + (p70 * 0.3)), len(recent_samples)
+
+
+def _fallback_model_runtime_seconds(model_key: str, audio_seconds: float) -> float:
+    seconds = max(1.0, float(audio_seconds or 0.0))
+    if model_key == "bs_roformer_6s":
+        return max(20.0, seconds * 0.95)
+    kind = MODEL_SPECS.get(model_key, ModelSpec("", "", 0, 0)).kind
+    if kind == "demucs":
+        return max(8.0, seconds * 0.18)
+    if kind == "mdx23c":
+        return max(10.0, seconds * 0.28)
+    return max(12.0, seconds * 0.55)
+
+
+def _predict_fixed_stage_runtime_seconds(stage_key: str, audio_seconds: float) -> tuple[float, int, str]:
+    samples = _runtime_stage_samples(f"fixed:{stage_key}")
+    prediction, count = _predict_from_samples(
+        samples,
+        audio_seconds=audio_seconds,
+        scale_by_audio=False,
+        conservative=False,
+    )
+    if prediction is not None:
+        return max(0.5, prediction), count, "history"
+    if stage_key == "load_models":
+        return 2.5, 0, "fallback"
+    if stage_key == "prepare_audio":
+        return max(3.0, min(18.0, max(1.0, audio_seconds) * 0.03)), 0, "fallback"
+    if stage_key == "mix_preset":
+        return 3.0, 0, "fallback"
+    return 1.0, 0, "fallback"
+
+
+def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> float | None:
+    if model_key not in ETA_HISTORY_KEYS:
+        return None
+    samples = _runtime_stage_samples(f"model:{model_key}")
+    prediction, _count = _predict_from_samples(
+        samples,
+        audio_seconds=audio_seconds,
+        scale_by_audio=True,
+        conservative=True,
+    )
+    if prediction is not None:
+        return prediction
+    return _fallback_model_runtime_seconds(model_key, audio_seconds)
+
+
+def _predict_model_stage_runtime(model_key: str, audio_seconds: float) -> tuple[float, int, str]:
+    samples = _runtime_stage_samples(f"model:{model_key}")
+    prediction, count = _predict_from_samples(
+        samples,
+        audio_seconds=audio_seconds,
+        scale_by_audio=True,
+        conservative=True,
+    )
+    if prediction is not None:
+        return prediction, count, "history"
+    return _fallback_model_runtime_seconds(model_key, audio_seconds), 0, "fallback"
+
+
+def _predict_export_runtime_seconds(output_format: str, output_count: int, audio_seconds: float) -> tuple[float, int, str]:
+    stats_key = f"export:{output_format}:{max(1, output_count)}"
+    samples = _runtime_stage_samples(stats_key)
+    prediction, count = _predict_from_samples(
+        samples,
+        audio_seconds=audio_seconds,
+        scale_by_audio=True,
+        conservative=False,
+    )
+    if prediction is not None:
+        return max(1.0, prediction), count, "history"
+    fallback = max(2.0, max(1, output_count) * (1.5 + (max(1.0, audio_seconds) * 0.01)))
+    return fallback, 0, "fallback"
+
+
+def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
+    if audio_seconds <= 0:
+        return None
+    samples = _runtime_task_samples(f"task:{mode}")
+    prediction, _count = _predict_from_samples(
+        samples,
+        audio_seconds=audio_seconds,
+        scale_by_audio=True,
+        conservative=True,
+    )
+    return prediction
+
+
+def _build_runtime_plan(task: dict[str, Any], *, audio_seconds: float | None = None) -> dict[str, Any]:
+    mode = str(task.get("mode") or "")
+    output_format = str(task.get("output_format") or _compat_settings_payload()["output_format"])
+    export_count = max(1, _expected_output_count(mode))
+    audio_value = max(0.0, float(audio_seconds if audio_seconds is not None else (task.get("audio_seconds") or 0.0)))
+    stages: list[dict[str, Any]] = []
+
+    load_seconds, load_count, load_basis = _predict_fixed_stage_runtime_seconds("load_models", audio_value)
+    stages.append(
+        {
+            "stage_key": "load_models",
+            "stats_key": "fixed:load_models",
+            "predicted_seconds": load_seconds,
+            "started_at": None,
+            "completed_at": None,
+            "live_fraction": None,
+            "supports_live_fraction": False,
+            "prediction_basis": load_basis,
+            "prediction_samples": load_count,
+        }
+    )
+
+    prep_seconds, prep_count, prep_basis = _predict_fixed_stage_runtime_seconds("prepare_audio", audio_value)
+    stages.append(
+        {
+            "stage_key": "prepare_audio",
+            "stats_key": "fixed:prepare_audio",
+            "predicted_seconds": prep_seconds,
+            "started_at": None,
+            "completed_at": None,
+            "live_fraction": None,
+            "supports_live_fraction": False,
+            "prediction_basis": prep_basis,
+            "prediction_samples": prep_count,
+        }
+    )
+
+    for model_key in _runtime_model_sequence(mode):
+        predicted_seconds, sample_count, basis = _predict_model_stage_runtime(model_key, audio_value)
+        stages.append(
+            {
+                "stage_key": model_key,
+                "stats_key": f"model:{model_key}",
+                "predicted_seconds": predicted_seconds,
+                "started_at": None,
+                "completed_at": None,
+                "live_fraction": None,
+                "supports_live_fraction": True,
+                "prediction_basis": basis,
+                "prediction_samples": sample_count,
+            }
+        )
+
+    if mode in {"preset_boost_harmonies", "preset_boost_guitar"}:
+        mix_seconds, mix_count, mix_basis = _predict_fixed_stage_runtime_seconds("mix_preset", audio_value)
+        stages.append(
+            {
+                "stage_key": "mix_preset",
+                "stats_key": "fixed:mix_preset",
+                "predicted_seconds": mix_seconds,
+                "started_at": None,
+                "completed_at": None,
+                "live_fraction": None,
+                "supports_live_fraction": False,
+                "prediction_basis": mix_basis,
+                "prediction_samples": mix_count,
+            }
+        )
+
+    export_seconds, export_count_samples, export_basis = _predict_export_runtime_seconds(
+        output_format,
+        export_count,
+        audio_value,
+    )
+    stages.append(
+        {
+            "stage_key": "export",
+            "stats_key": f"export:{output_format}:{export_count}",
+            "predicted_seconds": export_seconds,
+            "started_at": None,
+            "completed_at": None,
+            "live_fraction": None,
+            "supports_live_fraction": True,
+            "prediction_basis": export_basis,
+            "prediction_samples": export_count_samples,
+        }
+    )
+
+    return {"stages": stages}
+
+
+def _refresh_runtime_plan(task: dict[str, Any], *, audio_seconds: float | None = None) -> None:
+    previous_plan = task.get("runtime_plan") if isinstance(task.get("runtime_plan"), dict) else {"stages": []}
+    previous_by_key = {
+        str(stage.get("stage_key") or ""): stage
+        for stage in list(previous_plan.get("stages") or [])
+        if isinstance(stage, dict)
+    }
+    next_plan = _build_runtime_plan(task, audio_seconds=audio_seconds)
+    for stage in next_plan["stages"]:
+        previous = previous_by_key.get(str(stage.get("stage_key") or ""))
+        if previous is None:
+            continue
+        stage["started_at"] = previous.get("started_at")
+        stage["completed_at"] = previous.get("completed_at")
+        stage["live_fraction"] = previous.get("live_fraction")
+        if previous.get("completed_at") and isinstance(previous.get("predicted_seconds"), (int, float)):
+            stage["predicted_seconds"] = max(0.1, float(previous["predicted_seconds"]))
+    task["runtime_plan"] = next_plan
+
+
+def _runtime_plan_stage(task: dict[str, Any], stage_key: str) -> dict[str, Any] | None:
+    runtime_plan = task.get("runtime_plan")
+    if not isinstance(runtime_plan, dict):
+        return None
+    for stage in list(runtime_plan.get("stages") or []):
+        if isinstance(stage, dict) and str(stage.get("stage_key") or "") == stage_key:
+            return stage
+    return None
+
+
+def _complete_runtime_stage(task: dict[str, Any], stage_key: str | None, *, now: float, record_sample: bool = True) -> None:
+    if not stage_key:
+        return
+    stage = _runtime_plan_stage(task, stage_key)
+    if stage is None or stage.get("completed_at") is not None:
+        return
+    started_at = stage.get("started_at")
+    if not isinstance(started_at, (int, float)):
+        return
+    elapsed_seconds = max(0.1, now - float(started_at))
+    stage["completed_at"] = now
+    stage["live_fraction"] = 1.0 if stage.get("supports_live_fraction") else None
+    stage["predicted_seconds"] = elapsed_seconds
+    if record_sample and not str(stage.get("stats_key") or "").startswith("model:"):
+        _append_runtime_sample(
+            "stage_samples",
+            str(stage.get("stats_key") or ""),
+            {
+                "audio_seconds": float(task.get("audio_seconds") or 0.0),
+                "elapsed_seconds": elapsed_seconds,
+                "recorded_at": now,
+            },
+        )
+
+
+def _stage_live_fraction_from_legacy_pct(task: dict[str, Any], stage_text: str, pct: int) -> float | None:
+    stage_key = _runtime_stage_key_for_display(stage_text)
+    if stage_key is None:
+        return None
+    if stage_key == "export":
+        span = max(1, EXPORT_PROGRESS_END_PCT - EXPORT_PROGRESS_START_PCT)
+        return max(0.0, min(1.0, (max(0, min(100, int(pct))) - EXPORT_PROGRESS_START_PCT) / span))
+    return _stage_progress_fraction(str(task.get("mode") or ""), stage_text, pct)
+
+
+def _effective_runtime_stage_progress(task: dict[str, Any], stage: dict[str, Any], now: float) -> tuple[float, float, str]:
+    predicted_seconds = max(0.1, float(stage.get("predicted_seconds") or 0.1))
+    started_at = float(stage.get("started_at") or now)
+    elapsed_seconds = max(0.0, now - started_at)
+    live_fraction = stage.get("live_fraction")
+    live_fraction_value = None
+    if isinstance(live_fraction, (int, float)):
+        live_fraction_value = max(0.0, min(1.0, float(live_fraction)))
+
+    basis = str(stage.get("prediction_basis") or "fallback")
+    sample_count = int(stage.get("prediction_samples") or 0)
+    eta_state = "steady" if basis == "history" and sample_count >= 3 else "estimating"
+
+    if bool(stage.get("supports_live_fraction")):
+        if live_fraction_value is not None and live_fraction_value > 0:
+            if live_fraction_value >= ETA_MIN_LIVE_FRACTION and elapsed_seconds >= ETA_MIN_LIVE_SECONDS:
+                live_total = elapsed_seconds / max(live_fraction_value, 1e-3)
+                live_weight = min(0.75, live_fraction_value * 0.75)
+                predicted_seconds = max(
+                    elapsed_seconds + 1.0,
+                    (predicted_seconds * (1.0 - live_weight)) + (live_total * live_weight),
+                )
+                eta_state = "steady" if live_fraction_value >= 0.4 else "calibrating"
+            else:
+                eta_state = "calibrating"
+            return predicted_seconds, live_fraction_value, eta_state
+        fraction = min(0.97, elapsed_seconds / max(predicted_seconds, 1e-3))
+        return predicted_seconds, fraction, eta_state
+
+    fraction = min(0.97, elapsed_seconds / max(predicted_seconds, 1e-3))
+    return predicted_seconds, fraction, eta_state
+
+
+def _update_task_runtime_view(task: dict[str, Any], *, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    status = str(task.get("status") or "")
+    runtime_plan = task.get("runtime_plan")
+    if status != "running" or not isinstance(runtime_plan, dict):
+        return
+
+    stages = [stage for stage in list(runtime_plan.get("stages") or []) if isinstance(stage, dict)]
+    if not stages:
+        return
+
+    completed_seconds = 0.0
+    consumed_seconds = 0.0
+    predicted_total_seconds = 0.0
+    eta_state = "estimating"
+    current_stage_key = _runtime_stage_key_for_display(str(task.get("stage") or ""))
+
+    for stage in stages:
+        stage_key = str(stage.get("stage_key") or "")
+        if stage.get("completed_at") is not None:
+            stage_seconds = max(0.1, float(stage.get("predicted_seconds") or 0.1))
+            completed_seconds += stage_seconds
+            predicted_total_seconds += stage_seconds
+            consumed_seconds = completed_seconds
+            continue
+        if current_stage_key and stage_key == current_stage_key and stage.get("started_at") is not None:
+            effective_seconds, fraction, stage_eta_state = _effective_runtime_stage_progress(task, stage, now)
+            predicted_total_seconds += effective_seconds
+            consumed_seconds = completed_seconds + (effective_seconds * max(0.0, min(1.0, fraction)))
+            eta_state = stage_eta_state
+            continue
+        predicted_total_seconds += max(0.1, float(stage.get("predicted_seconds") or 0.1))
+
+    if predicted_total_seconds <= 0:
+        task["pct"] = max(0, min(99, int(task.get("pct") or 0)))
+        task["eta_seconds"] = None
+        task["eta_state"] = "estimating"
+        return
+
+    remaining_seconds = max(0.0, predicted_total_seconds - consumed_seconds)
+    pct = int(math.floor(100.0 * (consumed_seconds / predicted_total_seconds)))
+    pct = max(0, min(99, pct))
+    if remaining_seconds > max(45.0, predicted_total_seconds * 0.15):
+        pct = min(pct, 90)
+
+    task["predicted_total_seconds"] = predicted_total_seconds
+    task["pct"] = pct
+    task["eta_seconds"] = _stabilize_eta(task, remaining_seconds, now=now, stage_text=current_stage_key or "")
+    task["eta_state"] = "finishing" if remaining_seconds <= ETA_FINISHING_THRESHOLD_SECONDS else eta_state
+
 
 
 app = FastAPI()
@@ -3370,6 +4023,7 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "stage": task["stage"],
         "pct": task["pct"],
         "eta_seconds": task["eta_seconds"],
+        "eta_state": task.get("eta_state"),
         "out_dir": task["out_dir"],
         "outputs": list(task["outputs"]),
         "error": task["error"],
@@ -3388,169 +4042,23 @@ def _require_task(task_id: str) -> dict[str, Any]:
 
 
 def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
-    started_at = task.get("started_at")
-    if started_at is None or pct < 1 or pct >= 100:
-        return 0 if pct >= 100 else None
-    now = time.time()
-    elapsed = max(1.0, now - started_at)
-    mode = str(task.get("mode") or "")
-    stage_text = str(task.get("stage") or "").lower()
-    stage_started_at = task.get("stage_started_at")
-    stage_elapsed = max(0.0, now - float(stage_started_at or started_at))
-    audio_seconds = float(task.get("audio_seconds") or 0.0)
-    export_outputs = max(1, _expected_output_count(mode))
-    export_budget = ETA_EXPORT_PER_OUTPUT_SECONDS * export_outputs
-    raw_estimate: float | None = None
-
-    if "exporting" in stage_text:
-        export_span = max(1, EXPORT_PROGRESS_END_PCT - EXPORT_PROGRESS_START_PCT)
-        export_progress = max(0.0, min(1.0, (pct - EXPORT_PROGRESS_START_PCT) / export_span))
-        raw_estimate = max(1.0, export_budget * (1.0 - export_progress))
-        return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
-
-    if mode in {"both_separate", "preset_voc_instrum"} and audio_seconds > 0:
-        vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
-        instrumental_total = _predict_model_runtime_seconds("instrumental", audio_seconds)
-        if vocals_total is not None or instrumental_total is not None:
-            vocals_total = float(vocals_total or 0.0)
-            instrumental_total = float(instrumental_total or 0.0)
-            if "instrumental" in stage_text and instrumental_total > 0:
-                raw_estimate = max(0.0, instrumental_total - stage_elapsed) + export_budget
-            elif "vocals" in stage_text and vocals_total > 0:
-                raw_estimate = max(0.0, vocals_total - stage_elapsed) + instrumental_total + export_budget
-            else:
-                raw_estimate = max(
-                    0.0,
-                    ETA_PREP_OVERHEAD_SECONDS + vocals_total + instrumental_total + export_budget - elapsed,
-                )
-    elif mode == "preset_boost_harmonies" and audio_seconds > 0:
-        vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
-        background_total = _predict_model_runtime_seconds("mel_band_karaoke", audio_seconds)
-        if vocals_total is not None or background_total is not None:
-            vocals_total = float(vocals_total or 0.0)
-            background_total = float(background_total or 0.0)
-            if "harmony background" in stage_text and background_total > 0:
-                raw_estimate = max(0.0, background_total - stage_elapsed) + export_budget
-            elif "vocals" in stage_text and vocals_total > 0:
-                raw_estimate = max(0.0, vocals_total - stage_elapsed) + background_total + export_budget
-            else:
-                raw_estimate = max(
-                    0.0,
-                    ETA_PREP_OVERHEAD_SECONDS + vocals_total + background_total + export_budget - elapsed,
-                )
-    elif mode == "preset_boost_guitar" and audio_seconds > 0:
-        guitar_total = _predict_model_runtime_seconds("guitar", audio_seconds)
-        if guitar_total is not None:
-            guitar_total = float(guitar_total)
-            if "guitar" in stage_text and guitar_total > 0:
-                raw_estimate = max(0.0, guitar_total - stage_elapsed) + export_budget
-            else:
-                raw_estimate = max(
-                    0.0,
-                    ETA_PREP_OVERHEAD_SECONDS + guitar_total + export_budget - elapsed,
-                )
-
-    if audio_seconds > 0:
-        stage_model_key = _stage_model_key(stage_text)
-        if stage_model_key is not None:
-            stage_total = _predict_model_runtime_seconds(stage_model_key, audio_seconds)
-            if stage_total is not None:
-                stage_estimate = max(0.0, float(stage_total) - stage_elapsed) + export_budget
-                raw_estimate = stage_estimate if raw_estimate is None else ((raw_estimate * 0.72) + (stage_estimate * 0.28))
-
-    progress_fraction = _stage_progress_fraction(mode, stage_text, pct)
-    if progress_fraction is not None and progress_fraction >= 0.08 and stage_elapsed >= 4.0:
-        stage_progress_remaining = max(0.0, (stage_elapsed / progress_fraction) - stage_elapsed)
-        if mode in {"both_separate", "preset_voc_instrum"} and "running vocals model" in stage_text:
-            next_stage_total = _predict_model_runtime_seconds("instrumental", audio_seconds) or stage_progress_remaining
-            progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
-        elif mode == "preset_boost_harmonies" and "running vocals model" in stage_text:
-            next_stage_total = _predict_model_runtime_seconds("mel_band_karaoke", audio_seconds) or stage_progress_remaining
-            progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
-        else:
-            progress_estimate = stage_progress_remaining + export_budget
-        raw_estimate = progress_estimate if raw_estimate is None else ((raw_estimate * 0.7) + (progress_estimate * 0.3))
-
-    predicted_total = task.get("predicted_total_seconds")
-    if isinstance(predicted_total, (int, float)) and float(predicted_total) > 0:
-        history_estimate = max(0.0, ETA_PREP_OVERHEAD_SECONDS + float(predicted_total) + export_budget - elapsed)
-        raw_estimate = history_estimate if raw_estimate is None else ((raw_estimate * 0.78) + (history_estimate * 0.22))
-
-    if raw_estimate is None and pct >= 8 and elapsed >= 6:
-        raw_estimate = max(0.0, (elapsed / max(pct / 100.0, 0.01)) - elapsed)
-
-    return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
+    _update_task_runtime_view(task, now=time.time())
+    eta_seconds = task.get("eta_seconds")
+    return int(eta_seconds) if isinstance(eta_seconds, (int, float)) else None
 
 
 def _record_eta_sample(model_key: str, audio_seconds: float, elapsed_seconds: float) -> None:
-    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0 or elapsed_seconds <= 0:
+    if model_key not in ETA_HISTORY_KEYS or elapsed_seconds <= 0:
         return
-    with eta_history_lock:
-        entries = list(eta_history.get(model_key) or [])
-        entries.append(
-            {
-                "audio_seconds": float(audio_seconds),
-                "elapsed_seconds": float(elapsed_seconds),
-            }
-        )
-        eta_history[model_key] = entries[-ETA_HISTORY_LIMIT:]
-        _save_eta_history(eta_history)
-
-
-def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> float | None:
-    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0:
-        return None
-    with eta_history_lock:
-        entries = list(eta_history.get(model_key) or [])
-    if not entries:
-        return None
-    ranked = sorted(
-        entries,
-        key=lambda entry: abs(float(entry.get("audio_seconds") or 0.0) - audio_seconds),
-    )[: min(5, len(entries))]
-    if not ranked:
-        return None
-    weighted_total = 0.0
-    weight_sum = 0.0
-    scaled_predictions: list[float] = []
-    for entry in ranked:
-        sample_audio = max(1.0, float(entry.get("audio_seconds") or 0.0))
-        sample_elapsed = max(1.0, float(entry.get("elapsed_seconds") or 0.0))
-        distance = abs(sample_audio - audio_seconds)
-        weight = 1.0 / max(1.0, distance)
-        ratio = sample_elapsed / sample_audio
-        weighted_total += ratio * weight
-        weight_sum += weight
-        scaled_predictions.append(max(1.0, sample_elapsed * (audio_seconds / sample_audio)))
-    if weight_sum <= 0:
-        return None
-    weighted_prediction = max(1.0, audio_seconds * (weighted_total / weight_sum))
-    scaled_predictions.sort()
-    median_prediction = scaled_predictions[len(scaled_predictions) // 2]
-    return max(1.0, (median_prediction * 0.7) + (weighted_prediction * 0.3))
-
-
-def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
-    if audio_seconds <= 0:
-        return None
-    if mode in {"both_separate", "preset_voc_instrum"}:
-        vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
-        instrumental = _predict_model_runtime_seconds("instrumental", audio_seconds)
-        if vocals is None and instrumental is None:
-            return None
-        return float(vocals or 0.0) + float(instrumental or 0.0)
-    if mode == "preset_boost_harmonies":
-        vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
-        background = _predict_model_runtime_seconds("mel_band_karaoke", audio_seconds)
-        if vocals is None and background is None:
-            return None
-        return float(vocals or 0.0) + float(background or 0.0)
-    if mode == "preset_boost_guitar":
-        return _predict_model_runtime_seconds("guitar", audio_seconds)
-    required = _required_models_for_mode(mode)
-    if len(required) == 1:
-        return _predict_model_runtime_seconds(required[0], audio_seconds)
-    return None
+    _append_runtime_sample(
+        "stage_samples",
+        f"model:{model_key}",
+        {
+            "audio_seconds": float(audio_seconds or 0.0),
+            "elapsed_seconds": float(elapsed_seconds),
+            "recorded_at": time.time(),
+        },
+    )
 
 
 def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | None:
@@ -3633,15 +4141,30 @@ def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
         now = time.time()
         if task["started_at"] is None:
             task["started_at"] = now
+        if not isinstance(task.get("runtime_plan"), dict):
+            _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         if task["status"] not in TERMINAL_STATUSES:
             task["status"] = "running"
+        next_stage_key = _runtime_stage_key_for_display(stage)
+        previous_stage_key = _runtime_stage_key_for_display(previous_stage)
+        if next_stage_key != previous_stage_key:
+            _complete_runtime_stage(task, previous_stage_key, now=now, record_sample=True)
         if stage != previous_stage or task.get("stage_started_at") is None:
             task["stage_started_at"] = now
             task["eta_finish_at"] = None
             task["eta_stage"] = None
+        if next_stage_key:
+            current_stage = _runtime_plan_stage(task, next_stage_key)
+            if current_stage is not None and current_stage.get("started_at") is None:
+                current_stage["started_at"] = now
+                current_stage["live_fraction"] = None
         task["stage"] = stage
-        task["pct"] = max(0, min(100, int(pct)))
-        task["eta_seconds"] = _estimate_eta(task, task["pct"])
+        live_fraction = _stage_live_fraction_from_legacy_pct(task, stage, pct)
+        if next_stage_key:
+            current_stage = _runtime_plan_stage(task, next_stage_key)
+            if current_stage is not None and live_fraction is not None:
+                current_stage["live_fraction"] = live_fraction
+        _update_task_runtime_view(task, now=now)
         if task["pct"] != previous_pct or stage != previous_stage:
             task["last_progress_at"] = now
             task["last_progress_pct"] = task["pct"]
@@ -3653,17 +4176,32 @@ def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
     cleanup_snapshot: dict[str, Any] | None = None
     with tasks_lock:
         task = tasks[task_id]
+        now = time.time()
+        _complete_runtime_stage(task, _runtime_stage_key_for_display(str(task.get("stage") or "")), now=now, record_sample=True)
+        audio_seconds = float(task.get("audio_seconds") or 0.0)
+        started_at = float(task.get("started_at") or now)
+        if started_at > 0:
+            _append_runtime_sample(
+                "task_samples",
+                f"task:{str(task.get('mode') or '')}",
+                {
+                    "audio_seconds": audio_seconds,
+                    "elapsed_seconds": max(0.1, now - started_at),
+                    "recorded_at": now,
+                },
+            )
         task["status"] = "done"
         task["stage"] = "Done"
         task["pct"] = 100
         task["eta_seconds"] = 0
+        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         task["out_dir"] = str(out_dir)
         task["outputs"] = list(outputs)
         task["error"] = None
         task["guard_error"] = None
-        task["finished_at"] = time.time()
+        task["finished_at"] = now
         task["version"] += 1
         if bool(task.get("cleared")):
             cleanup_snapshot = dict(task)
@@ -3683,6 +4221,7 @@ def _mark_task_error(task_id: str, message: str) -> None:
         task["stage"] = "Error"
         task["pct"] = max(0, int(task.get("pct", 0)))
         task["eta_seconds"] = None
+        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         task["error"] = message
@@ -3819,6 +4358,7 @@ def _mark_task_stopped(task_id: str) -> None:
             task["status"] = "error"
             task["stage"] = "Error"
             task["eta_seconds"] = None
+            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
             task["error"] = guard_error
@@ -3829,6 +4369,7 @@ def _mark_task_stopped(task_id: str) -> None:
             task["status"] = "stopped"
             task["stage"] = "Stopped"
             task["eta_seconds"] = None
+            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
             task["finished_at"] = time.time()
@@ -3851,6 +4392,7 @@ def _request_task_stop(task_id: str) -> None:
             task["status"] = "stopped"
             task["stage"] = "Stopped"
             task["eta_seconds"] = None
+            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
             task["finished_at"] = time.time()
@@ -3859,6 +4401,7 @@ def _request_task_stop(task_id: str) -> None:
         elif task["status"] == "running":
             task["stage"] = "Stopping"
             task["eta_seconds"] = None
+            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
         task["version"] += 1
@@ -3881,6 +4424,7 @@ def _trip_task_guard(task_id: str, message: str) -> None:
         task["guard_error"] = message
         task["stop_event"].set()
         task["eta_seconds"] = None
+        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         if task["status"] == "queued":
@@ -3923,12 +4467,14 @@ def _stop_all_tasks() -> list[str]:
                 task["status"] = "stopped"
                 task["stage"] = "Stopped"
                 task["eta_seconds"] = None
+                task["eta_state"] = None
                 task["eta_finish_at"] = None
                 task["eta_stage"] = None
                 task["finished_at"] = time.time()
             elif task["status"] == "running":
                 task["stage"] = "Stopping"
                 task["eta_seconds"] = None
+                task["eta_state"] = None
                 task["eta_finish_at"] = None
                 task["eta_stage"] = None
             task["version"] += 1
@@ -3986,6 +4532,7 @@ def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]
         if str(task.get("status") or "") != "ready":
             raise AppError(ErrorCode.INVALID_REQUEST, "Task has already started.")
         task["mode"] = mode
+        _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         task["version"] += 1
         return dict(task)
 
@@ -4116,6 +4663,7 @@ def _build_task_payload(
         "stage": "Waiting in queue" if auto_start else "Ready",
         "pct": 0,
         "eta_seconds": None,
+        "eta_state": None,
         "out_dir": None,
         "outputs": [],
         "error": None,
@@ -4127,6 +4675,7 @@ def _build_task_payload(
         "eta_stage": None,
         "audio_seconds": None,
         "predicted_total_seconds": None,
+        "runtime_plan": {"stages": []},
         "last_progress_at": time.time(),
         "last_progress_pct": 0,
         "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
@@ -4261,6 +4810,7 @@ def _apply_task_start_settings(
     elif task.get("output_same_as_input_snapshot") is None:
         task["output_same_as_input_snapshot"] = bool(_compat_settings_payload().get("output_same_as_input"))
     task["preset_settings_snapshot"] = _preset_settings_payload_for_mode(mode, _compat_settings_payload())
+    _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
 
 
 def _register_task(
@@ -4308,10 +4858,14 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
         task["status"] = "queued"
         task["stage"] = "Waiting in queue"
         task["eta_seconds"] = None
+        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         task["started_at"] = None
         task["stage_started_at"] = None
+        task["audio_seconds"] = None
+        task["predicted_total_seconds"] = None
+        _refresh_runtime_plan(task, audio_seconds=0.0)
         task["last_progress_at"] = time.time()
         task["last_progress_pct"] = 0
         task["last_progress_stage"] = task["stage"]
@@ -4348,6 +4902,7 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "stage": stage,
         "pct": pct,
         "eta_seconds": public["eta_seconds"],
+        "eta_state": public.get("eta_state"),
         "stems": _mode_to_stems(public["mode"]),
         "video_handling": public["video_handling"],
         "out_dir": public["out_dir"],
@@ -4491,7 +5046,9 @@ def _process_task(task_id: str) -> None:
         audio_seconds = waveform.shape[1] / 44100.0 if waveform.shape[1] > 0 else 0.0
         with tasks_lock:
             tasks[task_id]["audio_seconds"] = audio_seconds
+            _refresh_runtime_plan(tasks[task_id], audio_seconds=audio_seconds)
             tasks[task_id]["predicted_total_seconds"] = _predict_task_runtime_seconds(mode, audio_seconds)
+            _update_task_runtime_view(tasks[task_id], now=time.time())
             tasks[task_id]["version"] += 1
 
         temp_outputs: list[tuple[str, Path]] = []
@@ -4868,8 +5425,13 @@ def _task_worker() -> None:
             task_queue.task_done()
 
 
-threading.Thread(target=_task_worker, daemon=True).start()
-threading.Thread(target=_watchdog_loop, daemon=True).start()
+def _background_threads_enabled() -> bool:
+    return str(os.environ.get("STEMSPLAT_DISABLE_BACKGROUND_THREADS") or "").strip() not in {"1", "true", "yes"}
+
+
+if _background_threads_enabled():
+    threading.Thread(target=_task_worker, daemon=True).start()
+    threading.Thread(target=_watchdog_loop, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -5670,7 +6232,8 @@ async def compat_progress(task_id: str):
                     break
                 snapshot = _compat_public_task(task)
                 if task["status"] == "running" and 0 < int(task.get("pct") or 0) < 100:
-                    snapshot["eta_seconds"] = _estimate_eta(task, int(task.get("pct") or 0))
+                    _update_task_runtime_view(task, now=now)
+                    snapshot = _compat_public_task(task)
             if snapshot["pct"] != -1 and snapshot["stage"] == "error":
                 snapshot["pct"] = -1
             should_emit = task["version"] != last_version

@@ -38,6 +38,7 @@ NEW_MODEL_EXPECTATIONS = {
         "config": "BS-Rofo-SW-Fixed.yaml",
         "segment": 588_800,
         "overlap": 2,
+        "kind": "bs_roformer",
         "url": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
         "filename": "BS-Rofo-SW-Fixed.ckpt",
     },
@@ -217,6 +218,8 @@ class ModelRegistryTests(unittest.TestCase):
             self.assertEqual(spec["config"], expected["config"])
             self.assertEqual(spec["segment"], expected["segment"])
             self.assertEqual(spec["overlap"], expected["overlap"])
+            if "kind" in expected:
+                self.assertEqual(spec["kind"], expected["kind"])
 
             config_path = CONFIG_DIR / str(spec["config"])
             cfg = yaml.unsafe_load(config_path.read_text(encoding="utf-8"))
