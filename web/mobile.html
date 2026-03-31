@@ -1241,6 +1241,7 @@
     const windowMinimizeBtn = document.getElementById('window-minimize-btn');
     const windowFullscreenBtn = document.getElementById('window-fullscreen-btn');
     let outputFormatSelect = null;
+    let multiStemExportSelect = null;
     let previousFilesRetentionSelect = null;
     let previousFilesLimitInput = null;
     let previousFilesWarnInput = null;
@@ -1449,6 +1450,7 @@
       output_root: '',
       structure_mode: 'flat',
       output_format: 'same_as_input',
+      multi_stem_export: 'zip',
       previous_files_retention: '1w',
       video_handling: 'audio_only',
       boost_harmonies_background_vocals_gain_db: 3,
@@ -1879,6 +1881,9 @@
     function applySettingsUI(){
       if(outputFormatSelect){
         outputFormatSelect.value = settingsState.output_format || 'same_as_input';
+      }
+      if(multiStemExportSelect){
+        multiStemExportSelect.value = settingsState.multi_stem_export || 'zip';
       }
       if(previousFilesRetentionSelect){
         previousFilesRetentionSelect.value = settingsState.previous_files_retention || '1w';
@@ -2358,6 +2363,7 @@
         body: JSON.stringify({
           stems: stems.join(','),
           output_format: settingsState.output_format || 'same_as_input',
+          multi_stem_export: settingsState.multi_stem_export || 'zip',
           video_handling: settingsState.video_handling || 'audio_only',
         }),
       });
@@ -3105,6 +3111,9 @@
       if(typeof options.output_format === 'string' && options.output_format){
         body.output_format = options.output_format;
       }
+      if(typeof options.multi_stem_export === 'string' && options.multi_stem_export){
+        body.multi_stem_export = options.multi_stem_export;
+      }
       if(typeof options.video_handling === 'string' && options.video_handling){
         body.video_handling = options.video_handling;
       }
@@ -3410,6 +3419,7 @@
       presetSettingsOverlay = document.getElementById('preset-settings-overlay');
       presetSettingsBtn = document.getElementById('preset-settings-btn');
       outputFormatSelect = document.getElementById('output-format');
+      multiStemExportSelect = document.getElementById('multi-stem-export');
       previousFilesRetentionSelect = document.getElementById('previous-files-retention');
       previousFilesLimitInput = document.getElementById('previous-files-limit-gb');
       previousFilesWarnInput = document.getElementById('previous-files-warn-gb');
@@ -3501,6 +3511,11 @@
       if(outputFormatSelect){
         outputFormatSelect.addEventListener('change', () => {
           persistSettings({ output_format: outputFormatSelect.value }, { showMissingPopup:false });
+        });
+      }
+      if(multiStemExportSelect){
+        multiStemExportSelect.addEventListener('change', () => {
+          persistSettings({ multi_stem_export: multiStemExportSelect.value }, { showMissingPopup:false });
         });
       }
       if(previousFilesRetentionSelect){
@@ -4685,6 +4700,7 @@
       await rerunTask(task, ui, {
         stems: stems.join(','),
         output_format: settingsState.output_format || 'same_as_input',
+        multi_stem_export: settingsState.multi_stem_export || 'zip',
         video_handling: settingsState.video_handling || 'audio_only',
       });
       return true;
@@ -4900,6 +4916,16 @@
       return groups[0] ? groups[0].slice() : [];
     }
 
+    function currentStartSettings(){
+      return {
+        output_format: settingsState.output_format || 'same_as_input',
+        multi_stem_export: settingsState.multi_stem_export || 'zip',
+        video_handling: settingsState.video_handling || 'audio_only',
+        output_root: settingsState.output_root || '',
+        output_same_as_input: !!settingsState.output_same_as_input,
+      };
+    }
+
     function sourceDirForFile(file){
       if(!file || typeof file.path !== 'string' || !file.path) return '';
       const normalized = file.path.replace(/\\/g, '/');
@@ -5028,6 +5054,7 @@
         data.append('file', file);
         data.append('stems', stems.join(','));
         data.append('output_format', settingsState.output_format || 'same_as_input');
+        data.append('multi_stem_export', settingsState.multi_stem_export || 'zip');
         data.append('video_handling', settingsState.video_handling || 'audio_only');
         const sourceDir = sourceDirForFile(file);
         if(sourceDir){
@@ -5136,7 +5163,13 @@
       pending.startedProcessing = true;
       pending.uploadPromise.then(async () => {
         if(!pending.id) return;
-        try{ await fetch('/start/' + pending.id, { method:'POST' }); }catch(_){ /* ignore */ }
+        try{
+          await fetch('/start/' + pending.id, {
+            method:'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(currentStartSettings()),
+          });
+        }catch(_){ /* ignore */ }
       });
     }
 
@@ -5321,6 +5354,7 @@
               paths: trimmed,
               stems: stems.join(','),
               output_format: settingsState.output_format || 'same_as_input',
+              multi_stem_export: settingsState.multi_stem_export || 'zip',
               video_handling: settingsState.video_handling || 'audio_only',
             }),
           });
@@ -5662,6 +5696,11 @@
             <option value="wav">wav</option>
             <option value="m4a">m4a</option>
             <option value="flac">flac</option>
+          </select>
+          <label for="multi-stem-export" class="text-sm opacity-80 block">multi-stem export</label>
+          <select id="multi-stem-export" class="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20">
+            <option value="zip">zip</option>
+            <option value="separate">separate files</option>
           </select>
           <div class="space-y-2">
             <div class="text-sm opacity-80">models</div>

@@ -226,6 +226,9 @@ class ModelRegistryTests(unittest.TestCase):
             self.assertEqual(int(cfg["audio"]["chunk_size"]), spec["segment"])
             self.assertEqual(int(cfg["inference"]["num_overlap"]), spec["overlap"])
 
+    def test_multi_stem_export_defaults_to_zip(self) -> None:
+        self.assertEqual(self.compat_defaults["multi_stem_export"], "zip")
+
     def test_new_modes_round_trip(self) -> None:
         for mode in NEW_MODEL_EXPECTATIONS:
             if mode in self.mode_to_stems:

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+import zipfile
 
 os.environ.setdefault("STEMSPLAT_DISABLE_BACKGROUND_THREADS", "1")
 
@@ -145,6 +146,32 @@ class RuntimeEstimatorTests(unittest.TestCase):
         self.assertLess(predicted_seconds, 200.0)
         self.assertAlmostEqual(fraction, 0.2, places=3)
         self.assertEqual(eta_state, "calibrating")
+
+    def test_finalize_written_outputs_zips_multi_stem_exports_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            vocals = out_dir / "song - vocals.wav"
+            drums = out_dir / "song - drums.wav"
+            vocals.write_bytes(b"vocals")
+            drums.write_bytes(b"drums")
+            task = {
+                "id": "task-1",
+                "original_name": "song.wav",
+                "delivery": "folder",
+                "multi_stem_export_snapshot": "zip",
+            }
+
+            with mock.patch.dict(main.tasks, {"task-1": task}, clear=True):
+                finalized = main._finalize_written_outputs("task-1", out_dir, [vocals, drums])
+
+            self.assertEqual(len(finalized), 1)
+            archive_path = finalized[0]
+            self.assertEqual(archive_path.suffix, ".zip")
+            self.assertTrue(archive_path.exists())
+            self.assertFalse(vocals.exists())
+            self.assertFalse(drums.exists())
+            with zipfile.ZipFile(archive_path) as archive:
+                self.assertEqual(sorted(archive.namelist()), ["song - drums.wav", "song - vocals.wav"])
 
 
 if __name__ == "__main__":

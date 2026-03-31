@@ -967,6 +967,7 @@ PREVIOUS_FILES_WARN_GB_MIN = 0.1
 PREVIOUS_FILES_WARN_GB_MAX = 1024.0
 PREVIOUS_FILES_LIMIT_GB_DEFAULT = 10.0
 PREVIOUS_FILES_WARN_GB_DEFAULT = 8.0
+MULTI_STEM_EXPORT_CHOICES = {"zip", "separate"}
 BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
 BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
 BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
@@ -981,6 +982,7 @@ COMPAT_SETTINGS_DEFAULTS = {
     "output_root": str(OUTPUT_ROOT),
     "output_root_migrated_to_downloads": False,
     "output_same_as_input": False,
+    "multi_stem_export": "zip",
     "video_handling": "audio_only",
     "structure_mode": "flat",
     "model_prompt_state": MODEL_PROMPT_PENDING,
@@ -1373,6 +1375,8 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     normalized["output_root"] = str(output_root)
     normalized["output_root_migrated_to_downloads"] = migrated_to_downloads
     normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
+    if str(normalized.get("multi_stem_export") or "") not in MULTI_STEM_EXPORT_CHOICES:
+        normalized["multi_stem_export"] = "zip"
     normalized["lan_passcode_enabled"] = bool(normalized.get("lan_passcode_enabled"))
     normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
     if str(normalized.get("lan_passcode_ttl") or "") not in LAN_AUTH_TTL_CHOICES:
@@ -4017,6 +4021,9 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "name": task["original_name"],
         "mode": task["mode"],
         "output_format": task["output_format"],
+        "multi_stem_export": _validate_multi_stem_export(
+            str(task.get("multi_stem_export_snapshot") or _compat_settings_payload().get("multi_stem_export") or "zip")
+        ),
         "video_handling": task["video_handling"],
         "delivery": str(task.get("delivery") or "folder"),
         "status": task["status"],
@@ -4254,6 +4261,46 @@ def _download_label(task: dict[str, Any]) -> str:
     return _safe_stem(str(task.get("original_name") or "stems"))
 
 
+def _unique_output_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{stem} ({index}){suffix}")
+        if not candidate.exists():
+            return candidate
+    return path.with_name(f"{stem}-{int(time.time())}{suffix}")
+
+
+def _create_multi_stem_archive(task: dict[str, Any], output_paths: list[Path], out_dir: Path) -> Path:
+    archive_name = f"{_download_label(task)}.zip"
+    archive_path = _unique_output_path(out_dir / archive_name)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for output_path in output_paths:
+            zf.write(output_path, arcname=output_path.name)
+    return archive_path
+
+
+def _finalize_written_outputs(task_id: str, out_dir: Path, output_paths: list[Path]) -> list[Path]:
+    if len(output_paths) <= 1:
+        return list(output_paths)
+    with tasks_lock:
+        task = dict(tasks.get(task_id) or {})
+    if not task:
+        return list(output_paths)
+    if str(task.get("delivery") or "folder") != "folder":
+        return list(output_paths)
+    if _validate_multi_stem_export(
+        str(task.get("multi_stem_export_snapshot") or _compat_settings_payload().get("multi_stem_export") or "zip")
+    ) != "zip":
+        return list(output_paths)
+    archive_path = _create_multi_stem_archive(task, output_paths, out_dir)
+    for output_path in output_paths:
+        _cleanup_path(output_path)
+    return [archive_path]
+
+
 def _copy_outputs_to_directory(output_paths: list[Path], destination_dir: Path) -> list[Path]:
     copied: list[Path] = []
     _ensure_dir(destination_dir)
@@ -4489,6 +4536,7 @@ def _restart_task_payload(
     video_handling: str | None = None,
     output_root: str | None = None,
     output_same_as_input: bool | None = None,
+    multi_stem_export: str | None = None,
     prioritize: bool = False,
 ) -> dict[str, Any]:
     old_task = _require_task(task_id)
@@ -4517,6 +4565,7 @@ def _restart_task_payload(
         video_handling=resolved_video_handling,
         output_root=output_root,
         output_same_as_input=output_same_as_input,
+        multi_stem_export=multi_stem_export,
     )
     _enqueue_task(payload["id"], front=prioritize)
     return payload
@@ -4657,6 +4706,7 @@ def _build_task_payload(
         "video_handling": video_handling,
         "output_root_snapshot": None,
         "output_same_as_input_snapshot": None,
+        "multi_stem_export_snapshot": None,
         "preset_settings_snapshot": None,
         "delivery": delivery,
         "status": "queued" if auto_start else "ready",
@@ -4717,6 +4767,12 @@ def _validate_video_handling(video_handling: str) -> str:
     if video_handling not in VIDEO_HANDLING_CHOICES:
         return "audio_only"
     return "audio_only"
+
+
+def _validate_multi_stem_export(multi_stem_export: str) -> str:
+    if multi_stem_export not in MULTI_STEM_EXPORT_CHOICES:
+        return "zip"
+    return multi_stem_export
 
 
 def _validate_media_type(name: str, content_type: str | None = None) -> str:
@@ -4792,15 +4848,20 @@ def _apply_task_start_settings(
     video_handling: str | None = None,
     output_root: str | None = None,
     output_same_as_input: bool | None = None,
+    multi_stem_export: str | None = None,
 ) -> None:
     next_output_format = str(output_format or task.get("output_format") or _compat_settings_payload()["output_format"])
     next_video_handling = _validate_video_handling(
         str(video_handling or task.get("video_handling") or _compat_settings_payload()["video_handling"])
     )
+    next_multi_stem_export = _validate_multi_stem_export(
+        str(multi_stem_export or task.get("multi_stem_export_snapshot") or _compat_settings_payload().get("multi_stem_export") or "zip")
+    )
     mode = str(task.get("mode") or "vocals")
     _validate_mode_and_output_format(mode, next_output_format)
     task["output_format"] = next_output_format
     task["video_handling"] = next_video_handling
+    task["multi_stem_export_snapshot"] = next_multi_stem_export
     if output_root is not None:
         task["output_root_snapshot"] = str(_ensure_dir(Path(output_root).expanduser()))
     elif not str(task.get("output_root_snapshot") or "").strip():
@@ -4821,6 +4882,7 @@ def _register_task(
     mode: str,
     output_format: str,
     video_handling: str,
+    multi_stem_export: str | None = None,
     delivery: str = "folder",
     auto_start: bool,
     queue_front: bool = False,
@@ -4837,7 +4899,7 @@ def _register_task(
         delivery=delivery,
         auto_start=auto_start,
     )
-    _apply_task_start_settings(payload)
+    _apply_task_start_settings(payload, multi_stem_export=multi_stem_export)
     with tasks_lock:
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
@@ -5394,7 +5456,8 @@ def _process_task(task_id: str) -> None:
                 _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT, index / max(1, total_exports)),
             )
 
-        _mark_task_done(task_id, output_dir, exported_files)
+        finalized_outputs = _finalize_written_outputs(task_id, output_dir, written_outputs)
+        _mark_task_done(task_id, output_dir, [output_path.name for output_path in finalized_outputs])
     except TaskStopped:
         for output_path in written_outputs:
             _cleanup_path(output_path)
@@ -5678,6 +5741,9 @@ async def import_paths(request: Request) -> dict[str, Any]:
     raw_paths = body.get("paths")
     raw_stems = body.get("stems")
     output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
+    multi_stem_export = _validate_multi_stem_export(
+        str(body.get("multi_stem_export") or _compat_settings_payload().get("multi_stem_export") or "zip")
+    )
     video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
     if not isinstance(raw_paths, list) or not raw_paths:
         raise AppError(ErrorCode.INVALID_REQUEST, "No files selected.").to_http()
@@ -5700,6 +5766,7 @@ async def import_paths(request: Request) -> dict[str, Any]:
             mode=mode,
             output_format=output_format,
             video_handling=video_handling,
+            multi_stem_export=multi_stem_export,
             delivery=delivery,
             auto_start=False,
         )
@@ -5713,11 +5780,13 @@ async def create_task(
     file: UploadFile = File(...),
     mode: str = Form("vocals"),
     output_format: str = Form("same_as_input"),
+    multi_stem_export: str = Form("zip"),
     video_handling: str = Form("audio_only"),
     source_dir: str | None = Form(None),
 ):
     try:
         _validate_mode_and_output_format(mode, output_format)
+        multi_stem_export = _validate_multi_stem_export(multi_stem_export)
         video_handling = _validate_video_handling(video_handling)
         original_name, source_path = await _store_uploaded_file(file)
         payload = _register_task(
@@ -5727,6 +5796,7 @@ async def create_task(
             mode=mode,
             output_format=output_format,
             video_handling=video_handling,
+            multi_stem_export=multi_stem_export,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=True,
         )
@@ -5805,6 +5875,7 @@ async def retry_task(task_id: str, request: Request):
         body = {}
     stems_raw = body.get("stems")
     output_format = body.get("output_format")
+    multi_stem_export = body.get("multi_stem_export")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
     prioritize = bool(body.get("prioritize"))
@@ -5817,6 +5888,9 @@ async def retry_task(task_id: str, request: Request):
             video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
             output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
             output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
+            multi_stem_export=_validate_multi_stem_export(str(multi_stem_export))
+            if isinstance(multi_stem_export, str) and multi_stem_export.strip()
+            else None,
             prioritize=prioritize,
         )
     except AppError as exc:
@@ -6051,6 +6125,9 @@ async def reuse_previous_file(entry_id: str, request: Request) -> dict[str, Any]
     if not isinstance(stems_raw, str) or not stems_raw.strip():
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
     output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
+    multi_stem_export = _validate_multi_stem_export(
+        str(body.get("multi_stem_export") or _compat_settings_payload().get("multi_stem_export") or "zip")
+    )
     video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
     mode = _stems_to_mode(stems_raw)
     _validate_mode_and_output_format(mode, output_format)
@@ -6065,6 +6142,7 @@ async def reuse_previous_file(entry_id: str, request: Request) -> dict[str, Any]
         mode=mode,
         output_format=output_format,
         video_handling=video_handling,
+        multi_stem_export=multi_stem_export,
         delivery="browser_download" if _is_remote_client(request) else "folder",
         auto_start=False,
     )
@@ -6088,6 +6166,8 @@ async def update_settings(request: Request) -> dict[str, Any]:
         if output_format not in OUTPUT_FORMAT_CHOICES:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
         patch["output_format"] = output_format
+    if "multi_stem_export" in body:
+        patch["multi_stem_export"] = _validate_multi_stem_export(str(body.get("multi_stem_export") or "zip"))
     output_root = body.get("output_root")
     if isinstance(output_root, str):
         try:
@@ -6160,12 +6240,16 @@ async def compat_upload(
     file: UploadFile = File(...),
     stems: str = Form("vocals"),
     output_format: str | None = Form(None),
+    multi_stem_export: str | None = Form(None),
     video_handling: str | None = Form(None),
     source_dir: str | None = Form(None),
 ):
     try:
         mode = _stems_to_mode(stems)
         resolved_output_format = output_format or _compat_settings_payload()["output_format"]
+        resolved_multi_stem_export = _validate_multi_stem_export(
+            str(multi_stem_export or _compat_settings_payload().get("multi_stem_export") or "zip")
+        )
         resolved_video_handling = _validate_video_handling(video_handling or _compat_settings_payload()["video_handling"])
         _validate_mode_and_output_format(mode, resolved_output_format)
         original_name, source_path = await _store_uploaded_file(file)
@@ -6176,6 +6260,7 @@ async def compat_upload(
             mode=mode,
             output_format=resolved_output_format,
             video_handling=resolved_video_handling,
+            multi_stem_export=resolved_multi_stem_export,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=False,
         )
@@ -6194,6 +6279,7 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         body = {}
     output_format = body.get("output_format")
+    multi_stem_export = body.get("multi_stem_export")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
     output_same_as_input = body.get("output_same_as_input")
@@ -6209,6 +6295,9 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
                     video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
                     output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
                     output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
+                    multi_stem_export=_validate_multi_stem_export(str(multi_stem_export))
+                    if isinstance(multi_stem_export, str) and multi_stem_export.strip()
+                    else None,
                 )
         task = _enqueue_task(task_id)
         return _compat_public_task(task)
