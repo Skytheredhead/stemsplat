@@ -23,7 +23,7 @@ ensure_app_dirs()
 from main import app, set_runtime_status_provider
 
 logger = logging.getLogger("stemsplat.launcher")
-PREFERRED_PORT = 8000
+PREFERRED_PORT = 9876
 FALLBACK_SCAN = 32
 
 try:

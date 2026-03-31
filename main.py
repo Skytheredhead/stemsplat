@@ -929,6 +929,7 @@ class ExportPlan:
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
 APP_VERSION = "0.3.0"
+DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 WATCHDOG_INTERVAL_SECONDS = 5.0
@@ -1137,7 +1138,7 @@ MODEL_DISPLAY_NAMES = {
     "guitar": "guitar",
     "mel_band_karaoke": "karaoke",
     "denoise": "denoise",
-    "bs_roformer_6s": "bs-roformer 6s",
+    "bs_roformer_6s": "6 stems",
     "htdemucs_ft_drums": "htdemucs4 ft drums",
     "htdemucs_ft_bass": "htdemucs4 ft bass",
     "htdemucs_ft_other": "htdemucs4 ft other",
@@ -1867,13 +1868,18 @@ def _required_models_for_mode(mode: str) -> list[str]:
     return list(MODE_REQUIRED_MODELS.get(mode, ()))
 
 
-def _model_file_exists(filename: str) -> bool:
+def _locate_model_file(filename: str) -> Path | None:
     search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
     for base_dir in MODEL_SEARCH_DIRS:
         for search_name in search_names:
-            if _locate_case_insensitive(base_dir / search_name):
-                return True
-    return False
+            match = _locate_case_insensitive(base_dir / search_name)
+            if match:
+                return match
+    return None
+
+
+def _model_file_exists(filename: str) -> bool:
+    return _locate_model_file(filename) is not None
 
 
 def _find_missing_models_for_mode(mode: str) -> list[str]:
@@ -1899,6 +1905,45 @@ def _port_available(port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+def _run_interruptible_subprocess(
+    cmd: list[str],
+    *,
+    stop_check: Callable[[], None] | None = None,
+) -> None:
+    if stop_check is None:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        return
+
+    stop_check()
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        while True:
+            stop_check()
+            if process.poll() is not None:
+                break
+            time.sleep(0.12)
+        _stdout, stderr = process.communicate()
+    except TaskStopped:
+        with contextlib.suppress(Exception):
+            process.terminate()
+        with contextlib.suppress(Exception):
+            process.wait(timeout=1.5)
+        if process.poll() is None:
+            with contextlib.suppress(Exception):
+                process.kill()
+        with contextlib.suppress(Exception):
+            process.communicate(timeout=1.0)
+        raise
+
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, cmd, stderr=stderr)
 
 
 def _ensure_ffmpeg() -> str:
@@ -2099,6 +2144,8 @@ def _export_stem(
     dest_path: Path,
     plan: ExportPlan,
     has_cover: bool,
+    *,
+    stop_check: Callable[[], None] | None = None,
 ) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2135,12 +2182,9 @@ def _export_stem(
     last_error: Exception | None = None
     for include_cover in attempts:
         try:
-            subprocess.run(
+            _run_interruptible_subprocess(
                 _build_command(include_cover),
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+                stop_check=stop_check,
             )
             _strip_title_metadata(candidate)
             return candidate
@@ -2172,6 +2216,8 @@ def _export_video_stem(
     source_path: Path,
     dest_path: Path,
     source_info: SourceInfo,
+    *,
+    stop_check: Callable[[], None] | None = None,
 ) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2206,12 +2252,9 @@ def _export_video_stem(
     if suffix in {".mp4", ".m4v", ".mov"}:
         cmd.extend(["-movflags", "+faststart"])
     try:
-        subprocess.run(
+        _run_interruptible_subprocess(
             cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
+            stop_check=stop_check,
         )
         _strip_title_metadata(candidate)
         return candidate
@@ -2220,7 +2263,13 @@ def _export_video_stem(
         raise AppError(ErrorCode.SEPARATION_FAILED, f"Video export failed: {exc}") from exc
 
 
-def _decode_audio_to_wav(source_path: Path, work_dir: Path, channels: int) -> Path:
+def _decode_audio_to_wav(
+    source_path: Path,
+    work_dir: Path,
+    channels: int,
+    *,
+    stop_check: Callable[[], None] | None = None,
+) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     decoded_path = work_dir / "input.wav"
     cmd = [
@@ -2239,7 +2288,7 @@ def _decode_audio_to_wav(source_path: Path, work_dir: Path, channels: int) -> Pa
         str(decoded_path),
     ]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        _run_interruptible_subprocess(cmd, stop_check=stop_check)
     except FileNotFoundError as exc:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found.") from exc
     except Exception as exc:
@@ -3002,7 +3051,12 @@ def _export_cached_boost_harmonies_mix(task_id: str, preset_settings: dict[str, 
     work_dir = Path(tempfile.mkdtemp(prefix=f"presetmix_{task_id[:8]}_", dir=str(WORK_DIR)))
     try:
         source_info = _probe_source(source_path)
-        decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
+        decoded_path = _decode_audio_to_wav(
+            source_path,
+            work_dir,
+            source_info.channels,
+            stop_check=lambda: _stop_check(task_id),
+        )
         waveform = _load_waveform(decoded_path)
         overlay_tensor = _load_waveform(overlay_cache)
         boost_mix_tensor = _boost_overlay_mix(
@@ -3055,6 +3109,7 @@ def _stage_model_key(stage_text: str) -> str | None:
         "running harmony background model": "mel_band_karaoke",
         "running denoise model": "denoise",
         "running bs-roformer 6s model": "bs_roformer_6s",
+        "running 6 stems model": "bs_roformer_6s",
         "running htdemucs4 ft drums model": "htdemucs_ft_drums",
         "running htdemucs4 ft bass model": "htdemucs_ft_bass",
         "running htdemucs4 ft other model": "htdemucs_ft_other",
@@ -3550,9 +3605,9 @@ def set_runtime_status_provider(provider: Callable[[], dict[str, Any]] | None) -
 def _runtime_status_payload() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "windowed": False,
-        "preferred_port": 8000,
-        "current_port": 8000,
-        "client_url": "http://127.0.0.1:8000/",
+        "preferred_port": DEFAULT_APP_PORT,
+        "current_port": DEFAULT_APP_PORT,
+        "client_url": f"http://127.0.0.1:{DEFAULT_APP_PORT}/",
         "lan_url": "",
         "lan_local_url": "",
         "lan_display": "",
@@ -3888,16 +3943,50 @@ def _selected_missing_models(selection: list[str] | None = None) -> list[str]:
 def _public_model_download_status() -> dict[str, Any]:
     with model_download_lock:
         payload = dict(model_download_state)
-    missing = sorted(_selected_missing_models())
+    models_status = _models_status_payload()
+    missing = list(models_status["missing"])
     prompt_state = str(_compat_settings_payload().get("model_prompt_state") or MODEL_PROMPT_PENDING)
     payload.update(
         {
             "missing": missing,
             "models_dir": str(MODEL_DIR),
+            "models": models_status["models"],
+            "downloaded_total_bytes": int(models_status["downloaded_total_bytes"]),
             "prompt_state": MODEL_PROMPT_COMPLETE if not missing else prompt_state,
         }
     )
     return payload
+
+
+def _models_status_payload() -> dict[str, Any]:
+    details: list[dict[str, Any]] = []
+    total_bytes = 0
+    missing: list[str] = []
+    for key in MODEL_SPECS:
+        path = _locate_model_file(MODEL_SPECS[key].filename)
+        size_bytes = 0
+        if path is not None:
+            with contextlib.suppress(OSError):
+                size_bytes = max(0, int(path.stat().st_size))
+        ready = path is not None and size_bytes >= 0
+        if not ready:
+            missing.append(key)
+        total_bytes += size_bytes
+        details.append(
+            {
+                "key": key,
+                "label": MODEL_DISPLAY_NAMES.get(key, key),
+                "ready": ready,
+                "size_bytes": size_bytes if ready else None,
+                "path": str(path) if path is not None else "",
+            }
+        )
+    return {
+        "missing": sorted(missing),
+        "models_dir": str(MODEL_DIR),
+        "models": details,
+        "downloaded_total_bytes": total_bytes,
+    }
 
 
 def _model_retry_label(retry_count: int) -> str:
@@ -5101,7 +5190,12 @@ def _process_task(task_id: str) -> None:
 
         work_dir = Path(tempfile.mkdtemp(prefix=f"stemsplat_{task_id[:8]}_", dir=str(WORK_DIR)))
         _set_task_progress(task_id, "Preparing audio", 4)
-        decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
+        decoded_path = _decode_audio_to_wav(
+            source_path,
+            work_dir,
+            source_info.channels,
+            stop_check=lambda: _stop_check(task_id),
+        )
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
         mode = task["mode"]
@@ -5345,7 +5439,7 @@ def _process_task(task_id: str) -> None:
                 waveform,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
-                    "Running bs-roformer 6s model",
+                    "Running 6 stems model",
                     _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
@@ -5443,11 +5537,24 @@ def _process_task(task_id: str) -> None:
             if export_video:
                 video_suffix, _audio_args = _resolve_video_output(source_info)
                 final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
-                exported = _export_video_stem(temp_path, source_path, final_path, source_info)
+                exported = _export_video_stem(
+                    temp_path,
+                    source_path,
+                    final_path,
+                    source_info,
+                    stop_check=lambda: _stop_check(task_id),
+                )
             else:
                 assert export_plan is not None
                 final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
-                exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
+                exported = _export_stem(
+                    temp_path,
+                    source_path,
+                    final_path,
+                    export_plan,
+                    source_info.has_cover,
+                    stop_check=lambda: _stop_check(task_id),
+                )
             written_outputs.append(exported)
             exported_files.append(exported.name)
             _set_task_progress(
@@ -5592,10 +5699,35 @@ def _open_path_in_finder(path: Path) -> None:
     subprocess.Popen(["xdg-open", str(target)])
 
 
+def _open_terminal_app() -> None:
+    if sys.platform == "darwin":
+        script_lines = [
+            'tell application "Terminal"',
+            "activate",
+            'do script ""',
+            "end tell",
+        ]
+        subprocess.run(
+            ["osascript", *sum((["-e", line] for line in script_lines), [])],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return
+    if os.name == "nt":
+        subprocess.Popen(["cmd.exe"])
+        return
+    terminal = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("konsole")
+    if terminal:
+        subprocess.Popen([terminal])
+        return
+    raise AppError(ErrorCode.INVALID_REQUEST, "Could not open a terminal on this system.")
+
+
 @app.get("/api/models_status")
 async def models_status() -> dict[str, Any]:
-    missing = sorted({item for mode in MODE_CHOICES for item in _find_missing_models_for_mode(mode)})
-    return {"missing": missing, "models_dir": str(MODEL_DIR)}
+    return _models_status_payload()
 
 
 @app.post("/api/open_models_folder")
@@ -5731,6 +5863,18 @@ async def open_output_root(request: Request) -> dict[str, str]:
     except Exception as exc:
         raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open output folder: {exc}").to_http(500) from exc
     return {"status": "opened", "path": str(path)}
+
+
+@app.post("/api/open_terminal")
+async def open_terminal(request: Request) -> dict[str, str]:
+    _require_local_request(request, "LAN clients cannot control the host machine.")
+    try:
+        _open_terminal_app()
+    except AppError as exc:
+        raise exc.to_http(500) from exc
+    except Exception as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open terminal: {exc}").to_http(500) from exc
+    return {"status": "opened"}
 
 
 @app.post("/api/import_paths")
@@ -6465,7 +6609,7 @@ async def shutdown(request: Request):
 def cli_main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Run the stemsplat server.")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT)
     args = parser.parse_args(argv)
 
     import uvicorn
@@ -7267,7 +7411,7 @@ INDEX_HTML = """<!DOCTYPE html>
               <input type="radio" name="split-mode" value="bs_roformer_6s">
               <div class="checkbox"></div>
               <div>
-                <strong>bs-roformer 6s</strong>
+                <strong>6 stems</strong>
               </div>
             </label>
             <label class="mode-card" data-mode="preset_denoise">
@@ -7325,7 +7469,7 @@ INDEX_HTML = """<!DOCTYPE html>
       both_separate: 'both (separate)',
       guitar: 'mel-band guitar',
       mel_band_karaoke: 'mel-band karaoke',
-      bs_roformer_6s: 'bs-roformer 6s',
+      bs_roformer_6s: '6 stems',
       preset_denoise: 'denoise',
     };
 

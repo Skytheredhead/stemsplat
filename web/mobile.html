@@ -567,6 +567,7 @@
       -webkit-backdrop-filter: blur(14px) saturate(120%);
       font-size: 12px;
       line-height: 1.35;
+      white-space: pre-line;
       pointer-events: none;
       opacity: 0;
       transform: translateY(6px);
@@ -1102,10 +1103,10 @@
     <div id="action-column" class="flex flex-col gap-4 w-[272px]">
       <div id="mode-switcher" class="pre-hide fade-in mode-switcher glass">
         <span id="mode-switcher-pill" class="mode-switcher-pill"></span>
-        <button type="button" class="mode-switch-btn active" data-tab="fast" data-tooltip="fast models">fast</button>
-        <button type="button" class="mode-switch-btn" data-tab="quality" data-tooltip="quality models">quality</button>
-        <button type="button" class="mode-switch-btn" data-tab="special" data-tooltip="special models">special</button>
-        <button type="button" class="mode-switch-btn" data-tab="presets" data-tooltip="presets">presets</button>
+        <button type="button" class="mode-switch-btn active" data-tab="quality">quality</button>
+        <button type="button" class="mode-switch-btn" data-tab="fast">fast</button>
+        <button type="button" class="mode-switch-btn" data-tab="special">special</button>
+        <button type="button" class="mode-switch-btn" data-tab="presets">presets</button>
       </div>
       <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
         <button id="preset-settings-btn" data-tooltip="preset gains" title="preset settings" class="card-icon-btn focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer" hidden>
@@ -1310,7 +1311,7 @@
       guitar: 'guitar',
       mel_band_karaoke: 'karaoke',
       denoise: 'denoise',
-      bs_roformer_6s: 'bs-roformer 6s',
+      bs_roformer_6s: '6 stems',
       htdemucs_ft_drums: 'htdemucs4 ft drums',
       htdemucs_ft_bass: 'htdemucs4 ft bass',
       htdemucs_ft_other: 'htdemucs4 ft other',
@@ -1382,11 +1383,11 @@
         { kind: 'stem', id: 'both_deux', label: 'both', tooltip: 'slower separate pair' },
         { kind: 'stem', id: 'guitar', label: 'guitar', tooltip: 'medium guitar split' },
         { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'medium karaoke split' },
-        { kind: 'stem', id: 'bs_roformer_6s', label: 'bs-roformer 6s', tooltip: 'slow 6 stems' },
+        { kind: 'stem', id: 'bs_roformer_6s', label: '6 stems', tooltip: 'splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits' },
       ],
       special: [
-        { kind: 'stem', id: 'drumsep_6s', label: 'drumsep (6 stem)', tooltip: '6 drum stems' },
-        { kind: 'stem', id: 'drumsep_4s', label: 'drum sep (4 stem)', tooltip: '4 drum stems' },
+        { kind: 'stem', id: 'drumsep_6s', label: 'drumsep (6 stem)', tooltip: 'splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s' },
+        { kind: 'stem', id: 'drumsep_4s', label: 'drum sep (4 stem)', tooltip: 'splits into:\n- cymbals\n- kick\n- snare\n- toms' },
         { kind: 'stem', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
       ],
       presets: [
@@ -2409,9 +2410,9 @@
         { label: 'both', stems: ['deux'], tooltip: 'both' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
         { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
-        { label: 'bs-roformer 6s', stems: ['bs_roformer_6s'], tooltip: '6 stems' },
-        { label: 'drumsep (6 stem)', stems: ['drumsep_6s'], tooltip: '6 drum stems' },
-        { label: 'drum sep (4 stem)', stems: ['drumsep_4s'], tooltip: '4 drum stems' },
+        { label: '6 stems', stems: ['bs_roformer_6s'], tooltip: 'splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits' },
+        { label: 'drumsep (6 stem)', stems: ['drumsep_6s'], tooltip: 'splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s' },
+        { label: 'drum sep (4 stem)', stems: ['drumsep_4s'], tooltip: 'splits into:\n- cymbals\n- kick\n- snare\n- toms' },
         { label: 'voc+instrum', stems: ['voc_instrum'], tooltip: 'vocals + instrumental' },
         { label: 'boost harmonies', stems: ['boost_harmonies'], tooltip: 'boost harmonies' },
         { label: 'boost guitar', stems: ['boost_guitar'], tooltip: 'boost guitar' },
@@ -2925,7 +2926,7 @@
         mel_band_karaoke: 'karaoke',
         voc_instrum: 'voc+instrum',
         denoise: 'denoise',
-        bs_roformer_6s: 'bs-roformer 6s',
+        bs_roformer_6s: '6 stems',
         htdemucs_ft_drums: 'htdemucs4 ft drums',
         htdemucs_ft_bass: 'htdemucs4 ft bass',
         htdemucs_ft_other: 'htdemucs4 ft other',
@@ -3965,7 +3966,7 @@
       if(portStatusText){
         if(data.port_conflict){
           portStatusText.hidden = false;
-          portStatusText.textContent = `port ${data.preferred_port || 8000} is in use. currently running on ${data.current_port || data.preferred_port || 8000}.`;
+          portStatusText.textContent = `port ${data.preferred_port || 9876} is in use. currently running on ${data.current_port || data.preferred_port || 9876}.`;
         }else{
           portStatusText.hidden = true;
           portStatusText.textContent = '';
@@ -4075,7 +4076,7 @@
 
     function showPortConflictOverlay(status){
       closeOverlay(activePortOverlay);
-      const preferredPort = status.preferred_port || 8000;
+      const preferredPort = status.preferred_port || 9876;
       const currentPort = status.current_port || preferredPort;
       const { overlay, card } = createOverlayCard(`port ${preferredPort} is busy`);
       activePortOverlay = overlay;
@@ -4107,9 +4108,21 @@
       card.appendChild(commandWrap);
 
       const row = document.createElement('div');
-      row.className = 'flex gap-3 justify-end flex-wrap';
-      const stayBtn = makeActionButton('i just want to use the app', 'bg-white/10 text-white');
-      const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'bg-white text-black');
+      row.className = 'grid grid-cols-1 gap-3 sm:grid-cols-3';
+      const stayBtn = makeActionButton('i just want to use the app', 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white/10 text-white');
+      const terminalBtn = makeActionButton('open terminal', 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white/10 text-white');
+      const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white text-black');
+
+      terminalBtn.onclick = async () => {
+        try{
+          const res = await fetch('/api/open_terminal', { method: 'POST' });
+          if(!res.ok){
+            showPopup(await responseErrorMessage(res, 'could not open terminal'));
+          }
+        }catch(err){
+          showPopup('could not open terminal');
+        }
+      };
 
       stayBtn.onclick = async () => {
         let next = null;
@@ -4169,7 +4182,7 @@
         }
       };
 
-      row.append(stayBtn, retryBtn);
+      row.append(stayBtn, terminalBtn, retryBtn);
       card.appendChild(row);
     }
 

@@ -176,9 +176,9 @@
       display: none;
     }
     .app-shell.compact {
-      justify-content: center;
-      padding-top: clamp(136px, 16vh, 186px);
-      padding-bottom: clamp(86px, 10vh, 122px);
+      justify-content: flex-start;
+      padding-top: clamp(96px, 12vh, 136px);
+      padding-bottom: clamp(108px, 14vh, 152px);
     }
     .app-shell.expanded {
       justify-content: flex-start;
@@ -358,12 +358,13 @@
     .copy-button { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.10); display: inline-flex; align-items: center; justify-content: center; color: var(--txt-main); transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
     .copy-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.16); box-shadow: 0 8px 18px rgba(0,0,0,.2); }
     #settings-card {
-      max-height: 50vh;
+      width: min(92vw, 820px);
+      max-height: min(78vh, 860px);
       overflow: hidden;
       padding-right: 18px;
     }
     .settings-card-scroll {
-      max-height: calc(50vh - 48px);
+      max-height: calc(min(78vh, 860px) - 48px);
       overflow-y: auto;
       scrollbar-width: none;
       -ms-overflow-style: none;
@@ -403,6 +404,9 @@
     .settings-row { display:flex; align-items:center; gap:10px; }
     .model-list { display:flex; flex-direction:column; gap:10px; }
     .model-item { display:flex; align-items:center; gap:10px; font-size:13px; color: var(--txt-main); }
+    .model-item-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .model-item-label { line-height: 1.15; }
+    .model-item-size { font-size: 11px; color: rgba(223,236,244,.58); }
     .model-state { width:18px; height:18px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); display:flex; align-items:center; justify-content:center; color:#b9f4d7; }
     .model-state svg { width:12px; height:12px; opacity:0; transition: opacity .18s ease; }
     .model-item.ready .model-state svg { opacity:1; }
@@ -828,6 +832,7 @@
       -webkit-backdrop-filter: blur(14px) saturate(120%);
       font-size: 12px;
       line-height: 1.35;
+      white-space: pre-line;
       pointer-events: none;
       opacity: 0;
       transform: translateY(6px);
@@ -975,10 +980,10 @@
       z-index: 38;
     }
     #settings-btn {
-      width: 58px;
-      min-width: 58px;
-      height: 58px;
-      border-radius: 18px;
+      width: 88px;
+      min-width: 88px;
+      height: 88px;
+      border-radius: 24px;
     }
     .previous-files-list {
       display: flex;
@@ -1226,10 +1231,10 @@
     <div id="action-column" class="flex flex-col gap-4 w-[272px]">
       <div id="mode-switcher" class="pre-hide fade-in mode-switcher glass">
         <span id="mode-switcher-pill" class="mode-switcher-pill"></span>
-        <button type="button" class="mode-switch-btn active" data-tab="fast" data-tooltip="fast models">fast</button>
-        <button type="button" class="mode-switch-btn" data-tab="quality" data-tooltip="quality models">quality</button>
-        <button type="button" class="mode-switch-btn" data-tab="special" data-tooltip="special models">special</button>
-        <button type="button" class="mode-switch-btn" data-tab="presets" data-tooltip="presets">presets</button>
+        <button type="button" class="mode-switch-btn active" data-tab="quality">quality</button>
+        <button type="button" class="mode-switch-btn" data-tab="fast">fast</button>
+        <button type="button" class="mode-switch-btn" data-tab="special">special</button>
+        <button type="button" class="mode-switch-btn" data-tab="presets">presets</button>
       </div>
       <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
         <button id="preset-settings-btn" data-tooltip="preset gains" title="preset settings" class="card-icon-btn focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer" hidden>
@@ -1412,6 +1417,9 @@
     let outputFormatButton = null;
     let outputFormatMenu = null;
     let outputFormatLabel = null;
+    let multiStemExportButton = null;
+    let multiStemExportMenu = null;
+    let multiStemExportLabel = null;
     let presetSettingsBtn = null;
     let presetSettingsOverlay = null;
     let boostHarmoniesBackgroundSlider = null;
@@ -1462,6 +1470,9 @@
       special: 'special',
       presets: 'presets',
     };
+    const BS_6S_TOOLTIP = `splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits`;
+    const DRUMSEP_6S_TOOLTIP = `splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s`;
+    const DRUMSEP_4S_TOOLTIP = `splits into:\n- cymbals\n- kick\n- snare\n- toms`;
     const MODEL_LABELS = {
       vocals: 'vocals',
       instrumental: 'instrumental',
@@ -1469,7 +1480,7 @@
       guitar: 'guitar',
       mel_band_karaoke: 'karaoke',
       denoise: 'denoise',
-      bs_roformer_6s: 'bs-roformer 6s',
+      bs_roformer_6s: '6 stems',
       htdemucs_ft_drums: 'htdemucs4 ft drums',
       htdemucs_ft_bass: 'htdemucs4 ft bass',
       htdemucs_ft_other: 'htdemucs4 ft other',
@@ -1541,11 +1552,11 @@
         { kind: 'stem', id: 'both_deux', label: 'both', tooltip: 'slower separate pair' },
         { kind: 'stem', id: 'guitar', label: 'guitar', tooltip: 'medium guitar split' },
         { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'medium karaoke split' },
-        { kind: 'stem', id: 'bs_roformer_6s', label: 'bs-roformer 6s', tooltip: 'slow 6 stems' },
+        { kind: 'stem', id: 'bs_roformer_6s', label: '6 stems', tooltip: BS_6S_TOOLTIP },
       ],
       special: [
-        { kind: 'stem', id: 'drumsep_6s', label: 'drumsep (6 stem)', tooltip: '6 drum stems' },
-        { kind: 'stem', id: 'drumsep_4s', label: 'drum sep (4 stem)', tooltip: '4 drum stems' },
+        { kind: 'stem', id: 'drumsep_6s', label: 'drumsep (6 stem)', tooltip: DRUMSEP_6S_TOOLTIP },
+        { kind: 'stem', id: 'drumsep_4s', label: 'drum sep (4 stem)', tooltip: DRUMSEP_4S_TOOLTIP },
         { kind: 'stem', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
       ],
       presets: [
@@ -1616,6 +1627,10 @@
       '1mo': '1mo',
       '3mo': '3mo',
       '6mo': '6mo',
+    };
+    const MULTI_STEM_EXPORT_LABELS = {
+      zip: 'zip',
+      separate: 'separate files',
     };
     const MODEL_SOURCE_URLS = {
       vocals: 'https://huggingface.co/becruily/mel-band-roformer-vocals/tree/main',
@@ -2129,6 +2144,15 @@
       if(multiStemExportSelect){
         multiStemExportSelect.value = settingsState.multi_stem_export || 'zip';
       }
+      if(multiStemExportLabel){
+        multiStemExportLabel.textContent = MULTI_STEM_EXPORT_LABELS[settingsState.multi_stem_export || 'zip'] || 'zip';
+      }
+      if(multiStemExportMenu){
+        multiStemExportMenu.querySelectorAll('.fancy-select-option').forEach((option) => {
+          const selected = option.dataset.value === (settingsState.multi_stem_export || 'zip');
+          option.dataset.selected = selected ? 'true' : 'false';
+        });
+      }
       if(previousFilesRetentionSelect){
         previousFilesRetentionSelect.value = settingsState.previous_files_retention || '1w';
       }
@@ -2234,6 +2258,15 @@
       }
     }
 
+    function closeMultiStemExportMenu(){
+      if(multiStemExportButton){
+        multiStemExportButton.setAttribute('aria-expanded', 'false');
+      }
+      if(multiStemExportMenu){
+        multiStemExportMenu.classList.remove('open');
+      }
+    }
+
     function closeLanTtlMenu(){
       if(lanPasscodeTtlButton){
         lanPasscodeTtlButton.setAttribute('aria-expanded', 'false');
@@ -2258,11 +2291,26 @@
         ? outputFormatButton.getAttribute('aria-expanded') !== 'true'
         : !!forceOpen;
       if(shouldOpen){
+        closeMultiStemExportMenu();
         closeLanTtlMenu();
         closePreviousFilesRetentionMenu();
       }
       outputFormatButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
       outputFormatMenu.classList.toggle('open', shouldOpen);
+    }
+
+    function toggleMultiStemExportMenu(forceOpen = null){
+      if(!multiStemExportButton || !multiStemExportMenu) return;
+      const shouldOpen = forceOpen === null
+        ? multiStemExportButton.getAttribute('aria-expanded') !== 'true'
+        : !!forceOpen;
+      if(shouldOpen){
+        closeOutputFormatMenu();
+        closeLanTtlMenu();
+        closePreviousFilesRetentionMenu();
+      }
+      multiStemExportButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+      multiStemExportMenu.classList.toggle('open', shouldOpen);
     }
 
     function toggleLanTtlMenu(forceOpen = null){
@@ -2272,6 +2320,7 @@
         : !!forceOpen;
       if(shouldOpen){
         closeOutputFormatMenu();
+        closeMultiStemExportMenu();
         closePreviousFilesRetentionMenu();
       }
       lanPasscodeTtlButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
@@ -2285,6 +2334,7 @@
         : !!forceOpen;
       if(shouldOpen){
         closeOutputFormatMenu();
+        closeMultiStemExportMenu();
         closeLanTtlMenu();
       }
       previousFilesRetentionButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
@@ -2770,9 +2820,9 @@
         { label: 'both', stems: ['deux'], tooltip: 'both' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
         { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
-        { label: 'bs-roformer 6s', stems: ['bs_roformer_6s'], tooltip: '6 stems' },
-        { label: 'drumsep (6 stem)', stems: ['drumsep_6s'], tooltip: '6 drum stems' },
-        { label: 'drum sep (4 stem)', stems: ['drumsep_4s'], tooltip: '4 drum stems' },
+        { label: '6 stems', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
+        { label: 'drumsep (6 stem)', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
+        { label: 'drum sep (4 stem)', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
         { label: 'voc+instrum', stems: ['voc_instrum'], tooltip: 'vocals + instrumental' },
         { label: 'boost harmonies', stems: ['boost_harmonies'], tooltip: 'boost harmonies' },
         { label: 'boost guitar', stems: ['boost_guitar'], tooltip: 'boost guitar' },
@@ -3377,7 +3427,7 @@
         mel_band_karaoke: 'karaoke',
         voc_instrum: 'voc+instrum',
         denoise: 'denoise',
-        bs_roformer_6s: 'bs-roformer 6s',
+        bs_roformer_6s: '6 stems',
         htdemucs_ft_drums: 'htdemucs4 ft drums',
         htdemucs_ft_bass: 'htdemucs4 ft bass',
         htdemucs_ft_other: 'htdemucs4 ft other',
@@ -3920,6 +3970,9 @@
       outputFormatButton = document.getElementById('output-format-button');
       outputFormatMenu = document.getElementById('output-format-menu');
       outputFormatLabel = document.getElementById('output-format-label');
+      multiStemExportButton = document.getElementById('multi-stem-export-button');
+      multiStemExportMenu = document.getElementById('multi-stem-export-menu');
+      multiStemExportLabel = document.getElementById('multi-stem-export-label');
       outputFolderInput = document.getElementById('output-folder-path');
       outputSameAsInput = document.getElementById('output-same-as-input');
       outputFolderChoose = document.getElementById('output-folder-choose');
@@ -4035,6 +4088,11 @@
           toggleOutputFormatMenu();
         });
       }
+      if(multiStemExportButton){
+        multiStemExportButton.addEventListener('click', () => {
+          toggleMultiStemExportMenu();
+        });
+      }
       if(previousFilesRetentionButton){
         previousFilesRetentionButton.addEventListener('click', () => {
           togglePreviousFilesRetentionMenu();
@@ -4051,6 +4109,20 @@
             applySettingsUI();
             closeOutputFormatMenu();
             persistSettings({ output_format: nextValue }, { showMissingPopup:false });
+          });
+        });
+      }
+      if(multiStemExportMenu){
+        multiStemExportMenu.querySelectorAll('.fancy-select-option').forEach((option) => {
+          option.addEventListener('click', () => {
+            const nextValue = option.dataset.value || 'zip';
+            if(multiStemExportSelect){
+              multiStemExportSelect.value = nextValue;
+            }
+            settingsState = { ...settingsState, multi_stem_export: nextValue };
+            applySettingsUI();
+            closeMultiStemExportMenu();
+            persistSettings({ multi_stem_export: nextValue }, { showMissingPopup:false });
           });
         });
       }
@@ -4087,6 +4159,11 @@
             closeOutputFormatMenu();
           }
         }
+        if(multiStemExportButton && multiStemExportMenu){
+          if(!(multiStemExportButton.contains(event.target) || multiStemExportMenu.contains(event.target))){
+            closeMultiStemExportMenu();
+          }
+        }
         if(lanPasscodeTtlButton && lanPasscodeTtlMenu){
           if(!(lanPasscodeTtlButton.contains(event.target) || lanPasscodeTtlMenu.contains(event.target))){
             closeLanTtlMenu();
@@ -4101,6 +4178,7 @@
       document.addEventListener('keydown', (event) => {
         if(event.key === 'Escape'){
           closeOutputFormatMenu();
+          closeMultiStemExportMenu();
           closeLanTtlMenu();
           closePreviousFilesRetentionMenu();
           closePresetSettings();
@@ -4628,7 +4706,7 @@
       if(portStatusText){
         if(data.port_conflict){
           portStatusText.hidden = false;
-          portStatusText.textContent = `port ${data.preferred_port || 8000} is in use. currently running on ${data.current_port || data.preferred_port || 8000}.`;
+          portStatusText.textContent = `port ${data.preferred_port || 9876} is in use. currently running on ${data.current_port || data.preferred_port || 9876}.`;
         }else{
           portStatusText.hidden = true;
           portStatusText.textContent = '';
@@ -4646,17 +4724,31 @@
     function renderModelChecklist(status){
       if(!modelsList) return;
       const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
+      const modelMap = new Map(
+        (Array.isArray(status && status.models) ? status.models : []).map((item) => [item.key, item])
+      );
       modelsList.innerHTML = '';
       MODEL_CHECKLIST_ORDER.forEach((key) => {
+        const detail = modelMap.get(key) || null;
         const row = document.createElement('label');
         const ready = !missing.has(key);
         row.className = `model-item${ready ? ' ready' : ''}`;
         const box = document.createElement('span');
         box.className = 'model-state';
         box.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4L9 15"></path><path d="M21 19L3 19"></path><path d="M9 15L4 10"></path></svg>`;
+        const copy = document.createElement('span');
+        copy.className = 'model-item-copy';
         const label = document.createElement('span');
+        label.className = 'model-item-label';
         label.textContent = MODEL_LABELS[key] || key;
-        row.append(box, label);
+        copy.appendChild(label);
+        if(ready && detail && Number(detail.size_bytes) > 0){
+          const size = document.createElement('span');
+          size.className = 'model-item-size';
+          size.textContent = `estimated disk usage ${formatBytes(detail.size_bytes)}`;
+          copy.appendChild(size);
+        }
+        row.append(box, copy);
         modelsList.appendChild(row);
       });
     }
@@ -4744,7 +4836,7 @@
 
     function showPortConflictOverlay(status){
       closeOverlay(activePortOverlay);
-      const preferredPort = status.preferred_port || 8000;
+      const preferredPort = status.preferred_port || 9876;
       const currentPort = status.current_port || preferredPort;
       const { overlay, card } = createOverlayCard(`port ${preferredPort} is busy`);
       activePortOverlay = overlay;
@@ -4776,9 +4868,21 @@
       card.appendChild(commandWrap);
 
       const row = document.createElement('div');
-      row.className = 'flex gap-3 justify-end flex-wrap';
-      const stayBtn = makeActionButton('i just want to use the app', 'bg-white/10 text-white');
-      const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'bg-white text-black');
+      row.className = 'grid grid-cols-1 gap-3 sm:grid-cols-3';
+      const stayBtn = makeActionButton('i just want to use the app', 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white/10 text-white');
+      const terminalBtn = makeActionButton('open terminal', 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white/10 text-white');
+      const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white text-black');
+
+      terminalBtn.onclick = async () => {
+        try{
+          const res = await fetch('/api/open_terminal', { method: 'POST' });
+          if(!res.ok){
+            showPopup(await responseErrorMessage(res, 'could not open terminal'));
+          }
+        }catch(err){
+          showPopup('could not open terminal');
+        }
+      };
 
       stayBtn.onclick = async () => {
         let next = null;
@@ -4835,10 +4939,11 @@
         }finally{
           retryBtn.disabled = false;
           stayBtn.disabled = false;
+          terminalBtn.disabled = false;
         }
       };
 
-      row.append(stayBtn, retryBtn);
+      row.append(stayBtn, terminalBtn, retryBtn);
       card.appendChild(row);
     }
 
@@ -6758,7 +6863,7 @@
 
     <!-- The modal card itself -->
     <div id="settings-card"
-         class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
+         class="glass w-[min(92vw,820px)] max-w-none p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
          style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
       <div id="settings-scroll-indicator" class="settings-scroll-indicator" aria-hidden="true">
         <div id="settings-scroll-thumb" class="settings-scroll-thumb"></div>
@@ -6843,10 +6948,20 @@
             </select>
           </div>
           <label for="multi-stem-export" class="text-sm opacity-80 block">multi-stem export</label>
-          <select id="multi-stem-export" class="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20">
-            <option value="zip">zip</option>
-            <option value="separate">separate files</option>
-          </select>
+          <div class="fancy-select">
+            <button id="multi-stem-export-button" type="button" class="fancy-select-btn" aria-haspopup="listbox" aria-expanded="false">
+              <span id="multi-stem-export-label">zip</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+            </button>
+            <div id="multi-stem-export-menu" class="fancy-select-menu" role="listbox" aria-label="multi-stem export">
+              <button type="button" class="fancy-select-option" data-value="zip">zip</button>
+              <button type="button" class="fancy-select-option" data-value="separate">separate files</button>
+            </div>
+            <select id="multi-stem-export" class="sr-only">
+              <option value="zip">zip</option>
+              <option value="separate">separate files</option>
+            </select>
+          </div>
           <div class="space-y-2">
             <div class="text-sm opacity-80">models</div>
             <div id="models-list" class="model-list"></div>
@@ -6949,7 +7064,7 @@
     <div id="preset-overlay-bg" class="overlay-bg"></div>
 
     <div id="preset-settings-card"
-         class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
+         class="glass w-[min(92vw,820px)] max-w-none p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
          style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
       <button id="preset-settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
       <div class="settings-card-scroll">

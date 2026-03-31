@@ -141,7 +141,7 @@
     async function pingMainServer(){
       if (launched) return;
       try{
-        await fetch('http://localhost:8000/', {mode:'no-cors'});
+        await fetch('http://localhost:9876/', {mode:'no-cors'});
         await launchApp();
       }catch(_){ }
     }
@@ -168,7 +168,7 @@
       try { navigator.sendBeacon('http://localhost:6060/installer_shutdown'); } catch(_) {
         try { fetch('http://localhost:6060/installer_shutdown', { method:'POST', mode:'no-cors', keepalive:true }); } catch(_){}
       }
-      const target = mainAlreadyRunning ? 'http://localhost:8000/?reopen=1' : 'http://localhost:8000/';
+      const target = mainAlreadyRunning ? 'http://localhost:9876/?reopen=1' : 'http://localhost:9876/';
       location.replace(target);
     }
     startPinging();

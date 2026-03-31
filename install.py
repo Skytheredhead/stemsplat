@@ -43,7 +43,7 @@ progress = {"pct": 0, "step": "starting", "models_missing": []}
 choice_event = threading.Event()
 shutdown_event = threading.Event()
 PORT = 6060
-MAIN_PORT = 8000
+MAIN_PORT = 9876
 MODEL_URLS = [(item["filename"], item["url"]) for item in DL_FILES]
 TOTAL_BYTES = int(2.60 * 1024**3)
 
