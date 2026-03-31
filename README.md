@@ -34,21 +34,24 @@
 - Deux - https://huggingface.co/becruily/mel-band-roformer-deux/tree/main
 
 ## v0.4.0 plans
-- Change port to something that’s not :8000
-- Having an “edit” button that has a popup card with a waveform of the whole song the user can select in and out points on (and preview) instead of splitting an entire song.
-- ^ Mute/solo toggles for each selected stem 
-- Presets: Fast, Balanced, Best Quality
-- Settings/nerd stuff/device (mps, cpu toggle)
-- In settings, 
-- History (with file size limits, etc.) use to cache outputs, and other stuff. Default user warning to 10GB, able to change this in settings to higher (or lower) amount.
-- Model Manager: Installed models list (already there), estimated disk usage
-- Update available badge
-- Checksum verification for model downloads
-- When a lan device tries to process but another device is already processing, say that somewhere
-- Bpm/key detector
-- Bpm/key shifter
-
-Models to add:
-- Becruily Guitar: https://huggingface.co/becruily/mel-band-roformer-guitar/tree/main
-- 6-stem model: https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/tree/main (588800)
-- Demucs for fast (but crap) stem splits
+- [ ]  Change port to something that’s not :8000 → 9876
+- [ ]  Model Manager: Installed models list (already there), estimated disk usage
+- [x]  History (with file size limits, etc.) use to cache outputs, and other stuff. Default user warning to 10GB, able to change this in settings to higher (or lower) amount.
+- [x]  EST TIME REMAINING COMPLETE REWORK
+- [x]  Model Manager: Installed models list (already there), estimated disk usage
+- [ ]  Checksum verification for model downloads
+- [ ]  When a lan device tries to process but another device is already processing, say that somewhere
+- [ ]  When I right click a song that’s in the queue, have a button say “remove from queue” and a second button that says “change stem” where it brings up the 4 “fast” “quality” “special” “presets” and when hovered over one of those a new list appears to the right with the options in there. Add the same shift+click and cmd/control+click functionality to this right click changer’s options as well.
+- [x]  Zip vs separate functionality in settings for multi-stem exports.
+- [x]  Add a crap ton of models
+- [x]  Add presets
+- [ ]  Add “all stems” preset:
+Splits vocals
+Splits instrumental
+Karaoke split on vocal split
+6s split on instrumental split (delete the “vocal” stem as it wont have anything)
+drum 6s on drum split
+- [x]  Crappy tooltips for models
+- [ ]  Add user-created presets
+- [ ]  UI changes
+- [ ]  made the stop button actually work
