@@ -228,6 +228,60 @@ class RuntimeEstimatorTests(unittest.TestCase):
         self.assertTrue(task["stop_event"].is_set())
         self.assertEqual(task["stage"], "Stopping")
 
+    def test_request_task_stop_hard_terminates_running_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "song.wav"
+            source_path.write_bytes(b"data")
+            task = self._build_task("task-1", source_path)
+            task["status"] = "running"
+            task["stage"] = "Running vocals model"
+            with main.tasks_lock:
+                main.tasks["task-1"] = task
+
+            with mock.patch.object(main, "_terminate_task_runtime") as terminate_runtime:
+                main._request_task_stop("task-1")
+
+        terminate_runtime.assert_called_once_with("task-1")
+        self.assertTrue(task["stop_event"].is_set())
+        self.assertEqual(task["stage"], "Stopping")
+
+    def test_progress_update_stops_single_chunk_model_when_cancel_requested_mid_chunk(self) -> None:
+        class StopDuringForwardModel(main.torch.nn.Module):
+            def __init__(self, stop_event: threading.Event) -> None:
+                super().__init__()
+                self._stop_event = stop_event
+                self._anchor = main.torch.nn.Parameter(main.torch.zeros(1))
+
+            def forward(self, batch: main.torch.Tensor) -> main.torch.Tensor:
+                self._stop_event.set()
+                return batch.unsqueeze(1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "song.wav"
+            source_path.write_bytes(b"data")
+            task = self._build_task("task-1", source_path)
+            task["status"] = "running"
+            task["stage"] = "Running vocals model"
+            with main.tasks_lock:
+                main.tasks["task-1"] = task
+
+            waveform = main.torch.zeros((2, 1024), dtype=main.torch.float32)
+            model = StopDuringForwardModel(task["stop_event"])
+
+            with self.assertRaises(main.TaskStopped):
+                main._run_model_chunks(
+                    model,
+                    waveform,
+                    segment=4096,
+                    overlap=1,
+                    progress_cb=lambda frac: main._set_task_progress(
+                        "task-1",
+                        "Running vocals model",
+                        main._map_fraction(main.MODEL_PROGRESS_START_PCT, main.SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                    ),
+                    stop_check=lambda: main._stop_check("task-1"),
+                )
+
     def test_worker_waits_for_resume_and_retry_can_take_front_of_queue(self) -> None:
         main._pause_queue_processing()
         main._queue_task("queued-later")

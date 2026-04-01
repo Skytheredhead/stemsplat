@@ -1284,12 +1284,16 @@
     #bot-vig{
       top:auto;
       bottom:0;
-      transform:rotate(180deg);
-      background: linear-gradient(to bottom, rgba(0,0,0,.36), rgba(0,0,0,.14) 52%, transparent 100%);
+      transform:none;
+      background: linear-gradient(to top, rgba(7,12,16,.10) 0%, rgba(7,12,16,.05) 34%, rgba(7,12,16,.015) 62%, transparent 100%);
+      backdrop-filter: blur(16px) saturate(104%);
+      -webkit-backdrop-filter: blur(16px) saturate(104%);
+      -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,.98) 0%, rgba(0,0,0,.82) 30%, rgba(0,0,0,.38) 62%, transparent 100%);
+      mask-image: linear-gradient(to top, rgba(0,0,0,.98) 0%, rgba(0,0,0,.82) 30%, rgba(0,0,0,.38) 62%, transparent 100%);
     }
 
     .dl-pad,
-    .stop-pad { width:56px; height:56px; border-radius:14px; background: rgba(255,255,255,0.95); color:#0F2027; display:flex; align-items:center; justify-content:center; box-shadow:0 8px 20px rgba(0,0,0,.28); opacity:0; transform: translateX(-10px); transition: opacity .42s ease, transform .42s ease, box-shadow .20s ease; pointer-events:none; align-self: center; position: absolute; top: 50%; transform: translateY(-50%); }
+    .stop-pad { width:56px; height:56px; border-radius:14px; border:0; background: rgba(255,255,255,0.95); color:#0F2027; display:flex; align-items:center; justify-content:center; box-shadow:0 8px 20px rgba(0,0,0,.28); opacity:0; transform: translateX(-10px); transition: opacity .42s ease, transform .42s ease, box-shadow .20s ease; pointer-events:none; align-self: center; position: absolute; top: 50%; transform: translateY(-50%); }
     .dl-pad.show,
     .stop-pad.show { opacity:1; transform: translateX(0) translateY(-50%); pointer-events:auto; }
     .dl-pad:hover,
@@ -1478,12 +1482,12 @@
           <path d="M3 7v12"/>
         </svg>
       </button>
-      <a class="stop-pad self-center" href="#" title="stop" style="display:none;">
+      <button class="stop-pad self-center" type="button" title="stop" style="display:none;">
         <!-- square icon -->
-        <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="6" y="6" width="12" height="12"/>
+        <svg viewBox="0 0 24 24" class="w-[1.85rem] h-[1.85rem]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5.5" y="5.5" width="13" height="13"/>
         </svg>
-      </a>
+      </button>
     </div>
   </template>
 
@@ -3594,13 +3598,12 @@
       appShell.classList.toggle('expanded', !empty && !compact);
     }
     function updateVigs(){
-      const rect = queue.getBoundingClientRect();
-      const shellRect = appShell.getBoundingClientRect();
+      const maxScrollTop = Math.max(0, appShell.scrollHeight - appShell.clientHeight);
       topVig.style.top = '0px';
       topVig.style.bottom = 'auto';
       topVig.style.transform = 'none';
       topVig.style.opacity = appShell.scrollTop > 0 ? '0.56' : '0';
-      botVig.style.opacity = rect.bottom > shellRect.bottom ? '1' : '0';
+      botVig.style.opacity = appShell.scrollTop < maxScrollTop - 2 ? '0.56' : '0';
     }
 
     function enforceCapacity(){
@@ -3754,7 +3757,23 @@
     function setStopSquareIcon(stopPad){
       if(!stopPad) return;
       while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
-      stopPad.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="#0F2027" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.75" ry="1.75"/></svg>');
+      stopPad.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-[1.85rem] h-[1.85rem]" aria-hidden="true"><rect x="5.5" y="5.5" width="13" height="13" rx="2.1" ry="2.1" fill="#0F2027"/></svg>');
+    }
+
+    function bindStopPad(stopPad, taskRef, ui){
+      if(!stopPad || !taskRef || !taskRef.id) return;
+      setStopSquareIcon(stopPad);
+      stopPad.style.pointerEvents = '';
+      stopPad.style.opacity = '';
+      stopPad.title = 'stop';
+      guardClick(stopPad, async (e) => {
+        if(stopPad.dataset.busy === '1') return;
+        stopPad.dataset.busy = '1';
+        e.preventDefault();
+        console.debug('stemsplat stop click', { taskId: taskRef.id, stage: taskRef.stage, pct: taskRef.pct });
+        await requestStop(taskRef.id, taskRef, ui);
+        stopPad.dataset.busy = '';
+      });
     }
 
     function setDownloadIcon(btn){
@@ -4021,17 +4040,7 @@
         }
         setStopVisibility(stopPad, task.stage);
         if(stopPad && task.id && isProcessing(task)){
-          setStopSquareIcon(stopPad);
-          stopPad.style.pointerEvents = '';
-          stopPad.style.opacity = '';
-          stopPad.title = 'stop';
-          guardClick(stopPad, async (e) => {
-            if(stopPad.dataset.busy === '1') return;
-            stopPad.dataset.busy = '1';
-            e.preventDefault();
-            await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
-            stopPad.dataset.busy = '';
-          });
+          bindStopPad(stopPad, task, { bar, st, dl, stopPad, smooth });
         }
       }
       if(dl && (task.stage === 'stopped' || task.stage === 'error' || task.pct < 0)){
@@ -5887,14 +5896,10 @@
         dl.classList.remove('show');
       }
       if(stopPad){
-        stopPad.style.pointerEvents = '';
-        stopPad.style.opacity = '';
-        stopPad.title = 'rerun';
-        setRetryIcon(stopPad);
-        guardClick(stopPad, (ev) => {
-          ev.preventDefault();
-          showPopup('waiting for the current stop to finish');
-        });
+        setStopSquareIcon(stopPad);
+        stopPad.style.pointerEvents = 'none';
+        stopPad.style.opacity = '0.65';
+        stopPad.title = 'stopping';
       }
       if(ui.item){
         applyRowState(ui.item, taskRef);
@@ -5915,10 +5920,24 @@
         }else{
           taskRef.stopRequested = false;
           saveTasks();
+          if(ui.stopPad){
+            setStopSquareIcon(ui.stopPad);
+            ui.stopPad.style.pointerEvents = '';
+            ui.stopPad.style.opacity = '';
+            ui.stopPad.title = 'stop';
+          }
+          showPopup(await responseErrorMessage(res, 'could not stop song'));
         }
       }catch(_){
         taskRef.stopRequested = false;
         saveTasks();
+        if(ui.stopPad){
+          setStopSquareIcon(ui.stopPad);
+          ui.stopPad.style.pointerEvents = '';
+          ui.stopPad.style.opacity = '';
+          ui.stopPad.title = 'stop';
+        }
+        showPopup('could not stop song');
       }
     }
     function normalizeStemList(stems){
@@ -6419,18 +6438,7 @@
           saveTasks(); updateUI();
           // enable stop now that we have an id
           if (stopPad){
-            setStopSquareIcon(stopPad);
-            stopPad.style.pointerEvents = '';
-            stopPad.style.opacity = '';
-            stopPad.title = 'stop';
-            guardClick(stopPad, async (e) => {
-              if(stopPad.dataset.busy === '1') return;
-              stopPad.dataset.busy = '1';
-              e.preventDefault();
-              await requestStop(parsed.task_id, t, { bar, st, dl, stopPad, smooth });
-              stopPad.dataset.busy = '';
-              updateUI();
-            });
+            bindStopPad(stopPad, t, { bar, st, dl, stopPad, smooth });
             setStopVisibility(stopPad, (startPressed || pending.autoStart) ? 'queued' : 'ready');
           }
           if(!queueStarted && !startPressed){
@@ -6850,6 +6858,9 @@
         }
         setStatusVisibility(st, stage);
         setStopVisibility(stopPad, stage, !!taskRef && isProcessing(taskRef));
+        if(stopPad && taskRef && taskRef.id && isProcessing(taskRef)){
+          bindStopPad(stopPad, taskRef, { bar, st, dl, stopPad, smooth });
+        }
         setTimeout(() => {
           trackProgress(taskId, bar, st, dl, null, null, taskRef, null, smooth, stopPad);
         }, 450);
@@ -7015,6 +7026,9 @@
           }
           setStatusVisibility(st, stage);
           setStopVisibility(stopPad, stage);
+          if(stopPad && taskRef && taskRef.id && isProcessing(taskRef)){
+            bindStopPad(stopPad, taskRef, { bar, st, dl, stopPad, smooth });
+          }
         });
         es.addEventListener('error', (ev) => {
           if (taskRef && taskRef.stage === 'stopped') {

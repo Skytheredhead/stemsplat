@@ -20,7 +20,7 @@ from app_paths import RUNTIME_DIR, ensure_app_dirs
 
 ensure_app_dirs()
 
-from main import app, set_runtime_status_provider
+from main import _task_runner_main, app, set_runtime_status_provider
 
 logger = logging.getLogger("stemsplat.launcher")
 PREFERRED_PORT = 9876
@@ -478,7 +478,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--client-host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--task-runner-input", default="")
     args = parser.parse_args(argv)
+
+    if args.task_runner_input:
+        _task_runner_main(Path(args.task_runner_input).expanduser())
+        return 0
 
     preferred_port = args.port if args.port is not None else PREFERRED_PORT
     controller = ServerController(args.host, args.client_host, preferred_port)

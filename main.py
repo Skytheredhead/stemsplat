@@ -15,6 +15,7 @@ import queue
 import re
 import resource
 import secrets
+import signal
 import shutil
 import socket
 import subprocess
@@ -3582,6 +3583,8 @@ app.state.runtime_status_provider = None
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
 task_queue: queue.Queue[str] = queue.Queue()
+task_runtime_lock = threading.RLock()
+task_runtimes: dict[str, dict[str, Any]] = {}
 queue_resume_event = threading.Event()
 queue_resume_event.set()
 previous_files_lock = threading.RLock()
@@ -4297,6 +4300,8 @@ def _stabilize_eta(task: dict[str, Any], raw_seconds: float | None, *, now: floa
 def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
     with tasks_lock:
         task = tasks[task_id]
+        if task["stop_event"].is_set():
+            raise TaskStopped()
         previous_pct = int(task.get("pct") or 0)
         previous_stage = str(task.get("stage") or "")
         now = time.time()
@@ -4614,6 +4619,7 @@ def _request_task_stop(task_id: str) -> None:
     _pause_queue_processing()
     should_forget = False
     should_prune = False
+    should_terminate_runtime = False
     with tasks_lock:
         task = tasks[task_id]
         task["stop_event"].set()
@@ -4633,7 +4639,17 @@ def _request_task_stop(task_id: str) -> None:
             task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
+            should_terminate_runtime = True
         task["version"] += 1
+        logger.info(
+            "stop requested for %s (status=%s, stage=%s, hard=%s)",
+            task_id,
+            task["status"],
+            task["stage"],
+            should_terminate_runtime,
+        )
+    if should_terminate_runtime:
+        _terminate_task_runtime(task_id)
     if should_forget:
         _forget_task(task_id)
         return
@@ -4868,6 +4884,68 @@ def _stop_check(task_id: str) -> None:
     with tasks_lock:
         if tasks[task_id]["stop_event"].is_set():
             raise TaskStopped()
+
+
+def _task_runner_snapshot(task: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in task.items() if key != "stop_event"}
+
+
+def _apply_task_runner_snapshot(task_id: str, snapshot: dict[str, Any]) -> None:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            return
+        stop_event = task["stop_event"]
+        cleared = bool(task.get("cleared"))
+        for key, value in snapshot.items():
+            if key == "stop_event":
+                continue
+            task[key] = value
+        task["stop_event"] = stop_event
+        task["cleared"] = cleared
+        task["version"] = int(task.get("version") or 0) + 1
+
+
+def _register_task_runtime(task_id: str, runtime: dict[str, Any]) -> None:
+    with task_runtime_lock:
+        task_runtimes[task_id] = runtime
+
+
+def _pop_task_runtime(task_id: str) -> dict[str, Any] | None:
+    with task_runtime_lock:
+        return task_runtimes.pop(task_id, None)
+
+
+def _current_task_runtime(task_id: str) -> dict[str, Any] | None:
+    with task_runtime_lock:
+        runtime = task_runtimes.get(task_id)
+        return dict(runtime) if runtime is not None else None
+
+
+def _terminate_task_runtime(task_id: str) -> bool:
+    runtime = _current_task_runtime(task_id)
+    if runtime is None:
+        logger.info("stop terminate skipped for %s: no live runtime", task_id)
+        return False
+    process = runtime.get("process")
+    if not isinstance(process, subprocess.Popen):
+        logger.info("stop terminate skipped for %s: runtime missing process", task_id)
+        return False
+    if process.poll() is not None:
+        logger.info("stop terminate skipped for %s: process already exited", task_id)
+        return False
+    try:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        logger.warning("failed to terminate task runtime for %s", task_id, exc_info=True)
+        return False
+    logger.info("hard stop sent to task runtime %s (pid=%s)", task_id, process.pid)
+    return True
 
 
 def _build_task_payload(
@@ -5474,6 +5552,7 @@ def _process_task(task_id: str) -> None:
             _cache_intermediate_output(task_id, "vocals", vocals_tensor)
             _cache_intermediate_output(task_id, "background_vocals", background_vocals_tensor)
 
+            _stop_check(task_id)
             _set_task_progress(task_id, "Mixing boost harmonies", 95)
             boost_mix_tensor = _boost_overlay_mix(
                 waveform,
@@ -5481,6 +5560,7 @@ def _process_task(task_id: str) -> None:
                 base_song_gain_db=preset_settings["base_song_gain_db"],
                 overlay_gain_db=preset_settings["overlay_gain_db"],
             )
+            _stop_check(task_id)
             _append_named_output(temp_outputs, work_dir, "boost harmonies", boost_mix_tensor)
         elif mode == "preset_boost_guitar":
             guitar_model = manager.get("guitar")
@@ -5503,6 +5583,7 @@ def _process_task(task_id: str) -> None:
 
             _cache_intermediate_output(task_id, "guitar", guitar_tensor)
 
+            _stop_check(task_id)
             _set_task_progress(task_id, "Mixing boost guitar", 95)
             boost_mix_tensor = _boost_overlay_mix(
                 waveform,
@@ -5510,6 +5591,7 @@ def _process_task(task_id: str) -> None:
                 base_song_gain_db=preset_settings["base_song_gain_db"],
                 overlay_gain_db=preset_settings["overlay_gain_db"],
             )
+            _stop_check(task_id)
             _append_named_output(temp_outputs, work_dir, "boost guitar", boost_mix_tensor)
         elif mode in {"denoise", "preset_denoise"}:
             denoise_model = manager.get("denoise")
@@ -5826,6 +5908,182 @@ def _process_task(task_id: str) -> None:
         _safe_mps_empty_cache()
 
 
+def _emit_task_runner_event(payload: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+def _task_runner_main(payload_path: Path) -> None:
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SystemExit("invalid task payload")
+    task_id = str(payload.get("id") or "").strip()
+    if not task_id:
+        raise SystemExit("missing task id")
+    payload["stop_event"] = threading.Event()
+    with tasks_lock:
+        tasks.clear()
+        tasks[task_id] = payload
+
+    original_set_task_progress = _set_task_progress
+    original_mark_task_done = _mark_task_done
+    original_mark_task_error = _mark_task_error
+    original_mark_task_stopped = _mark_task_stopped
+
+    def _patched_set_task_progress(task_id: str, stage: str, pct: int) -> None:
+        original_set_task_progress(task_id, stage, pct)
+        _emit_task_runner_event({"kind": "snapshot", "task": _task_runner_snapshot(tasks[task_id])})
+
+    def _patched_mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
+        _emit_task_runner_event({"kind": "done", "out_dir": str(out_dir), "outputs": list(outputs)})
+
+    def _patched_mark_task_error(task_id: str, message: str) -> None:
+        _emit_task_runner_event({"kind": "error", "message": message})
+
+    def _patched_mark_task_stopped(task_id: str) -> None:
+        _emit_task_runner_event({"kind": "stopped"})
+
+    globals()["_set_task_progress"] = _patched_set_task_progress
+    globals()["_mark_task_done"] = _patched_mark_task_done
+    globals()["_mark_task_error"] = _patched_mark_task_error
+    globals()["_mark_task_stopped"] = _patched_mark_task_stopped
+    try:
+        _process_task(task_id)
+    finally:
+        globals()["_set_task_progress"] = original_set_task_progress
+        globals()["_mark_task_done"] = original_mark_task_done
+        globals()["_mark_task_error"] = original_mark_task_error
+        globals()["_mark_task_stopped"] = original_mark_task_stopped
+
+
+def _write_task_runner_payload(task_id: str) -> Path:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        payload = _task_runner_snapshot(task)
+    handle, raw_path = tempfile.mkstemp(prefix=f"taskrun_{task_id[:8]}_", suffix=".json", dir=str(WORK_DIR))
+    path = Path(raw_path)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream)
+    except Exception:
+        _cleanup_path(path)
+        raise
+    return path
+
+
+def _drain_task_runner_stderr(task_id: str, stream: Any) -> None:
+    try:
+        for line in iter(stream.readline, ""):
+            text = str(line or "").rstrip()
+            if text:
+                logger.info("task runner %s: %s", task_id, text)
+    except Exception:
+        logger.debug("stderr drain failed for task %s", task_id, exc_info=True)
+
+
+def _run_task_in_subprocess(task_id: str) -> None:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if task["stop_event"].is_set():
+            _mark_task_stopped(task_id)
+            return
+    payload_path = _write_task_runner_payload(task_id)
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, "--task-runner-input", str(payload_path)]
+    else:
+        command = [sys.executable, "-u", str(Path(__file__).resolve()), "--task-runner-input", str(payload_path)]
+    env = dict(os.environ)
+    env["STEMSPLAT_DISABLE_BACKGROUND_THREADS"] = "1"
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "bufsize": 1,
+        "env": env,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(command, **popen_kwargs)
+    _register_task_runtime(task_id, {"process": process, "payload_path": str(payload_path)})
+    with tasks_lock:
+        live_task = tasks.get(task_id)
+        if live_task is not None and live_task["stop_event"].is_set():
+            _terminate_task_runtime(task_id)
+
+    stderr_thread: threading.Thread | None = None
+    if process.stderr is not None:
+        stderr_thread = threading.Thread(
+            target=_drain_task_runner_stderr,
+            args=(task_id, process.stderr),
+            daemon=True,
+        )
+        stderr_thread.start()
+
+    terminal_event: tuple[str, dict[str, Any]] | None = None
+    try:
+        if process.stdout is not None:
+            for line in iter(process.stdout.readline, ""):
+                raw = str(line or "").strip()
+                if not raw:
+                    continue
+                try:
+                    message = json.loads(raw)
+                except Exception:
+                    logger.warning("task runner %s emitted invalid JSON: %s", task_id, raw)
+                    continue
+                kind = str(message.get("kind") or "")
+                if kind == "snapshot":
+                    snapshot = message.get("task")
+                    if isinstance(snapshot, dict):
+                        _apply_task_runner_snapshot(task_id, snapshot)
+                    continue
+                if kind in {"done", "error", "stopped"}:
+                    terminal_event = (kind, message)
+        return_code = process.wait()
+    finally:
+        _pop_task_runtime(task_id)
+        if process.stdout is not None:
+            with contextlib.suppress(Exception):
+                process.stdout.close()
+        if process.stderr is not None:
+            with contextlib.suppress(Exception):
+                process.stderr.close()
+        if stderr_thread is not None:
+            stderr_thread.join(timeout=1.0)
+        _cleanup_path(payload_path)
+
+    if terminal_event is not None:
+        kind, message = terminal_event
+        if kind == "done":
+            out_dir = Path(str(message.get("out_dir") or ""))
+            outputs = [str(item) for item in list(message.get("outputs") or []) if str(item).strip()]
+            _mark_task_done(task_id, out_dir, outputs)
+            return
+        if kind == "error":
+            _mark_task_error(task_id, str(message.get("message") or f"{ErrorCode.SEPARATION_FAILED}: task failed"))
+            return
+        _mark_task_stopped(task_id)
+        return
+
+    with tasks_lock:
+        task = tasks.get(task_id)
+        stop_requested = bool(task and task["stop_event"].is_set())
+    if stop_requested:
+        _mark_task_stopped(task_id)
+        return
+    _mark_task_error(
+        task_id,
+        f"{ErrorCode.SEPARATION_FAILED}: task worker exited unexpectedly ({return_code}).",
+    )
+
+
 def _next_task_id_for_worker() -> str:
     while True:
         queue_resume_event.wait()
@@ -5840,7 +6098,12 @@ def _task_worker() -> None:
     while True:
         task_id = _next_task_id_for_worker()
         try:
-            _process_task(task_id)
+            _run_task_in_subprocess(task_id)
+        except AppError as exc:
+            _mark_task_error(task_id, f"{exc.code}: {exc.message}")
+        except Exception as exc:  # pragma: no cover - safety net for worker orchestration
+            logger.exception("task worker failed for %s", task_id)
+            _mark_task_error(task_id, f"{ErrorCode.SEPARATION_FAILED}: {exc}")
         finally:
             task_queue.task_done()
 
@@ -6746,6 +7009,7 @@ async def compat_progress(task_id: str):
 @app.post("/stop/{task_id}")
 async def compat_stop(task_id: str) -> dict[str, Any]:
     _require_task(task_id)
+    logger.info("received /stop request for %s", task_id)
     _request_task_stop(task_id)
     return _compat_public_task(_require_task(task_id))
 
@@ -6863,7 +7127,12 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Run the stemsplat server.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT)
+    parser.add_argument("--task-runner-input", default="")
     args = parser.parse_args(argv)
+
+    if args.task_runner_input:
+        _task_runner_main(Path(args.task_runner_input).expanduser())
+        return
 
     import uvicorn
 
