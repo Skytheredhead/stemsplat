@@ -40,7 +40,7 @@ import torch
 import yaml
 from beartype import beartype
 from beartype.typing import Callable as BeartypeCallable, Optional as BeartypeOptional, Tuple as BeartypeTuple
-from downloader import SSL_CONTEXT, download_to
+from downloader import ModelDownloadError, SSL_CONTEXT, download_to
 from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
@@ -4002,6 +4002,27 @@ def _model_retry_label(retry_count: int) -> str:
     return "too many to count" if retry_count > 9999 else str(max(0, retry_count))
 
 
+MODEL_DOWNLOAD_MAX_RETRIES = 5
+
+
+def _model_download_error_message(exc: Exception) -> str:
+    if isinstance(exc, ModelDownloadError):
+        return str(exc)
+    return "download failed unexpectedly"
+
+
+def _model_download_retry_delay_seconds(retry_count: int) -> int:
+    return min(30, max(5, retry_count * 5))
+
+
+def _should_retry_model_download(exc: Exception, retry_count: int) -> bool:
+    if retry_count >= MODEL_DOWNLOAD_MAX_RETRIES:
+        return False
+    if isinstance(exc, ModelDownloadError):
+        return exc.retryable
+    return True
+
+
 def _run_model_download(selection: list[str] | None = None) -> None:
     missing = _selected_missing_models(selection)
     if not missing:
@@ -4076,18 +4097,33 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         except Exception as exc:
             retry_count += 1
             retry_label = _model_retry_label(retry_count)
+            error_message = _model_download_error_message(exc)
+            if not _should_retry_model_download(exc, retry_count):
+                logger.error("model download attempt %s failed permanently", retry_label, exc_info=True)
+                _set_model_download_state(
+                    status="error",
+                    step="download failed",
+                    current_model="",
+                    download_rate_bytes_per_sec=0.0,
+                    eta_seconds=None,
+                    retry_count=retry_count,
+                    retry_label=retry_label,
+                    error=error_message,
+                )
+                return
+            retry_delay = _model_download_retry_delay_seconds(retry_count)
             logger.warning("model download attempt %s failed; retrying", retry_label, exc_info=True)
             _set_model_download_state(
                 status="retrying",
                 step="waiting to retry",
                 current_model="",
                 download_rate_bytes_per_sec=0.0,
-                eta_seconds=5,
+                eta_seconds=retry_delay,
                 retry_count=retry_count,
                 retry_label=retry_label,
-                error=f"network dropped, retrying in 5s... ({retry_label})",
+                error=f"{error_message}. retrying in {retry_delay}s... ({retry_label}/{MODEL_DOWNLOAD_MAX_RETRIES})",
             )
-            time.sleep(5)
+            time.sleep(retry_delay)
 
     _set_model_download_state(
         status="done",

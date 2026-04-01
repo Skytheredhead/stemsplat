@@ -39,7 +39,7 @@
 - [x]  History (with file size limits, etc.) use to cache outputs, and other stuff. Default user warning to 10GB, able to change this in settings to higher (or lower) amount.
 - [x]  EST TIME REMAINING COMPLETE REWORK
 - [x]  Model Manager: Installed models list (already there), estimated disk usage
-- [ ]  Checksum verification for model downloads
+- [x]  Checksum verification for model downloads
 - [ ]  When a lan device tries to process but another device is already processing, say that somewhere
 - [ ]  When I right click a song that’s in the queue, have a button say “remove from queue” and a second button that says “change stem” where it brings up the 4 “fast” “quality” “special” “presets” and when hovered over one of those a new list appears to the right with the options in there. Add the same shift+click and cmd/control+click functionality to this right click changer’s options as well.
 - [x]  Zip vs separate functionality in settings for multi-stem exports.
