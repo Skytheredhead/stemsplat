@@ -1212,6 +1212,7 @@ MODE_OUTPUT_LABELS = {
     "preset_boost_guitar": ("boost guitar",),
     "preset_denoise": ("denoise",),
 }
+ALL_STEMS_DRUM_OUTPUT_LABELS = frozenset(("kick", "snare", "toms", "hh", "ride", "crash"))
 ETA_HISTORY_KEYS = tuple(MODEL_SPECS.keys())
 RUNTIME_STATS_VERSION = 2
 RUNTIME_STATS_STAGE_LIMIT = 30
@@ -3844,13 +3845,14 @@ def _archive_previous_file(task_id: str, out_dir: Path, outputs: list[str]) -> d
         source_output = out_dir / str(output_name)
         if not source_output.exists() or not source_output.is_file():
             continue
-        target_output = outputs_dir / source_output.name
+        target_output = outputs_dir / str(output_name)
+        target_output.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(source_output, target_output)
         except Exception:
             logger.warning("failed to archive output %s for task %s", source_output, task_id, exc_info=True)
             continue
-        stored_outputs.append(target_output.name)
+        stored_outputs.append(_relative_output_name(target_output, outputs_dir))
     if not stored_outputs:
         _cleanup_path(storage_dir)
         return None
@@ -4377,6 +4379,18 @@ def _download_label(task: dict[str, Any]) -> str:
     return _safe_stem(str(task.get("original_name") or "stems"))
 
 
+def _output_subdir_for_label(mode: str, label: str) -> Path | None:
+    if mode == "preset_all_stems" and label in ALL_STEMS_DRUM_OUTPUT_LABELS:
+        return Path("drums")
+    return None
+
+
+def _relative_output_name(output_path: Path, root_dir: Path) -> str:
+    with contextlib.suppress(Exception):
+        return str(output_path.relative_to(root_dir))
+    return output_path.name
+
+
 def _unique_output_path(path: Path) -> Path:
     if not path.exists():
         return path
@@ -4394,7 +4408,7 @@ def _create_multi_stem_archive(task: dict[str, Any], output_paths: list[Path], o
     archive_path = _unique_output_path(out_dir / archive_name)
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for output_path in output_paths:
-            zf.write(output_path, arcname=output_path.name)
+            zf.write(output_path, arcname=_relative_output_name(output_path, out_dir))
     return archive_path
 
 
@@ -4420,10 +4434,13 @@ def _finalize_written_outputs(task_id: str, out_dir: Path, output_paths: list[Pa
 def _copy_outputs_to_directory(output_paths: list[Path], destination_dir: Path) -> list[Path]:
     copied: list[Path] = []
     _ensure_dir(destination_dir)
+    source_root = Path(os.path.commonpath([str(path.parent) for path in output_paths])) if output_paths else destination_dir
     for output_path in output_paths:
-        target = destination_dir / output_path.name
+        relative_name = _relative_output_name(output_path, source_root)
+        target = destination_dir / relative_name
+        target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
-            target = destination_dir / f"{output_path.stem} ({int(time.time())}){output_path.suffix}"
+            target = target.with_name(f"{output_path.stem} ({int(time.time())}){output_path.suffix}")
         shutil.copy2(output_path, target)
         copied.append(target)
     return copied
@@ -5719,9 +5736,11 @@ def _process_task(task_id: str) -> None:
             start_pct = _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT - 1, (index - 1) / max(1, total_exports))
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
             export_label = f"{label} - deux" if mode == "both_deux" else label
+            output_subdir = _output_subdir_for_label(mode, label)
+            output_parent = output_dir / output_subdir if output_subdir is not None else output_dir
             if export_video:
                 video_suffix, _audio_args = _resolve_video_output(source_info)
-                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
+                final_path = output_parent / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
                 exported = _export_video_stem(
                     temp_path,
                     source_path,
@@ -5731,7 +5750,7 @@ def _process_task(task_id: str) -> None:
                 )
             else:
                 assert export_plan is not None
-                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
+                final_path = output_parent / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
                 exported = _export_stem(
                     temp_path,
                     source_path,
@@ -5741,7 +5760,7 @@ def _process_task(task_id: str) -> None:
                     stop_check=lambda: _stop_check(task_id),
                 )
             written_outputs.append(exported)
-            exported_files.append(exported.name)
+            exported_files.append(_relative_output_name(exported, output_dir))
             _set_task_progress(
                 task_id,
                 f"Exporting {label}",
@@ -5749,7 +5768,7 @@ def _process_task(task_id: str) -> None:
             )
 
         finalized_outputs = _finalize_written_outputs(task_id, output_dir, written_outputs)
-        _mark_task_done(task_id, output_dir, [output_path.name for output_path in finalized_outputs])
+        _mark_task_done(task_id, output_dir, [_relative_output_name(output_path, output_dir) for output_path in finalized_outputs])
     except TaskStopped:
         for output_path in written_outputs:
             _cleanup_path(output_path)
@@ -6343,7 +6362,7 @@ async def download_output(task_id: str):
     archive_path = archive_dir / f"{task_id}_{archive_name}"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for output in existing_outputs:
-            zf.write(output, arcname=output.name)
+            zf.write(output, arcname=_relative_output_name(output, _out_path))
     return FileResponse(
         archive_path,
         filename=archive_name,
@@ -6421,7 +6440,7 @@ async def download_previous_file(entry_id: str):
     archive_path = archive_dir / f"history_{entry_id}_{archive_name}"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for output in existing_outputs:
-            zf.write(output, arcname=output.name)
+            zf.write(output, arcname=_relative_output_name(output, _out_path))
     return FileResponse(
         archive_path,
         filename=archive_name,
@@ -6452,7 +6471,7 @@ async def copy_previous_file(entry_id: str, request: Request) -> dict[str, Any]:
     return {
         "status": "saved",
         "output_root": str(destination_dir),
-        "outputs": [path.name for path in copied],
+        "outputs": [_relative_output_name(path, destination_dir) for path in copied],
     }
 
 
