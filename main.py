@@ -928,7 +928,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -1141,13 +1141,13 @@ MODEL_DISPLAY_NAMES = {
     "guitar": "guitar",
     "mel_band_karaoke": "karaoke",
     "denoise": "denoise",
-    "bs_roformer_6s": "6 stems",
+    "bs_roformer_6s": "full mix",
     "htdemucs_ft_drums": "drums",
     "htdemucs_ft_bass": "bass",
     "htdemucs_ft_other": "other",
-    "htdemucs_6s": "6 stems faster",
-    "drumsep_6s": "drums 6 stems",
-    "drumsep_4s": "drums 4 stems",
+    "htdemucs_6s": "full mix faster",
+    "drumsep_6s": "drum split - 6",
+    "drumsep_4s": "drum split - 4",
 }
 MODE_TO_STEMS = {
     "vocals": ("vocals",),
@@ -3111,7 +3111,7 @@ def _stage_model_key(stage_text: str) -> str | None:
         "running harmony background model": "mel_band_karaoke",
         "running denoise model": "denoise",
         "running bs-roformer 6s model": "bs_roformer_6s",
-        "running 6 stems model": "bs_roformer_6s",
+        "running full mix model": "bs_roformer_6s",
         "running htdemucs4 ft drums model": "htdemucs_ft_drums",
         "running htdemucs4 ft bass model": "htdemucs_ft_bass",
         "running htdemucs4 ft other model": "htdemucs_ft_other",
@@ -5483,7 +5483,7 @@ def _process_task(task_id: str) -> None:
                 waveform,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
-                    "Running 6 stems model",
+                    "Running full mix model",
                     _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
@@ -5491,7 +5491,7 @@ def _process_task(task_id: str) -> None:
             _record_eta_sample("bs_roformer_6s", audio_seconds, time.time() - bs_6s_started_at)
             expected_labels = MODE_OUTPUT_LABELS["bs_roformer_6s"]
             if bs_6s_pred.shape[0] < len(expected_labels):
-                raise AppError(ErrorCode.SEPARATION_FAILED, "6-stem model returned incomplete output.")
+                raise AppError(ErrorCode.SEPARATION_FAILED, "full mix model returned incomplete output.")
             for label, tensor in zip(expected_labels, bs_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
         elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass"}:
@@ -5673,7 +5673,7 @@ def _process_task(task_id: str) -> None:
                 instrumental_tensor,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
-                    "Running 6 stems model",
+                    "Running full mix model",
                     _map_fraction(ALL_STEMS_MULTI_START_PCT, ALL_STEMS_MULTI_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
@@ -7609,7 +7609,7 @@ INDEX_HTML = """<!DOCTYPE html>
               <input type="radio" name="split-mode" value="bs_roformer_6s">
               <div class="checkbox"></div>
               <div>
-                <strong>6 stems</strong>
+                <strong>full mix</strong>
               </div>
             </label>
             <label class="mode-card" data-mode="preset_denoise">
@@ -7667,7 +7667,7 @@ INDEX_HTML = """<!DOCTYPE html>
       both_separate: 'both (separate)',
       guitar: 'mel-band guitar',
       mel_band_karaoke: 'mel-band karaoke',
-      bs_roformer_6s: '6 stems',
+      bs_roformer_6s: 'full mix',
       preset_denoise: 'denoise',
     };
 

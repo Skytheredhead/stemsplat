@@ -430,7 +430,7 @@ def _run_windowed_app(controller: ServerController) -> int:
         "stemsplat",
         controller.client_url(),
         js_api=api,
-        width=1280,
+        width=1440,
         height=900,
         min_size=(1100, 760),
         frameless=True,

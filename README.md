@@ -1,4 +1,4 @@
-# stemsplat - v0.3.0 release
+# stemsplat - v0.4.0 release
 
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers to fiddle with and the best quality.
 

@@ -26,7 +26,7 @@
     /* Animated light blur for settings overlay BACKGROUND (not the card) */
     @keyframes overlayBlurIn {
       from { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
-      to   { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background-color: rgba(0, 0, 0, 0.35); }
+      to   { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background-color: rgba(0, 0, 0, 0.46); }
     }
     .overlay-bg {
       position: fixed;
@@ -38,7 +38,7 @@
     }
     .overlay-bg.anim     { animation: overlayBlurIn .28s ease both; }
     @keyframes overlayBlurOut {
-      from { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background-color: rgba(0, 0, 0, 0.35); }
+      from { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background-color: rgba(0, 0, 0, 0.46); }
       to   { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
     }
     .overlay-bg.anim-out { animation: overlayBlurOut 0.18s ease both; }
@@ -96,7 +96,7 @@
       right: 0;
       height: 46px;
       padding: 8px 12px 0;
-      z-index: 24;
+      z-index: 72;
       align-items: flex-start;
       pointer-events: none;
       transition: opacity .28s ease;
@@ -179,6 +179,12 @@
       justify-content: flex-start;
       padding-top: clamp(96px, 12vh, 136px);
       padding-bottom: clamp(108px, 14vh, 152px);
+    }
+    .app-shell.empty {
+      justify-content: center;
+      padding-top: clamp(112px, 14vh, 164px);
+      padding-bottom: clamp(8px, 2vh, 18px);
+      overflow-y: hidden;
     }
     .app-shell.expanded {
       justify-content: flex-start;
@@ -358,13 +364,18 @@
     .copy-button { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.10); display: inline-flex; align-items: center; justify-content: center; color: var(--txt-main); transition: transform .15s ease, background .15s ease, box-shadow .15s ease; }
     .copy-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.16); box-shadow: 0 8px 18px rgba(0,0,0,.2); }
     #settings-card {
-      width: min(92vw, 820px);
-      max-height: min(78vh, 860px);
-      overflow: hidden;
+      width: min(94vw, 1120px);
+      max-height: min(84vh, 900px);
+      overflow: visible;
       padding-right: 18px;
+      background: transparent !important;
+      border: 0 !important;
+      box-shadow: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
     }
     .settings-card-scroll {
-      max-height: calc(min(78vh, 860px) - 48px);
+      max-height: calc(min(84vh, 900px) - 24px);
       overflow-y: auto;
       scrollbar-width: none;
       -ms-overflow-style: none;
@@ -532,8 +543,8 @@
       display: block;
     }
     .model-note { font-size:12px; opacity:.65; }
-    .model-total { margin-top: 12px; text-align:right; font-size:12px; color: rgba(223,236,244,.74); }
-    .models-cta-wrap { position:relative; display:flex; gap:8px; }
+    .model-total { margin-top: 0; margin-left: auto; text-align:right; font-size:12px; color: rgba(223,236,244,.74); }
+    .models-cta-wrap { position:relative; display:flex; gap:8px; align-items:center; }
     .models-cta-wrap > * { position:relative; z-index:1; }
     .settings-grid {
       display:grid;
@@ -554,8 +565,46 @@
         linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.04));
       box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
     }
+    .settings-main-card { position: relative; }
+    .settings-main-title {
+      font-size: 22px;
+      line-height: 1.05;
+      color: rgba(245,251,255,.96);
+      margin-bottom: 2px;
+    }
+    .settings-close-floating {
+      position: absolute;
+      top: -6px;
+      right: 14px;
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 0;
+      color: rgba(245,251,255,.9);
+      font-size: 28px;
+      line-height: 1;
+      text-shadow: 0 8px 24px rgba(0,0,0,.48), 0 2px 8px rgba(0,0,0,.32);
+      transition: transform .16s ease, color .16s ease, text-shadow .16s ease;
+      z-index: 5;
+    }
+    .settings-close-floating:hover {
+      transform: translateY(-1px);
+      color: rgba(255,255,255,.98);
+      text-shadow: 0 10px 28px rgba(0,0,0,.56), 0 2px 10px rgba(0,0,0,.38);
+    }
     .model-manager-panel { position:sticky; top:0; }
     .model-manager-copy { display:flex; flex-direction:column; gap:4px; }
+    .model-manager-footer {
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
     .model-manager-kicker { font-size:12px; color: rgba(223,236,244,.62); text-transform:uppercase; letter-spacing:.02em; }
     .model-manager-title { font-size:22px; line-height:1.05; color: rgba(245,251,255,.96); }
     .model-manager-note { font-size:12px; color: rgba(223,236,244,.64); line-height:1.45; }
@@ -563,6 +612,8 @@
     @media (max-width: 980px) {
       .settings-grid { grid-template-columns:minmax(0,1fr); }
       .model-manager-panel { position:static; }
+      .model-manager-footer { align-items: flex-start; }
+      .model-total { margin-left: 0; }
     }
     .settings-disclosure {
       width: 100%;
@@ -783,11 +834,11 @@
       border: 0;
       background: transparent;
       color: rgba(231,236,239,.7);
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 700;
-      line-height: 1;
+      line-height: 1.04;
       min-height: 48px;
-      padding: 0 10px 1px;
+      padding: 2px 10px 0;
       border-radius: 999px;
       text-align: center;
       transition: color .24s ease, transform .2s ease;
@@ -1332,7 +1383,7 @@
         <button type="button" class="mode-switch-btn" data-tab="multi">multi</button>
         <button type="button" class="mode-switch-btn" data-tab="presets">presets</button>
       </div>
-      <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
+      <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
         <button id="preset-settings-btn" data-tooltip="preset gains" title="preset settings" class="card-icon-btn focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer" hidden>
           <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="4" y1="21" x2="4" y2="14"></line>
@@ -1346,7 +1397,6 @@
             <line x1="17" y1="16" x2="23" y2="16"></line>
           </svg>
         </button>
-        <p id="modes-card-title" class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <div id="mode-choices" class="flex flex-col gap-2"></div>
       </div>
       <button id="start-btn" data-tooltip="start queue" class="glass-light pre-hide w-full px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
@@ -1453,7 +1503,6 @@
     const modeSwitcherPill = document.getElementById('mode-switcher-pill');
     const modeChoices = document.getElementById('mode-choices');
     const modesCard = document.getElementById('modes-card');
-    const modesCardTitle = document.getElementById('modes-card-title');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const topVig    = document.getElementById('top-vig');
@@ -1530,6 +1579,7 @@
     let settingsScrollIndicator = null;
     let settingsScrollBody = null;
     let settingsScrollThumb = null;
+    let detachAppShellSoftScroll = null;
     const structureCheck = null;
     const structurelessCheck = null;
     let storageBlocked = false;
@@ -1575,13 +1625,13 @@
       guitar: 'guitar',
       mel_band_karaoke: 'karaoke',
       denoise: 'denoise',
-      bs_roformer_6s: '6 stems',
+      bs_roformer_6s: 'full mix',
       htdemucs_ft_drums: 'drums',
       htdemucs_ft_bass: 'bass',
       htdemucs_ft_other: 'other',
-      htdemucs_6s: '6 stems faster',
-      drumsep_6s: 'drums 6 stems',
-      drumsep_4s: 'drums 4 stems',
+      htdemucs_6s: 'full mix faster',
+      drumsep_6s: 'drum split - 6',
+      drumsep_4s: 'drum split - 4',
     };
     const MODEL_CHECKLIST_ORDER = [
       'vocals',
@@ -1635,10 +1685,10 @@
         { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'karaoke split' },
       ],
       multi: [
-        { kind: 'stem', id: 'bs_roformer_6s', label: '6 stems', tooltip: BS_6S_TOOLTIP },
-        { kind: 'stem', id: 'htdemucs_6s', label: '6 stems faster', tooltip: 'faster 6 stems' },
-        { kind: 'stem', id: 'drumsep_4s', label: 'drums 4 stems', tooltip: DRUMSEP_4S_TOOLTIP },
-        { kind: 'stem', id: 'drumsep_6s', label: 'drums 6 stems', tooltip: DRUMSEP_6S_TOOLTIP },
+        { kind: 'stem', id: 'bs_roformer_6s', label: 'full mix', tooltip: BS_6S_TOOLTIP },
+        { kind: 'stem', id: 'htdemucs_6s', label: 'full mix faster', tooltip: 'faster full mix split' },
+        { kind: 'stem', id: 'drumsep_4s', label: 'drum split - 4', tooltip: DRUMSEP_4S_TOOLTIP },
+        { kind: 'stem', id: 'drumsep_6s', label: 'drum split - 6', tooltip: DRUMSEP_6S_TOOLTIP },
       ],
       presets: [
         { kind: 'preset', id: 'all_stems', label: 'all stems', tooltip: 'full stem graph' },
@@ -1889,9 +1939,6 @@
         button.classList.toggle('active', active);
         button.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
-      if(modesCardTitle){
-        modesCardTitle.textContent = 'stems';
-      }
       if(presetSettingsBtn){
         const visible = activeModeTab === 'presets' && !!(selectedPresetMode && PRESET_CONFIGS[selectedPresetMode]);
         presetSettingsBtn.hidden = !visible;
@@ -2874,14 +2921,14 @@
         { label: 'drums', stems: ['htdemucs_ft_drums'], tooltip: 'fast drums' },
         { label: 'bass', stems: ['htdemucs_ft_bass'], tooltip: 'fast bass' },
         { label: 'other', stems: ['htdemucs_ft_other'], tooltip: 'other stem with guitar removed first' },
-        { label: '6 stems faster', stems: ['htdemucs_6s'], tooltip: 'faster 6 stems' },
+        { label: 'full mix faster', stems: ['htdemucs_6s'], tooltip: 'faster full mix split' },
         { label: 'vocals', stems: ['vocals'], tooltip: 'vocals' },
         { label: 'instrumental', stems: ['instrumental'], tooltip: 'instrumental' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
         { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
-        { label: '6 stems', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
-        { label: 'drums 6 stems', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
-        { label: 'drums 4 stems', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
+        { label: 'full mix', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
+        { label: 'drum split - 6', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
+        { label: 'drum split - 4', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
         { label: 'all stems', stems: ['all_stems'], tooltip: 'full stem graph' },
         { label: 'boost harmonies', stems: ['boost_harmonies'], tooltip: 'boost harmonies' },
         { label: 'denoise', stems: ['preset_denoise'], tooltip: 'denoise' },
@@ -3507,19 +3554,24 @@
         }
       }
       if (hasClearable) {
+        clearBtn.hidden = false;
         clearBtn.classList.add('show');
         clearBtn.style.pointerEvents = 'auto';
       } else {
         clearBtn.classList.remove('show');
         clearBtn.style.pointerEvents = 'none';
+        clearBtn.hidden = true;
       }
     }
 
     function updateShellLayout(){
       if(!appShell) return;
-      const compact = queue.children.length <= 2;
+      const itemCount = queue.children.length;
+      const empty = itemCount === 0;
+      const compact = itemCount > 0 && itemCount <= 2;
+      appShell.classList.toggle('empty', empty);
       appShell.classList.toggle('compact', compact);
-      appShell.classList.toggle('expanded', !compact);
+      appShell.classList.toggle('expanded', !empty && !compact);
     }
     function updateVigs(){
       const rect = queue.getBoundingClientRect();
@@ -3570,13 +3622,13 @@
         all_stems: 'all stems',
         denoise: 'denoise',
         preset_denoise: 'denoise',
-        bs_roformer_6s: '6 stems',
+        bs_roformer_6s: 'full mix',
         htdemucs_ft_drums: 'drums',
         htdemucs_ft_bass: 'bass',
         htdemucs_ft_other: 'other',
-        htdemucs_6s: '6 stems faster',
-        drumsep_6s: 'drums 6 stems',
-        drumsep_4s: 'drums 4 stems',
+        htdemucs_6s: 'full mix faster',
+        drumsep_6s: 'drum split - 6',
+        drumsep_4s: 'drum split - 4',
         boost_harmonies: 'boost harmonies',
       };
       stemsList.forEach(name => {
@@ -4087,6 +4139,10 @@
       refreshAllLabelVisibility();
       updateUI();
       appShell.addEventListener('scroll', updateVigs, { passive: true });
+      if(detachAppShellSoftScroll){
+        detachAppShellSoftScroll();
+      }
+      detachAppShellSoftScroll = attachSoftWheelScroll(appShell, updateVigs);
     });
     // settings button → open overlay
     const settingsBtn = document.getElementById('settings-btn');
@@ -5437,7 +5493,7 @@
         updateModelSettings({
           status: pct >= 100 ? 'done' : 'downloading',
           pct,
-          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : '6 stems'),
+          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : 'full mix'),
           downloaded_bytes: Math.round(totalBytes * (pct / 100)),
           total_bytes: Math.round(totalBytes),
           eta_seconds: pct >= 100 ? 0 : Math.max(0, Math.round((100 - pct) * 0.55)),
@@ -6682,7 +6738,7 @@
       if(lower.includes('other')) return 'other';
       if(lower.includes('guitar')) return 'guitar';
       if(lower.includes('piano')) return 'piano';
-      if(lower.includes('6s')) return '6 stems';
+      if(lower.includes('6s')) return 'full mix';
       if(lower.includes('error')) return 'error';
       if(lower.startsWith('prepare')) return 'preparing';
       if(lower.startsWith('load_audio')) return 'loading';
@@ -7046,17 +7102,15 @@
 
     <!-- The modal card itself -->
     <div id="settings-card"
-         class="glass w-[min(94vw,1100px)] max-w-none p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
-         style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
+         class="w-[min(94vw,1100px)] max-w-none p-0 rounded-2xl text-[var(--txt-main)] relative opacity-0">
+      <button id="settings-close" title="close" class="settings-close-floating" type="button">✕</button>
       <div id="settings-scroll-indicator" class="settings-scroll-indicator" aria-hidden="true">
         <div id="settings-scroll-thumb" class="settings-scroll-thumb"></div>
       </div>
-      <button id="settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
       <div id="settings-card-scroll" class="settings-card-scroll">
-      <h2 class="text-2xl font-light mb-3 select-none">settings</h2>
-
       <div class="settings-grid">
-        <div class="settings-panel-card">
+        <div class="settings-panel-card settings-main-card">
+        <h2 class="settings-main-title select-none">settings</h2>
         <div class="space-y-4">
           <label for="output-folder-path" class="text-sm opacity-80 block">output folder</label>
           <label class="flex items-center gap-2 text-[var(--txt-main)] text-sm"><input id="output-same-as-input" type="checkbox" class="pretty">same as input</label>
@@ -7227,25 +7281,25 @@
         </div>
         <div class="settings-panel-card model-manager-panel">
           <div class="model-manager-copy">
-            <div class="model-manager-kicker">model manager</div>
             <div class="model-manager-title">models</div>
-            <div class="model-manager-note">download missing models, open the local models folder, or jump to each model page.</div>
           </div>
           <div id="models-list" class="model-list"></div>
-          <div id="models-total" class="model-total" hidden></div>
           <div id="models-note" class="model-note" hidden></div>
           <div id="models-progress-wrap" class="space-y-2" hidden>
             <div class="bar"><div id="models-progress-bar" class="bar-fill"></div></div>
             <div id="models-progress-meta" class="text-xs opacity-70"></div>
           </div>
-          <div id="models-cta-wrap" class="models-cta-wrap">
-            <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
-            <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
+          <div class="model-manager-footer">
+            <div id="models-cta-wrap" class="models-cta-wrap">
+              <button id="models-download" class="btn bg-white text-black px-3 py-2 text-xs" type="button" style="border-radius:12px;">download models</button>
+              <button id="models-folder-open" class="btn bg-white/10 text-white px-3 py-2 text-xs" type="button" style="border-radius:12px;">open models folder</button>
+            </div>
+            <div id="models-total" class="model-total" hidden></div>
           </div>
         </div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.3.0</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.4.0</div>
       </div>
     </div>
   </div>

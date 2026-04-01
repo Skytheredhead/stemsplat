@@ -31,7 +31,7 @@
     /* Animated light blur for settings overlay BACKGROUND (not the card) */
     @keyframes overlayBlurIn {
       from { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
-      to   { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background-color: rgba(0, 0, 0, 0.35); }
+      to   { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background-color: rgba(0, 0, 0, 0.46); }
     }
     .overlay-bg {
       position: fixed;
@@ -43,7 +43,7 @@
     }
     .overlay-bg.anim     { animation: overlayBlurIn .28s ease both; }
     @keyframes overlayBlurOut {
-      from { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background-color: rgba(0, 0, 0, 0.35); }
+      from { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); background-color: rgba(0, 0, 0, 0.46); }
       to   { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
     }
     .overlay-bg.anim-out { animation: overlayBlurOut 0.18s ease both; }
@@ -182,9 +182,9 @@
       display: none;
     }
     .app-shell.compact {
-      justify-content: center;
-      padding-top: clamp(136px, 16vh, 186px);
-      padding-bottom: clamp(86px, 10vh, 122px);
+      justify-content: flex-start;
+      padding-top: clamp(76px, 10vh, 116px);
+      padding-bottom: 16px;
     }
     .app-shell.expanded {
       justify-content: flex-start;
@@ -1169,7 +1169,7 @@
         <button type="button" class="mode-switch-btn" data-tab="multi">multi</button>
         <button type="button" class="mode-switch-btn" data-tab="presets">presets</button>
       </div>
-      <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-3 fade-in text-[var(--txt-main)]/90 relative">
+      <div id="modes-card" class="glass pre-hide w-[272px] p-6 rounded-3xl flex flex-col gap-2 fade-in text-[var(--txt-main)]/90 relative">
         <button id="preset-settings-btn" data-tooltip="preset gains" title="preset settings" class="card-icon-btn focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer" hidden>
           <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="4" y1="21" x2="4" y2="14"></line>
@@ -1183,7 +1183,6 @@
             <line x1="17" y1="16" x2="23" y2="16"></line>
           </svg>
         </button>
-        <p id="modes-card-title" class="text-sm text-[var(--txt-main)] mt-0">stems</p>
         <div id="mode-choices" class="flex flex-col gap-2"></div>
       </div>
       <button id="start-btn" data-tooltip="start queue" class="glass-light pre-hide w-full px-6 py-4 rounded-3xl flex flex-col items-center justify-center fade-in focus:outline-none focus:ring-2 focus:ring-white/30 text-white disabled:opacity-50 disabled:cursor-not-allowed">
@@ -1287,7 +1286,6 @@
     const modeSwitcherPill = document.getElementById('mode-switcher-pill');
     const modeChoices = document.getElementById('mode-choices');
     const modesCard = document.getElementById('modes-card');
-    const modesCardTitle = document.getElementById('modes-card-title');
     const queue     = document.getElementById('queue');
     const clearBtn  = document.getElementById('clear-btn');
     const topVig    = document.getElementById('top-vig');
@@ -1337,6 +1335,7 @@
     let boostGuitarBaseSlider = null;
     let boostGuitarOverlayValue = null;
     let boostGuitarBaseValue = null;
+    let detachAppShellSoftScroll = null;
     const structureCheck = null;
     const structurelessCheck = null;
     let storageBlocked = false;
@@ -1374,13 +1373,13 @@
       guitar: 'guitar',
       mel_band_karaoke: 'karaoke',
       denoise: 'denoise',
-      bs_roformer_6s: '6 stems',
+      bs_roformer_6s: 'full mix',
       htdemucs_ft_drums: 'drums',
       htdemucs_ft_bass: 'bass',
       htdemucs_ft_other: 'other',
-      htdemucs_6s: '6 stems faster',
-      drumsep_6s: 'drums 6 stems',
-      drumsep_4s: 'drums 4 stems',
+      htdemucs_6s: 'full mix faster',
+      drumsep_6s: 'drum split - 6',
+      drumsep_4s: 'drum split - 4',
     };
     const MODEL_CHECKLIST_ORDER = [
       'vocals',
@@ -1434,10 +1433,10 @@
         { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'karaoke split' },
       ],
       multi: [
-        { kind: 'stem', id: 'bs_roformer_6s', label: '6 stems', tooltip: BS_6S_TOOLTIP },
-        { kind: 'stem', id: 'htdemucs_6s', label: '6 stems faster', tooltip: 'faster 6 stems' },
-        { kind: 'stem', id: 'drumsep_4s', label: 'drums 4 stems', tooltip: DRUMSEP_4S_TOOLTIP },
-        { kind: 'stem', id: 'drumsep_6s', label: 'drums 6 stems', tooltip: DRUMSEP_6S_TOOLTIP },
+        { kind: 'stem', id: 'bs_roformer_6s', label: 'full mix', tooltip: BS_6S_TOOLTIP },
+        { kind: 'stem', id: 'htdemucs_6s', label: 'full mix faster', tooltip: 'faster full mix split' },
+        { kind: 'stem', id: 'drumsep_4s', label: 'drum split - 4', tooltip: DRUMSEP_4S_TOOLTIP },
+        { kind: 'stem', id: 'drumsep_6s', label: 'drum split - 6', tooltip: DRUMSEP_6S_TOOLTIP },
       ],
       presets: [
         { kind: 'preset', id: 'all_stems', label: 'all stems', tooltip: 'full stem graph' },
@@ -1646,9 +1645,6 @@
         button.classList.toggle('active', active);
         button.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
-      if(modesCardTitle){
-        modesCardTitle.textContent = 'stems';
-      }
       if(presetSettingsBtn){
         const visible = activeModeTab === 'presets';
         presetSettingsBtn.hidden = !visible;
@@ -2446,14 +2442,14 @@
         { label: 'drums', stems: ['htdemucs_ft_drums'], tooltip: 'fast drums' },
         { label: 'bass', stems: ['htdemucs_ft_bass'], tooltip: 'fast bass' },
         { label: 'other', stems: ['htdemucs_ft_other'], tooltip: 'other stem with guitar removed first' },
-        { label: '6 stems faster', stems: ['htdemucs_6s'], tooltip: 'faster 6 stems' },
+        { label: 'full mix faster', stems: ['htdemucs_6s'], tooltip: 'faster full mix split' },
         { label: 'vocals', stems: ['vocals'], tooltip: 'vocals' },
         { label: 'instrumental', stems: ['instrumental'], tooltip: 'instrumental' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
         { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
-        { label: '6 stems', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
-        { label: 'drums 6 stems', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
-        { label: 'drums 4 stems', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
+        { label: 'full mix', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
+        { label: 'drum split - 6', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
+        { label: 'drum split - 4', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
         { label: 'all stems', stems: ['all_stems'], tooltip: 'full stem graph' },
         { label: 'boost harmonies', stems: ['boost_harmonies'], tooltip: 'boost harmonies' },
         { label: 'denoise', stems: ['preset_denoise'], tooltip: 'denoise' },
@@ -3003,17 +2999,20 @@
         }
       }
       if (hasClearable) {
+        clearBtn.hidden = false;
         clearBtn.classList.add('show');
         clearBtn.style.pointerEvents = 'auto';
       } else {
         clearBtn.classList.remove('show');
         clearBtn.style.pointerEvents = 'none';
+        clearBtn.hidden = true;
       }
     }
 
     function updateShellLayout(){
       if(!appShell) return;
-      const compact = queue.children.length <= 2;
+      const itemCount = queue.children.length;
+      const compact = itemCount <= 2;
       appShell.classList.toggle('compact', compact);
       appShell.classList.toggle('expanded', !compact);
     }
@@ -3066,13 +3065,13 @@
         all_stems: 'all stems',
         preset_denoise: 'denoise',
         denoise: 'denoise',
-        bs_roformer_6s: '6 stems',
+        bs_roformer_6s: 'full mix',
         htdemucs_ft_drums: 'drums',
         htdemucs_ft_bass: 'bass',
         htdemucs_ft_other: 'other',
-        htdemucs_6s: '6 stems faster',
-        drumsep_6s: 'drums 6 stems',
-        drumsep_4s: 'drums 4 stems',
+        htdemucs_6s: 'full mix faster',
+        drumsep_6s: 'drum split - 6',
+        drumsep_4s: 'drum split - 4',
         boost_harmonies: 'boost harmonies',
       };
       stemsList.forEach(name => {
@@ -3542,6 +3541,10 @@
       refreshAllLabelVisibility();
       updateUI();
       appShell.addEventListener('scroll', updateVigs, { passive: true });
+      if(detachAppShellSoftScroll){
+        detachAppShellSoftScroll();
+      }
+      detachAppShellSoftScroll = attachSoftWheelScroll(appShell, updateVigs);
     });
     // settings button → open overlay
     const settingsBtn = document.getElementById('settings-btn');
@@ -4572,7 +4575,7 @@
         updateModelSettings({
           status: pct >= 100 ? 'done' : 'downloading',
           pct,
-          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : '6 stems'),
+          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : 'full mix'),
           downloaded_bytes: Math.round(totalBytes * (pct / 100)),
           total_bytes: Math.round(totalBytes),
           eta_seconds: pct >= 100 ? 0 : Math.max(0, Math.round((100 - pct) * 0.55)),
@@ -5640,7 +5643,7 @@
       if(lower.includes('other')) return 'other';
       if(lower.includes('guitar')) return 'guitar';
       if(lower.includes('piano')) return 'piano';
-      if(lower.includes('6s')) return '6 stems';
+      if(lower.includes('6s')) return 'full mix';
       if(lower.includes('error')) return 'error';
       if(lower.startsWith('prepare')) return 'preparing';
       if(lower.startsWith('load_audio')) return 'loading';
@@ -6009,7 +6012,7 @@
         <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.3.0</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.4.0</div>
     </div>
   </div>
 
