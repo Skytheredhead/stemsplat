@@ -6360,6 +6360,48 @@
       });
     }
 
+    function removeQueueRowAnimated(row, onDone){
+      if(!row || !row.parentElement){
+        if(typeof onDone === 'function') onDone();
+        return;
+      }
+      const computed = window.getComputedStyle(row);
+      const startHeight = row.offsetHeight;
+      const startMarginTop = parseFloat(computed.marginTop || '0') || 0;
+      const startMarginBottom = parseFloat(computed.marginBottom || '0') || 0;
+
+      row.style.height = `${startHeight}px`;
+      row.style.marginTop = `${startMarginTop}px`;
+      row.style.marginBottom = `${startMarginBottom}px`;
+      row.style.overflow = 'hidden';
+      row.style.willChange = 'height, margin, opacity, transform';
+      row.classList.add('leave', 'leave-active');
+
+      requestAnimationFrame(() => {
+        row.style.transition = 'height .24s cubic-bezier(.22,.61,.36,1), margin .24s cubic-bezier(.22,.61,.36,1), opacity .18s ease, transform .18s ease';
+        row.classList.add('leave-to');
+        row.style.height = '0px';
+        row.style.marginTop = '0px';
+        row.style.marginBottom = '0px';
+      });
+
+      let settled = false;
+      const finalize = () => {
+        if(settled) return;
+        settled = true;
+        if(row.parentElement){
+          row.remove();
+        }
+        if(typeof onDone === 'function') onDone();
+      };
+      setTimeout(finalize, 270);
+      row.addEventListener('transitionend', (event) => {
+        if(event.propertyName === 'height'){
+          finalize();
+        }
+      }, { once: true });
+    }
+
     function failPendingUpload(pending, message){
       if(!pending) return;
       dropPendingByTempKey(pending.tempKey);
@@ -6372,15 +6414,10 @@
       }
       const row = pending.ui && pending.ui.item;
       if(row && row.parentElement){
-        row.classList.add('leave', 'leave-active');
-        requestAnimationFrame(() => row.classList.add('leave-to'));
-        setTimeout(() => {
-          if(row.parentElement){
-            row.remove();
-          }
+        removeQueueRowAnimated(row, () => {
           saveTasks();
           updateUI();
-        }, 180);
+        });
       }else{
         saveTasks();
         updateUI();
@@ -6611,15 +6648,10 @@
         return true;
       });
       if(row && row.parentElement){
-        row.classList.add('leave', 'leave-active');
-        requestAnimationFrame(() => row.classList.add('leave-to'));
-        setTimeout(() => {
-          if(row.parentElement){
-            row.remove();
-          }
+        removeQueueRowAnimated(row, () => {
           saveTasks();
           updateUI();
-        }, 180);
+        });
       }else{
         saveTasks();
         updateUI();
@@ -8049,7 +8081,7 @@
         </div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.4.0</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.4.1</div>
       </div>
     </div>
   </div>

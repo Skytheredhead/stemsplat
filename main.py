@@ -929,7 +929,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"

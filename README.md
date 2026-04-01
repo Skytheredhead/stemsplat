@@ -1,4 +1,4 @@
-# stemsplat - v0.4.0 release
+# stemsplat - v0.4.1 release
 
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers to fiddle with and the best quality.
 
@@ -33,7 +33,7 @@
 - Instrumental - https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main
 - Deux - https://huggingface.co/becruily/mel-band-roformer-deux/tree/main
 
-## v0.4.0 plans
+## v0.4.1 plans
 - [ ]  Change port to something that’s not :8000 → 9876
 - [ ]  Model Manager: Installed models list (already there), estimated disk usage
 - [x]  History (with file size limits, etc.) use to cache outputs, and other stuff. Default user warning to 10GB, able to change this in settings to higher (or lower) amount.
