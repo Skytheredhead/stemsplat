@@ -1774,6 +1774,7 @@
     let queueStarted = false;
     let activeModeTab = 'single';
     let modesCardHeightTimer = null;
+    let modesCardHeightTransitionHandler = null;
     let selectedStemModes = new Set(['vocals']);
     let selectedPresetMode = null;
     let lastStemSelectionAnchor = 'vocals';
@@ -1958,21 +1959,38 @@
       });
     }
 
+    function clearModesCardHeightAnimation(){
+      if(modesCardHeightTimer){
+        clearTimeout(modesCardHeightTimer);
+        modesCardHeightTimer = null;
+      }
+      if(modesCard && modesCardHeightTransitionHandler){
+        modesCard.removeEventListener('transitionend', modesCardHeightTransitionHandler);
+        modesCardHeightTransitionHandler = null;
+      }
+    }
+
+    function finishModesCardHeightAnimation(){
+      clearModesCardHeightAnimation();
+      if(!modesCard) return;
+      modesCard.classList.remove('modes-card-shifting');
+      modesCard.classList.remove('modes-card-height-animating');
+      modesCard.style.height = '';
+    }
+
     function renderModeChoices(animate = false){
       if(!modeChoices) return;
+      let startHeight = 0;
       if(modesCard){
         modesCard.classList.toggle('modes-card-shifting', animate);
         if(animate){
-          if(modesCardHeightTimer){
-            clearTimeout(modesCardHeightTimer);
-            modesCardHeightTimer = null;
-          }
-          modesCard.style.height = `${modesCard.offsetHeight}px`;
-          modesCard.classList.add('modes-card-height-animating');
+          clearModesCardHeightAnimation();
+          startHeight = modesCard.getBoundingClientRect().height;
+          modesCard.classList.remove('modes-card-height-animating');
+          modesCard.style.height = `${startHeight}px`;
           void modesCard.offsetHeight;
         }else{
-          modesCard.classList.remove('modes-card-height-animating');
-          modesCard.style.height = '';
+          finishModesCardHeightAnimation();
         }
       }
       modeChoices.innerHTML = '';
@@ -1995,22 +2013,24 @@
       updateModeTabUI();
       updateModeChoiceUI();
       if(animate && modesCard){
+        modesCard.style.height = 'auto';
+        const endHeight = modesCard.getBoundingClientRect().height;
+        modesCard.style.height = `${startHeight}px`;
+        void modesCard.offsetHeight;
+        modesCard.classList.add('modes-card-height-animating');
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const endHeight = modesCard.scrollHeight;
-            modesCard.style.height = `${endHeight}px`;
-          });
+          modesCardHeightTransitionHandler = (event) => {
+            if(event.target !== modesCard || event.propertyName !== 'height') return;
+            finishModesCardHeightAnimation();
+          };
+          modesCard.addEventListener('transitionend', modesCardHeightTransitionHandler);
+          modesCard.style.height = `${endHeight}px`;
         });
         modesCardHeightTimer = window.setTimeout(() => {
-          modesCard.classList.remove('modes-card-shifting');
-          modesCard.classList.remove('modes-card-height-animating');
-          modesCard.style.height = '';
-          modesCardHeightTimer = null;
-        }, 380);
+          finishModesCardHeightAnimation();
+        }, 520);
       }else if(modesCard){
-        modesCard.classList.remove('modes-card-shifting');
-        modesCard.classList.remove('modes-card-height-animating');
-        modesCard.style.height = '';
+        finishModesCardHeightAnimation();
       }
     }
 
