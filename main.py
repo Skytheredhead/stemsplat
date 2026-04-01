@@ -977,6 +977,9 @@ BOOST_GUITAR_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
 BOOST_HARMONIES_VOCALS_END_PCT = 44
 BOOST_HARMONIES_BACKGROUND_START_PCT = 48
 BOOST_HARMONIES_BACKGROUND_END_PCT = 92
+BG_VOCAL_VOCALS_END_PCT = 44
+BG_VOCAL_BACKGROUND_START_PCT = 48
+BG_VOCAL_BACKGROUND_END_PCT = 92
 BOOST_GUITAR_MODEL_END_PCT = 92
 OTHER_FILTER_GUITAR_END_PCT = 44
 OTHER_FILTER_OTHER_START_PCT = 48
@@ -1140,7 +1143,7 @@ MODEL_DISPLAY_NAMES = {
     "instrumental": "instrumental",
     "deux": "both",
     "guitar": "guitar",
-    "mel_band_karaoke": "karaoke",
+    "mel_band_karaoke": "bg vocal",
     "denoise": "denoise",
     "bs_roformer_6s": "full mix",
     "htdemucs_ft_drums": "drums",
@@ -1177,7 +1180,7 @@ MODE_REQUIRED_MODELS = {
     "both_deux": ("deux",),
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
-    "mel_band_karaoke": ("mel_band_karaoke",),
+    "mel_band_karaoke": ("vocals", "mel_band_karaoke"),
     "denoise": ("denoise",),
     "bs_roformer_6s": ("bs_roformer_6s",),
     "htdemucs_ft_drums": ("htdemucs_ft_drums",),
@@ -1198,7 +1201,7 @@ MODE_OUTPUT_LABELS = {
     "both_deux": ("vocals", "instrumental"),
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
-    "mel_band_karaoke": ("vocals", "karaoke"),
+    "mel_band_karaoke": ("bg vocal",),
     "denoise": ("denoise",),
     "bs_roformer_6s": ("bass", "drums", "other", "vocals", "guitar", "piano"),
     "htdemucs_ft_drums": ("drums",),
@@ -3110,6 +3113,7 @@ def _stage_model_key(stage_text: str) -> str | None:
         "running deux model": "deux",
         "running guitar model": "guitar",
         "running mel-band karaoke model": "mel_band_karaoke",
+        "running background vocal model": "mel_band_karaoke",
         "running harmony background model": "mel_band_karaoke",
         "running denoise model": "denoise",
         "running bs-roformer 6s model": "bs_roformer_6s",
@@ -3141,8 +3145,10 @@ def _runtime_stage_key_for_display(stage_text: str) -> str | None:
 
 
 def _runtime_model_sequence(mode: str) -> list[str]:
-    if mode in {"vocals", "instrumental", "deux", "guitar", "mel_band_karaoke", "denoise", "bs_roformer_6s"}:
+    if mode in {"vocals", "instrumental", "deux", "guitar", "denoise", "bs_roformer_6s"}:
         return [mode]
+    if mode == "mel_band_karaoke":
+        return ["vocals", "mel_band_karaoke"]
     if mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_6s"}:
         return [mode]
     if mode == "htdemucs_ft_other":
@@ -4213,6 +4219,9 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         if mode in {"both_separate", "preset_voc_instrum"}:
             span = max(1, BOTH_SEPARATE_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
+        if mode == "mel_band_karaoke":
+            span = max(1, BG_VOCAL_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
+            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
         if mode == "preset_boost_harmonies":
             span = max(1, BOOST_HARMONIES_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
@@ -4252,6 +4261,9 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         if mode == "preset_boost_harmonies" and stage_model == "mel_band_karaoke":
             span = max(1, BOOST_HARMONIES_BACKGROUND_END_PCT - BOOST_HARMONIES_BACKGROUND_START_PCT)
             return max(0.0, min(1.0, (clamped - BOOST_HARMONIES_BACKGROUND_START_PCT) / span))
+        if mode == "mel_band_karaoke" and stage_model == "mel_band_karaoke":
+            span = max(1, BG_VOCAL_BACKGROUND_END_PCT - BG_VOCAL_BACKGROUND_START_PCT)
+            return max(0.0, min(1.0, (clamped - BG_VOCAL_BACKGROUND_START_PCT) / span))
         if mode == "preset_all_stems" and stage_model == "mel_band_karaoke":
             span = max(1, ALL_STEMS_BACKGROUND_END_PCT - ALL_STEMS_BACKGROUND_START_PCT)
             return max(0.0, min(1.0, (clamped - ALL_STEMS_BACKGROUND_START_PCT) / span))
@@ -4780,8 +4792,11 @@ def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]
         task = tasks.get(task_id)
         if task is None:
             raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-        if str(task.get("status") or "") != "ready":
+        status = str(task.get("status") or "")
+        if status not in {"ready", "queued"}:
             raise AppError(ErrorCode.INVALID_REQUEST, "Task has already started.")
+        if status == "queued" and float(task.get("pct") or 0) > 0:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
         task["mode"] = mode
         _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         task["version"] += 1
@@ -5201,6 +5216,23 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
     return task
 
 
+def _remove_task(task_id: str) -> dict[str, Any]:
+    snapshot: dict[str, Any] | None = None
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        status = str(task.get("status") or "")
+        if status == "running":
+            raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
+        task["stop_event"].set()
+        snapshot = dict(task)
+        tasks.pop(task_id, None)
+    if snapshot is not None:
+        _cleanup_task_runtime(task_id, snapshot)
+    return snapshot or {}
+
+
 def _compat_stage(task: dict[str, Any]) -> str:
     status = str(task.get("status") or "").lower()
     if status == "ready":
@@ -5492,24 +5524,44 @@ def _process_task(task_id: str) -> None:
             _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
             _append_named_output(temp_outputs, work_dir, "guitar", guitar_pred[0])
         elif mode == "mel_band_karaoke":
+            vocals_model = manager.get("vocals")
             karaoke_model = manager.get("mel_band_karaoke")
+
+            vocals_started_at = time.time()
+            vocals_pred = _run_model_chunks(
+                vocals_model,
+                waveform,
+                MODEL_SPECS["vocals"].segment,
+                MODEL_SPECS["vocals"].overlap,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running vocals model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, BG_VOCAL_VOCALS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
+            vocals_tensor = vocals_pred[0]
+
             karaoke_started_at = time.time()
             karaoke_pred = _run_model_for_spec(
                 "mel_band_karaoke",
                 karaoke_model,
-                waveform,
+                vocals_tensor,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
-                    "Running mel-band karaoke model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                    "Running background vocal model",
+                    _map_fraction(BG_VOCAL_BACKGROUND_START_PCT, BG_VOCAL_BACKGROUND_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - karaoke_started_at)
-            vocals_tensor = karaoke_pred[0]
-            karaoke_tensor = karaoke_pred[1] if karaoke_pred.shape[0] > 1 else _residual_output(waveform, vocals_tensor)
-            _append_named_output(temp_outputs, work_dir, "vocals", vocals_tensor)
-            _append_named_output(temp_outputs, work_dir, "karaoke", karaoke_tensor)
+            bg_vocal_tensor = (
+                karaoke_pred[1]
+                if karaoke_pred.shape[0] > 1
+                else _residual_output(vocals_tensor, karaoke_pred[0])
+            )
+            _append_named_output(temp_outputs, work_dir, "bg vocal", bg_vocal_tensor)
         elif mode == "preset_boost_harmonies":
             vocals_model = manager.get("vocals")
             harmony_model = manager.get("mel_band_karaoke")
@@ -6941,11 +6993,24 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
     output_same_as_input = body.get("output_same_as_input")
+    remote_client = _is_remote_client(request)
+    request_host = _request_client_host(request)
+    running_on_other_device = False
     try:
         with tasks_lock:
             task = tasks.get(task_id)
             if task is None:
                 raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+            if remote_client:
+                for other_id, other in tasks.items():
+                    if other_id == task_id:
+                        continue
+                    if str(other.get("status") or "") != "running":
+                        continue
+                    other_host = str(other.get("queued_by_host") or "").strip()
+                    if not other_host or other_host != request_host:
+                        running_on_other_device = True
+                        break
             if str(task.get("status") or "") == "ready":
                 _apply_task_start_settings(
                     task,
@@ -6957,9 +7022,14 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
                     if isinstance(multi_stem_export, str) and multi_stem_export.strip()
                     else None,
                 )
+            if request_host:
+                task["queued_by_host"] = request_host
         task = _enqueue_task(task_id)
         _resume_queue_processing()
-        return _compat_public_task(task)
+        payload = _compat_public_task(task)
+        if running_on_other_device:
+            payload["message"] = "another device is currently processing. this song was added to the queue."
+        return payload
     except AppError as exc:
         raise exc.to_http(404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400)
 
@@ -7012,6 +7082,21 @@ async def compat_stop(task_id: str) -> dict[str, Any]:
     logger.info("received /stop request for %s", task_id)
     _request_task_stop(task_id)
     return _compat_public_task(_require_task(task_id))
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    try:
+        removed = _remove_task(task_id)
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    return {"status": "removed", "id": task_id, "name": str(removed.get("original_name") or "")}
+
+
+@app.post("/remove/{task_id}")
+async def compat_remove(task_id: str):
+    return await delete_task(task_id)
 
 
 @app.post("/rerun/{task_id}")
@@ -7926,7 +8011,7 @@ INDEX_HTML = """<!DOCTYPE html>
               <input type="radio" name="split-mode" value="mel_band_karaoke">
               <div class="checkbox"></div>
               <div>
-                <strong>mel-band karaoke</strong>
+                <strong>bg vocal</strong>
               </div>
             </label>
             <label class="mode-card" data-mode="bs_roformer_6s">
@@ -7990,7 +8075,7 @@ INDEX_HTML = """<!DOCTYPE html>
       both_deux: 'both (deux)',
       both_separate: 'both (separate)',
       guitar: 'mel-band guitar',
-      mel_band_karaoke: 'mel-band karaoke',
+      mel_band_karaoke: 'bg vocal',
       bs_roformer_6s: 'full mix',
       preset_denoise: 'denoise',
     };
@@ -8040,7 +8125,9 @@ INDEX_HTML = """<!DOCTYPE html>
         return ['vocals', 'instrumental'].filter((name) => missingModels.includes(name));
       }
       if (mode === 'guitar') return missingModels.includes('guitar') ? ['guitar'] : [];
-      if (mode === 'mel_band_karaoke') return missingModels.includes('mel_band_karaoke') ? ['mel_band_karaoke'] : [];
+      if (mode === 'mel_band_karaoke') {
+        return ['vocals', 'mel_band_karaoke'].filter((name) => missingModels.includes(name));
+      }
       if (mode === 'bs_roformer_6s') return missingModels.includes('bs_roformer_6s') ? ['bs_roformer_6s'] : [];
       if (mode === 'preset_denoise') return missingModels.includes('denoise') ? ['denoise'] : [];
       return [];
@@ -8166,7 +8253,8 @@ INDEX_HTML = """<!DOCTYPE html>
           ? ''
           : (OUTPUT_LABELS[task.output_format] || task.output_format);
         const queueMeta = outputLabel ? `${modeLabel} • ${outputLabel}` : modeLabel;
-        const progressSide = `${pct}%${eta ? ` • ${eta}` : ''}`;
+        // Keep ETA calculation in place, but suppress it from the visible UI.
+        const progressSide = `${pct}%`;
         const badgeText = statusLabel(task.status);
         const showStatusBadge = ['error', 'stopped'].includes(task.status)
           || (task.status === 'done' && stageText.trim().toLowerCase() !== badgeText);

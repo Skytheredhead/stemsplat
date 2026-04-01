@@ -155,6 +155,7 @@
       background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat; opacity:.18; transition: inset .32s ease, opacity .32s ease, transform .32s ease; transform: scale(1); }
     .shade { position: fixed; inset: -22vh 0; pointer-events: none; background: rgba(0,0,0,0.24); z-index: -1; transition: inset .32s ease, opacity .32s ease, transform .32s ease; transform: scale(1); }
     .app-shell {
+      position: relative;
       min-height: 100vh;
       max-height: 100vh;
       width: 100%;
@@ -222,6 +223,65 @@
     body.fullscreen-transition .shade {
       inset: -34vh -8vw;
       transform: scale(1.04);
+    }
+    body.clear-all-anim #app-shell,
+    body.clear-all-anim .window-chrome,
+    body.clear-all-anim .bottom-left-controls,
+    body.clear-all-anim #top-vig,
+    body.clear-all-anim #bot-vig {
+      transition: transform .46s cubic-bezier(.22,.61,.36,1), opacity .46s ease, filter .46s ease;
+      will-change: transform, opacity, filter;
+      pointer-events: none;
+    }
+    body.clear-all-anim .bg-gradient-shell,
+    body.clear-all-anim .noise::before,
+    body.clear-all-anim .shade {
+      transition: transform .58s cubic-bezier(.2,.74,.2,1), opacity .58s ease, inset .58s ease;
+      will-change: transform, opacity, inset;
+    }
+    body.clear-all-exit #app-shell,
+    body.clear-all-exit .window-chrome,
+    body.clear-all-exit .bottom-left-controls,
+    body.clear-all-exit #top-vig,
+    body.clear-all-exit #bot-vig {
+      opacity: 0;
+      transform: translateY(-20px) scale(.965);
+      filter: blur(10px) saturate(.96);
+    }
+    body.clear-all-exit .bg-gradient-shell {
+      top: -30vh;
+      bottom: -30vh;
+      left: -6vw;
+      right: -6vw;
+      transform: scale(1.08) rotate(-.35deg);
+    }
+    body.clear-all-exit .noise::before,
+    body.clear-all-exit .shade {
+      inset: -30vh -6vw;
+      transform: scale(1.06);
+      opacity: .12;
+    }
+    body.clear-all-enter-start #app-shell,
+    body.clear-all-enter-start .window-chrome,
+    body.clear-all-enter-start .bottom-left-controls,
+    body.clear-all-enter-start #top-vig,
+    body.clear-all-enter-start #bot-vig {
+      opacity: 0;
+      transform: translateY(16px) scale(1.028);
+      filter: blur(8px) saturate(.98);
+    }
+    body.clear-all-enter-start .bg-gradient-shell {
+      top: -26vh;
+      bottom: -26vh;
+      left: -4vw;
+      right: -4vw;
+      transform: scale(1.06);
+    }
+    body.clear-all-enter-start .noise::before,
+    body.clear-all-enter-start .shade {
+      inset: -26vh -4vw;
+      transform: scale(1.04);
+      opacity: .2;
     }
 
     .glass { background: var(--card); backdrop-filter: blur(12px) saturate(110%); -webkit-backdrop-filter: blur(12px) saturate(110%); border: 1px solid var(--border); box-shadow: 0 8px 26px rgba(0,0,0,.28); }
@@ -337,11 +397,30 @@
       pointer-events: none;
     }
     #toast-wrap > * { pointer-events: auto; }
+    @keyframes toastCardIn {
+      from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes toastCardOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    }
     .toast-card {
       width: min(360px, calc(100vw - 32px));
       padding: 12px 14px;
       border-radius: 16px;
       color: var(--txt-main);
+      border: 1px solid rgba(255,255,255,.12);
+      background:
+        radial-gradient(circle at top right, rgba(142,216,255,.14), rgba(142,216,255,0) 44%),
+        linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      box-shadow: 0 14px 34px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.09);
+      transform-origin: top right;
+      animation: toastCardIn .24s cubic-bezier(.2,.7,.2,1) both;
+    }
+    .toast-card.toast-card-closing {
+      pointer-events: none;
+      animation: toastCardOut .18s ease both;
     }
     .toast-title {
       font-size: 13px;
@@ -574,17 +653,19 @@
     }
     .settings-close-floating {
       position: absolute;
-      top: -6px;
-      right: 14px;
-      width: 32px;
-      height: 32px;
+      top: -14px;
+      right: -12px;
+      width: 28px;
+      height: 28px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      padding: 0;
       background: transparent;
       border: 0;
+      border-radius: 999px;
       color: rgba(245,251,255,.9);
-      font-size: 28px;
+      font-size: 20px;
       line-height: 1;
       text-shadow: 0 8px 24px rgba(0,0,0,.48), 0 2px 8px rgba(0,0,0,.32);
       transition: transform .16s ease, color .16s ease, text-shadow .16s ease;
@@ -729,6 +810,93 @@
       border-color: rgba(150,197,214,.48);
       color: #f5fbff;
     }
+    .queue-context-menu {
+      position: absolute;
+      z-index: 85;
+      min-width: 190px;
+      padding: 6px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(16, 28, 34, .96);
+      backdrop-filter: blur(14px) saturate(110%);
+      -webkit-backdrop-filter: blur(14px) saturate(110%);
+      box-shadow: 0 18px 42px rgba(0,0,0,.34);
+      display: grid;
+      gap: 4px;
+      user-select: none;
+    }
+    .queue-context-action {
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--txt-main);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 11px;
+      text-align: left;
+      font-size: 13px;
+      transition: background .15s ease, border-color .15s ease, transform .15s ease;
+    }
+    .queue-context-action:hover {
+      transform: translateX(1px);
+      background: rgba(255,255,255,.07);
+      border-color: rgba(255,255,255,.11);
+    }
+    .queue-context-caret {
+      opacity: .72;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .queue-context-change-wrap {
+      position: relative;
+    }
+    .queue-context-groups {
+      position: absolute;
+      top: 0;
+      left: 100%;
+      margin-left: -1px;
+      min-width: 176px;
+      display: none;
+      padding: 6px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(14, 24, 29, .98);
+      box-shadow: 0 16px 38px rgba(0,0,0,.34);
+      gap: 4px;
+    }
+    .queue-context-change-wrap:hover > .queue-context-groups {
+      display: grid;
+    }
+    .queue-context-group {
+      position: relative;
+    }
+    .queue-context-group:hover > .queue-context-options {
+      display: grid;
+    }
+    .queue-context-options {
+      position: absolute;
+      top: 0;
+      left: 100%;
+      margin-left: -1px;
+      min-width: 210px;
+      display: none;
+      padding: 6px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(11, 20, 24, .99);
+      box-shadow: 0 18px 42px rgba(0,0,0,.36);
+      gap: 4px;
+    }
+    .queue-context-menu.open-left .queue-context-groups,
+    .queue-context-menu.open-left .queue-context-options {
+      left: auto;
+      right: 100%;
+      margin-left: 0;
+      margin-right: -1px;
+    }
     .nerd-stuff-wrap {
       overflow: hidden;
       max-height: 0;
@@ -752,6 +920,18 @@
 
     .chip { font-size:11px; padding:3px 8px; border-radius:999px; color: #ffffff; background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); display:inline-flex; align-items:center; white-space:nowrap; flex-shrink:0; line-height:1; }
     .chip-dim { background: rgba(0,0,0,.38); border:1px solid rgba(255,255,255,.10); color:#E7ECEF; }
+    @keyframes queueStemChipPulse {
+      0% { opacity: 0.82; transform: translateY(0); }
+      50% { opacity: 1; transform: translateY(-1px); }
+      100% { opacity: 0.82; transform: translateY(0); }
+    }
+    .labels.labels-unlocked .chip.chip-dim {
+      background: rgba(226, 242, 255, .2);
+      border-color: rgba(226, 242, 255, .38);
+      color: rgba(246, 252, 255, .98);
+      box-shadow: 0 0 0 1px rgba(226, 242, 255, .09) inset;
+      animation: queueStemChipPulse 1.9s ease-in-out infinite;
+    }
 
     .bar { height: 10px; background: rgba(255,255,255,.08); border-radius:999px; overflow: hidden; }
     .bar-fill { height:100%; width:0%; background: linear-gradient(90deg, #e7eef2, #dfe7ec); will-change: width; }
@@ -1071,6 +1251,7 @@
       gap: 12px;
       align-items: stretch;
       pointer-events: none;
+      transition: filter .22s ease, opacity .22s ease, transform .22s ease;
     }
     .action-square-btn {
       width: 72px;
@@ -1086,6 +1267,15 @@
     }
     .action-square-btn:hover {
       transform: translateY(-1px);
+    }
+    body.settings-open .bottom-left-controls {
+      filter: blur(6px) saturate(.86);
+      opacity: .52;
+      transform: translateY(1px);
+      pointer-events: none;
+    }
+    body.settings-open .bottom-left-controls .action-square-btn {
+      pointer-events: none;
     }
     .floating-settings-btn {
       position: fixed;
@@ -1320,6 +1510,32 @@
     
     .page-mask { position:fixed; inset:0; background: rgba(0,0,0,0.0); pointer-events:none; opacity:0; transition: opacity .28s ease; }
     .page-mask.show { opacity:1; }
+    .clear-all-overlay {
+      position: fixed;
+      inset: -24vh -12vw;
+      pointer-events: none;
+      z-index: 88;
+      opacity: 0;
+      transform: scale(1.08);
+      background:
+        radial-gradient(ellipse at center, rgba(21, 42, 53, .18) 0%, rgba(21, 42, 53, 0) 66%),
+        linear-gradient(135deg, rgba(8, 14, 19, .36), rgba(10, 19, 25, .32));
+      mix-blend-mode: normal;
+      filter: blur(10px);
+      transition: opacity .5s ease, transform .6s cubic-bezier(.2,.74,.2,1);
+    }
+    body.clear-all-anim .clear-all-overlay {
+      opacity: .06;
+      transform: scale(1.02);
+    }
+    body.clear-all-exit .clear-all-overlay {
+      opacity: .28;
+      transform: scale(1);
+    }
+    body.clear-all-enter-start .clear-all-overlay {
+      opacity: .18;
+      transform: scale(1.04);
+    }
     .model-overlay-progress {
       overflow: hidden;
       max-height: 0;
@@ -1338,7 +1554,26 @@
       font-size: 13px;
       opacity: .84;
     }
-@media (prefers-reduced-motion: reduce){ .fade-in{ animation:none; } .btn:hover{ transform:none; } .card:hover{ transform:none; } .micro{ animation:none; } }
+@media (prefers-reduced-motion: reduce){
+  .fade-in{ animation:none; }
+  .btn:hover{ transform:none; }
+  .card:hover{ transform:none; }
+  .micro{ animation:none; }
+  .labels.labels-unlocked .chip.chip-dim{ animation:none; }
+  body.clear-all-anim #app-shell,
+  body.clear-all-anim .window-chrome,
+  body.clear-all-anim .bottom-left-controls,
+  body.clear-all-anim #top-vig,
+  body.clear-all-anim #bot-vig,
+  body.clear-all-anim .bg-gradient-shell,
+  body.clear-all-anim .noise::before,
+  body.clear-all-anim .shade {
+    transition: none !important;
+  }
+  .clear-all-overlay {
+    display: none !important;
+  }
+}
     /* Prevent flashing UI before intro animation */
     .intro .pre-hide{ opacity: 0; }
     @view-transition { navigation: auto; }
@@ -1627,7 +1862,7 @@
       vocals: 'vocals',
       instrumental: 'instrumental',
       guitar: 'guitar',
-      mel_band_karaoke: 'karaoke',
+      mel_band_karaoke: 'bg vocal',
       denoise: 'denoise',
       bs_roformer_6s: 'full mix',
       htdemucs_ft_drums: 'drums',
@@ -1666,7 +1901,7 @@
       vocals: ['vocals'],
       instrumental: ['instrumental'],
       guitar: ['guitar'],
-      mel_band_karaoke: ['mel_band_karaoke'],
+      mel_band_karaoke: ['vocals', 'mel_band_karaoke'],
       bs_roformer_6s: ['bs_roformer_6s'],
       htdemucs_ft_drums: ['htdemucs_ft_drums'],
       htdemucs_ft_bass: ['htdemucs_ft_bass'],
@@ -1686,7 +1921,6 @@
         { kind: 'stem', id: 'htdemucs_ft_bass', label: 'bass', tooltip: 'fast bass' },
         { kind: 'stem', id: 'guitar', label: 'guitar', tooltip: 'medium guitar split' },
         { kind: 'stem', id: 'htdemucs_ft_other', label: 'other', tooltip: 'other stem with guitar removed first' },
-        { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'karaoke split' },
       ],
       multi: [
         { kind: 'stem', id: 'bs_roformer_6s', label: 'full mix', tooltip: BS_6S_TOOLTIP },
@@ -1697,6 +1931,7 @@
       presets: [
         { kind: 'preset', id: 'all_stems', label: 'all stems', tooltip: 'full stem graph' },
         { kind: 'preset', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
+        { kind: 'preset', id: 'mel_band_karaoke', label: 'bg vocal', tooltip: 'background vocal split' },
         { kind: 'preset', id: 'boost_harmonies', label: 'boost harmonies', tooltip: 'boost harmonies' },
       ],
     };
@@ -1704,7 +1939,7 @@
       vocals: 'single',
       instrumental: 'single',
       guitar: 'single',
-      mel_band_karaoke: 'single',
+      mel_band_karaoke: 'presets',
       htdemucs_ft_drums: 'single',
       htdemucs_ft_bass: 'single',
       htdemucs_ft_other: 'single',
@@ -1727,6 +1962,21 @@
         defaultBaseGain: -3,
       },
     };
+    const QUEUE_STEM_MENU_GROUPS = ['single', 'multi', 'presets'].map((tabKey) => ({
+      key: tabKey,
+      label: MODE_TAB_LABELS[tabKey] || tabKey,
+      options: (MODE_TAB_OPTIONS[tabKey] || [])
+        .filter((option) => tabKey === 'presets' ? option.kind === 'preset' : option.kind === 'stem')
+        .map((option) => ({
+          modeKey: option.id,
+          label: option.label,
+          stems: [option.id === 'denoise' ? 'preset_denoise' : option.id],
+        })),
+    }));
+    const QUEUE_STEM_OPTION_BY_MODE = new Map(
+      QUEUE_STEM_MENU_GROUPS.flatMap((group) => group.options.map((option) => [option.modeKey, option]))
+    );
+    const QUEUE_STEM_MODE_ORDER = QUEUE_STEM_MENU_GROUPS.flatMap((group) => group.options.map((option) => option.modeKey));
     const OUTPUT_FORMAT_LABELS = {
       same_as_input: 'same as input',
       mp3_320: '320kb mp3',
@@ -1802,6 +2052,7 @@
     let defaultOutputPath = '';
     let dirPickerInput = null;
     let desktopLaunchAnimated = false;
+    let queueContextMenuEl = null;
 
     function applyDesktopShellState(){
       const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
@@ -2949,7 +3200,7 @@
         { label: 'vocals', stems: ['vocals'], tooltip: 'vocals' },
         { label: 'instrumental', stems: ['instrumental'], tooltip: 'instrumental' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
-        { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
+        { label: 'bg vocal', stems: ['mel_band_karaoke'], tooltip: 'background vocal split' },
         { label: 'full mix', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
         { label: 'drum split - 6', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
         { label: 'drum split - 4', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
@@ -3113,6 +3364,7 @@
       const bg = document.getElementById('overlay-bg');
       const card = document.getElementById('settings-card');
       if(settingsOverlay){
+        document.body.classList.add('settings-open');
         settingsOverlay.classList.remove('hidden');
         if(bg){
           bg.classList.remove('anim-out');
@@ -3251,6 +3503,7 @@
           }
           if(bg){ bg.classList.remove('anim-out'); }
           settingsOverlay.classList.add('hidden');
+          document.body.classList.remove('settings-open');
           if(modelPreviewActive){
             restoreModelPreview();
           }
@@ -3429,9 +3682,11 @@
       applyArtwork(row, task);
       const labels = row.querySelector('.labels');
       if(labels){
+        const stemCount = labels.childElementCount || 0;
         const normalized = String(task.stage || '').toLowerCase();
-        const visible = !(normalized === 'ready' && Number(task.pct || 0) === 0 && !task.frozen);
-        labels.classList.toggle('hidden', !visible);
+        const unlocked = normalized === 'ready' && Number(task.pct || 0) === 0 && !task.frozen;
+        labels.classList.toggle('hidden', stemCount <= 0);
+        labels.classList.toggle('labels-unlocked', stemCount > 0 && unlocked);
       }
       bindTaskPresetButton(row.querySelector('.task-preset-btn'), task);
     }
@@ -3497,21 +3752,9 @@
       const clamped = Math.round(Math.max(0, Math.min(100, Number(pct) || 0)));
       const eta = formatEta(etaSeconds);
       const state = String(etaState || '').toLowerCase();
-      if(eta){
-        return `${clamped}% • ${eta}`;
-      }
-      if(state === 'finishing'){
-        return `${clamped}% • finishing`;
-      }
-      if(state === 'steady' && (queueStarted || startPressed)){
-        return `${clamped}% • estimating`;
-      }
-      if(state === 'calibrating'){
-        return `${clamped}% • calibrating`;
-      }
-      if(state === 'estimating' && (queueStarted || startPressed)){
-        return `${clamped}% • estimating`;
-      }
+      // Keep ETA/state plumbing active, but hide ETA-related copy from the UI.
+      void eta;
+      void state;
       return `${clamped}%`;
     }
 
@@ -3641,7 +3884,7 @@
       container.innerHTML='';
       const pretty = {
         guitar: 'guitar',
-        mel_band_karaoke: 'karaoke',
+        mel_band_karaoke: 'bg vocal',
         all_stems: 'all stems',
         denoise: 'denoise',
         preset_denoise: 'denoise',
@@ -4091,6 +4334,46 @@
       return new Promise((resolve) => requestAnimationFrame(() => resolve()));
     }
 
+    async function runClearAllTransition(doWork){
+      const body = document.body;
+      if(!body){
+        await doWork();
+        return;
+      }
+      const prefersReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      let overlay = document.getElementById('clear-all-overlay');
+      const createdOverlay = !overlay;
+      if(!overlay){
+        overlay = document.createElement('div');
+        overlay.id = 'clear-all-overlay';
+        overlay.className = 'clear-all-overlay';
+        body.appendChild(overlay);
+      }
+      body.classList.remove('clear-all-exit', 'clear-all-enter-start');
+      body.classList.add('clear-all-anim');
+      try{
+        await nextFrame();
+        if(!prefersReducedMotion){
+          body.classList.add('clear-all-exit');
+          await wait(360);
+        }
+        await doWork();
+        if(!prefersReducedMotion){
+          body.classList.remove('clear-all-exit');
+          body.classList.add('clear-all-enter-start');
+          await nextFrame();
+          await nextFrame();
+          body.classList.remove('clear-all-enter-start');
+          await wait(420);
+        }
+      }finally{
+        body.classList.remove('clear-all-exit', 'clear-all-enter-start', 'clear-all-anim');
+        if(createdOverlay && overlay && overlay.parentElement){
+          overlay.remove();
+        }
+      }
+    }
+
     function closeActiveStreams(){
       activeStreams.forEach((stream) => {
         try{ stream.close(); } catch(_){}
@@ -4118,26 +4401,16 @@
           }
         });
       }
-      if(appShell){
-        appShell.classList.remove('resetting-in');
-        appShell.classList.add('resetting-out');
-        await wait(180);
-      }
-      for (const el of Array.from(queue.children)) { el.remove(); }
-      tasks = [];
-      pendingItems.length = 0;
-      startLock = false;
-      startPressed = false;
-      queueStarted = false;
-      saveTasks();
-      updateUI();
-      if(appShell){
-        appShell.classList.remove('resetting-out');
-        appShell.classList.add('resetting-in');
-        await nextFrame();
-        await nextFrame();
-        appShell.classList.remove('resetting-in');
-      }
+      await runClearAllTransition(async () => {
+        for (const el of Array.from(queue.children)) { el.remove(); }
+        tasks = [];
+        pendingItems.length = 0;
+        startLock = false;
+        startPressed = false;
+        queueStarted = false;
+        saveTasks();
+        updateUI();
+      });
       try { await fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
       isClearing = false;
       if(showToast) showPopup('all tasks cleared');
@@ -4686,18 +4959,50 @@
         Promise.resolve(syncQueuedStemSelection()).catch(() => {});
       });
     }
+    if(queue){
+      queue.addEventListener('contextmenu', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const row = target ? target.closest('.item-row') : null;
+        if(!row) return;
+        openQueueContextMenu(event, row);
+      });
+    }
     ensureSelectionForActiveTab();
     renderModeChoices();
 
     function showError(msg){
-      const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
-      document.body.appendChild(overlay);
-      const btn = overlay.querySelector('button');
-      btn.onclick = () => overlay.remove();
-      overlay.tabIndex = 0; overlay.focus();
-      overlay.addEventListener('keydown', e => { if(e.key === 'Enter') btn.click(); });
+      const message = String(msg || 'unknown error');
+      const { overlay, card } = createOverlayCard('upload failed');
+      const copy = document.createElement('p');
+      copy.className = 'text-sm leading-relaxed text-[var(--txt-main)]/85';
+      copy.textContent = message;
+      const actions = document.createElement('div');
+      actions.className = 'flex justify-end gap-2';
+      const okBtn = makeActionButton('ok', 'bg-white text-black');
+      actions.append(okBtn);
+      card.append(copy, actions);
+      let settled = false;
+      const finish = () => {
+        if(settled) return;
+        settled = true;
+        closeOverlay(overlay);
+      };
+      okBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        finish();
+      });
+      overlay.addEventListener('click', (event) => {
+        if(event.target === overlay || (event.target && event.target.classList && event.target.classList.contains('overlay-bg'))){
+          finish();
+        }
+      }, true);
+      overlay.addEventListener('keydown', (event) => {
+        if(event.key === 'Escape' || event.key === 'Enter'){
+          event.preventDefault();
+          event.stopPropagation();
+          finish();
+        }
+      }, true);
     }
 
     function ensureToastWrap(){
@@ -4717,7 +5022,7 @@
       card.className = 'toast-card glass text-[var(--txt-main)]';
       wrap.appendChild(card);
       const isErrorLike = /errorcode\.|failed|error/i.test(String(msg || ''));
-      setTimeout(() => card.remove(), isErrorLike ? 8000 : 3000);
+      setTimeout(() => dismissToastCard(card), isErrorLike ? 8000 : 3000);
     }
     const reopenParam = new URLSearchParams(window.location.search).get('reopen');
     if(reopenParam === '1'){
@@ -4727,30 +5032,62 @@
 
     function showConfirm(msg){
       return new Promise((resolve) => {
-        const overlay = document.createElement('div');
-        overlay.className = 'fixed inset-0 z-[90] flex items-center justify-center px-4';
-        overlay.innerHTML = `
-          <div class="absolute inset-0 bg-black/55 backdrop-blur-md"></div>
-          <div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)] max-w-sm w-11/12 relative">
-            <p class="text-center">${msg}</p>
-            <div class="flex justify-center gap-3">
-              <button id="cfm-cancel" class="px-3 py-1 rounded bg-white/12 text-white">cancel</button>
-              <button id="cfm-ok" class="px-3 py-1 rounded text-[#0b1a1f]" style="background:linear-gradient(135deg,#8ed8ff,#68c9c0);">yes</button>
-            </div>
-          </div>`;
-        document.body.appendChild(overlay);
-        const ok = overlay.querySelector('#cfm-ok');
-        const cancel = overlay.querySelector('#cfm-cancel');
-        const done = (val) => { overlay.remove(); resolve(val); };
-        ok.onclick = () => done(true);
-        cancel.onclick = () => done(false);
-        overlay.addEventListener('keydown', (e) => {
-          if(e.key === 'Escape') done(false);
-          if(e.key === 'Enter') done(true);
+        const { overlay, card } = createOverlayCard('confirm action');
+        const copy = document.createElement('p');
+        copy.className = 'text-sm leading-relaxed text-[var(--txt-main)]/85';
+        copy.textContent = String(msg || '');
+        const actions = document.createElement('div');
+        actions.className = 'flex justify-end gap-2';
+        const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
+        const okBtn = makeActionButton('yes', 'bg-white text-black');
+        actions.append(cancelBtn, okBtn);
+        card.append(copy, actions);
+        let settled = false;
+        const finish = (result) => {
+          if(settled) return;
+          settled = true;
+          closeOverlay(overlay);
+          resolve(result);
+        };
+        cancelBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          finish(false);
         });
-        overlay.tabIndex = 0;
-        overlay.focus();
+        okBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          finish(true);
+        });
+        overlay.addEventListener('click', (event) => {
+          if(event.target === overlay || (event.target && event.target.classList && event.target.classList.contains('overlay-bg'))){
+            finish(false);
+          }
+        }, true);
+        overlay.addEventListener('keydown', (event) => {
+          if(event.key === 'Escape'){
+            event.preventDefault();
+            event.stopPropagation();
+            finish(false);
+          }else if(event.key === 'Enter'){
+            event.preventDefault();
+            event.stopPropagation();
+            finish(true);
+          }
+        }, true);
       });
+    }
+
+    function dismissToastCard(card, { immediate = false } = {}){
+      if(!card) return;
+      if(immediate){
+        if(card.parentNode) card.parentNode.removeChild(card);
+        return;
+      }
+      if(card.dataset.toastClosing === '1') return;
+      card.dataset.toastClosing = '1';
+      card.classList.add('toast-card-closing');
+      setTimeout(() => {
+        if(card.parentNode) card.parentNode.removeChild(card);
+      }, 190);
     }
 
     function closeOverlay(overlay){
@@ -5265,11 +5602,7 @@
       const card = activeModelToast.card;
       activeModelToast = null;
       if(!card) return;
-      if(immediate){
-        card.remove();
-        return;
-      }
-      setTimeout(() => card.remove(), 180);
+      dismissToastCard(card, { immediate });
     }
 
     function queueModelToastRemoval(delayMs){
@@ -5346,8 +5679,6 @@
         }
         const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
         if(rate) bits.push(rate);
-        const eta = formatDuration(status.eta_seconds);
-        if(eta) bits.push(eta);
         toast.body.textContent = bits.join(' · ');
         toast.meta.textContent = '';
         toast.progress.hidden = false;
@@ -5387,7 +5718,7 @@
       if(!activeModelReminderToast) return;
       const card = activeModelReminderToast.card;
       activeModelReminderToast = null;
-      if(card) card.remove();
+      if(card) dismissToastCard(card, { immediate: true });
     }
 
     function ensureModelReminderToast(missing){
@@ -5676,8 +6007,6 @@
             ];
             const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
             if(rate) bits.push(rate);
-            const eta = formatDuration(status.eta_seconds);
-            if(eta) bits.push(eta);
             modelsProgressMeta.textContent = bits.join(' · ');
           }
         }else if(isError){
@@ -6131,6 +6460,384 @@
       }
     }
 
+    async function updateTaskSelectionWithResult(taskId, stems){
+      if(!taskId || !Array.isArray(stems) || stems.length === 0){
+        return { ok: false, message: 'invalid stem selection', data: null };
+      }
+      try{
+        const res = await fetch(`/api/tasks/${taskId}/selection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stems: stems.join(',') }),
+        });
+        if(!res.ok){
+          return { ok: false, message: await responseErrorMessage(res, 'could not change stem'), data: null };
+        }
+        const data = await res.json();
+        return { ok: true, message: '', data };
+      }catch(_){
+        return { ok: false, message: 'could not change stem', data: null };
+      }
+    }
+
+    function queueRowTaskCandidates(row){
+      if(!row) return [];
+      const tempKey = row.__tempKey || null;
+      const rowTaskId = row.__taskId || null;
+      const grouped = tasks.filter((task) => {
+        if(!task) return false;
+        if(tempKey && task.tempKey === tempKey) return true;
+        return !!(rowTaskId && task.id === rowTaskId);
+      });
+      if(grouped.length) return grouped;
+      const fallback = rowTaskId ? getTaskById(rowTaskId) : getTaskByTempKey(tempKey);
+      return fallback ? [fallback] : [];
+    }
+
+    function queueModeKeyForTask(task){
+      if(!task) return null;
+      const rawMode = String(task.mode || '').replace(/^preset_/, '');
+      if(QUEUE_STEM_OPTION_BY_MODE.has(rawMode)) return rawMode;
+      const stems = normalizeStemList(task.stems);
+      if(stemsMatch(stems, ['vocals', 'instrumental'])) return 'both_separate';
+      for(const option of QUEUE_STEM_OPTION_BY_MODE.values()){
+        if(stemsMatch(stems, option.stems)) return option.modeKey;
+      }
+      return null;
+    }
+
+    function seedQueueRowStemSelection(row){
+      const candidates = queueRowTaskCandidates(row);
+      const seed = new Set();
+      candidates.forEach((task) => {
+        const modeKey = queueModeKeyForTask(task);
+        if(modeKey === 'both_separate'){
+          seed.add('vocals');
+          seed.add('instrumental');
+          return;
+        }
+        if(modeKey && QUEUE_STEM_OPTION_BY_MODE.has(modeKey)){
+          seed.add(modeKey);
+        }
+      });
+      if(!seed.size){
+        seed.add('vocals');
+      }
+      row.__queueStemSelection = Array.from(seed);
+      row.__queueStemAnchor = row.__queueStemSelection[row.__queueStemSelection.length - 1] || 'vocals';
+    }
+
+    function applyQueueStemModifierSelection(row, modeKey, triggerEvent){
+      const selection = new Set(Array.isArray(row.__queueStemSelection) ? row.__queueStemSelection : ['vocals']);
+      let anchor = typeof row.__queueStemAnchor === 'string' ? row.__queueStemAnchor : (selection.values().next().value || 'vocals');
+      if(triggerEvent && triggerEvent.shiftKey){
+        const targetIndex = QUEUE_STEM_MODE_ORDER.indexOf(modeKey);
+        const anchorIndex = QUEUE_STEM_MODE_ORDER.indexOf(anchor);
+        if(targetIndex >= 0 && anchorIndex >= 0){
+          const start = Math.min(anchorIndex, targetIndex);
+          const end = Math.max(anchorIndex, targetIndex);
+          selection.clear();
+          QUEUE_STEM_MODE_ORDER.slice(start, end + 1).forEach((key) => selection.add(key));
+        }else{
+          selection.clear();
+          selection.add(modeKey);
+        }
+      }else if(triggerEvent && (triggerEvent.metaKey || triggerEvent.ctrlKey)){
+        if(selection.has(modeKey)){
+          if(selection.size > 1){
+            selection.delete(modeKey);
+          }
+        }else{
+          selection.add(modeKey);
+        }
+      }else{
+        selection.clear();
+        selection.add(modeKey);
+      }
+      anchor = modeKey;
+      row.__queueStemSelection = Array.from(selection);
+      row.__queueStemAnchor = anchor;
+      return selection;
+    }
+
+    function queueStemsFromSelection(modeSelection){
+      const selected = Array.from(modeSelection || []);
+      if(selected.length === 1){
+        const option = QUEUE_STEM_OPTION_BY_MODE.get(selected[0]);
+        return option ? option.stems.slice() : null;
+      }
+      if(selected.length === 2 && selected.includes('vocals') && selected.includes('instrumental')){
+        return ['vocals', 'instrumental'];
+      }
+      return null;
+    }
+
+    async function removeQueueRowFromQueue(row){
+      const candidates = queueRowTaskCandidates(row);
+      if(!candidates.length) return false;
+      const tempKey = row.__tempKey || null;
+      const ids = candidates.map((task) => task && task.id).filter(Boolean);
+      for(const taskId of ids){
+        closeTaskStream(taskId);
+      }
+      if(tempKey){
+        pendingItems.forEach((pending) => {
+          if(!pending || pending.tempKey !== tempKey) return;
+          if(pending.xhr && typeof pending.xhr.abort === 'function'){
+            try{ pending.xhr.abort(); }catch(_){}
+          }
+        });
+      }
+      for(const taskId of ids){
+        try{
+          const res = await fetch(`/remove/${taskId}`, { method: 'POST' });
+          if(!res.ok){
+            showPopup(await responseErrorMessage(res, 'could not remove from queue'));
+            return false;
+          }
+        }catch(_){
+          showPopup('could not remove from queue');
+          return false;
+        }
+      }
+      if(tempKey){
+        dropPendingByTempKey(tempKey);
+      }
+      const idSet = new Set(ids);
+      tasks = tasks.filter((task) => {
+        if(!task) return false;
+        if(idSet.has(task.id)) return false;
+        if(tempKey && task.tempKey === tempKey) return false;
+        return true;
+      });
+      if(row && row.parentElement){
+        row.classList.add('leave', 'leave-active');
+        requestAnimationFrame(() => row.classList.add('leave-to'));
+        setTimeout(() => {
+          if(row.parentElement){
+            row.remove();
+          }
+          saveTasks();
+          updateUI();
+        }, 180);
+      }else{
+        saveTasks();
+        updateUI();
+      }
+      showPopup('removed from queue');
+      return true;
+    }
+
+    async function applyQueueRowStemSelection(row, modeKey, triggerEvent){
+      const candidates = queueRowTaskCandidates(row);
+      if(candidates.length !== 1){
+        showPopup('change stem works when this song has one queued split');
+        return false;
+      }
+      const task = candidates[0];
+      if(!task){
+        showPopup('song is unavailable');
+        return false;
+      }
+      if(isProcessing(task)){
+        showPopup('you can only change stems before processing starts');
+        return false;
+      }
+      const stage = String(task.stage || '').toLowerCase();
+      if(['done', 'stopped', 'error'].includes(stage)){
+        showPopup('you can only change stems for queued songs');
+        return false;
+      }
+      const selection = applyQueueStemModifierSelection(row, modeKey, triggerEvent);
+      const nextStems = queueStemsFromSelection(selection);
+      if(!nextStems){
+        showPopup('that multi-selection is not supported for one queued song');
+        return false;
+      }
+      if(task.id){
+        const result = await updateTaskSelectionWithResult(task.id, nextStems);
+        if(!result.ok){
+          showPopup(result.message || 'could not change stem');
+          return false;
+        }
+        const data = result.data || null;
+        if(data && typeof data.mode === 'string'){
+          task.mode = data.mode;
+        }
+        task.stems = data && Array.isArray(data.stems) ? data.stems.slice() : nextStems.slice();
+      }else{
+        task.stems = nextStems.slice();
+      }
+      task.groupStems = task.stems.slice();
+      if(task.tempKey){
+        pendingItems.forEach((pending) => {
+          if(!pending || pending.tempKey !== task.tempKey) return;
+          pending.stems = task.stems.slice();
+          if(pending.ui && pending.ui.item){
+            applyLabels(pending.ui.item.querySelector('.labels'), task.stems);
+          }
+        });
+      }
+      applyLabels(row ? row.querySelector('.labels') : null, task.stems);
+      if(row){
+        applyRowState(row, task);
+      }
+      saveTasks();
+      updateUI();
+      showPopup('stem updated');
+      return true;
+    }
+
+    function closeQueueContextMenu(){
+      if(!queueContextMenuEl) return;
+      const menu = queueContextMenuEl;
+      if(typeof menu.__outsidePointerDown === 'function'){
+        document.removeEventListener('pointerdown', menu.__outsidePointerDown, true);
+      }
+      if(typeof menu.__escapeHandler === 'function'){
+        document.removeEventListener('keydown', menu.__escapeHandler, true);
+      }
+      queueContextMenuEl = null;
+      menu.remove();
+    }
+
+    function measureQueueNestedRequiredHeight(menu){
+      if(!menu) return 0;
+      const groupMenu = menu.querySelector('.queue-context-groups');
+      const changeWrap = menu.querySelector('.queue-context-change-wrap');
+      if(!groupMenu || !changeWrap) return 0;
+      const nestedTopOffset = changeWrap.offsetTop || 0;
+      const optionMenus = Array.from(menu.querySelectorAll('.queue-context-options'));
+      const restore = [];
+      const setMeasureState = (el) => {
+        restore.push({
+          el,
+          display: el.style.display,
+          visibility: el.style.visibility,
+          pointerEvents: el.style.pointerEvents,
+        });
+        el.style.display = 'grid';
+        el.style.visibility = 'hidden';
+        el.style.pointerEvents = 'none';
+      };
+      setMeasureState(groupMenu);
+      optionMenus.forEach((optionMenu) => setMeasureState(optionMenu));
+      let nestedHeight = groupMenu.getBoundingClientRect().height || 0;
+      optionMenus.forEach((optionMenu) => {
+        nestedHeight = Math.max(nestedHeight, optionMenu.getBoundingClientRect().height || 0);
+      });
+      restore.reverse().forEach((entry) => {
+        entry.el.style.display = entry.display;
+        entry.el.style.visibility = entry.visibility;
+        entry.el.style.pointerEvents = entry.pointerEvents;
+      });
+      return nestedTopOffset + nestedHeight;
+    }
+
+    function openQueueContextMenu(event, row){
+      if(!row) return;
+      event.preventDefault();
+      closeQueueContextMenu();
+      seedQueueRowStemSelection(row);
+
+      const menu = document.createElement('div');
+      menu.className = 'queue-context-menu';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'queue-context-action';
+      removeBtn.textContent = 'remove from queue';
+      removeBtn.addEventListener('click', async (clickEvent) => {
+        clickEvent.preventDefault();
+        clickEvent.stopPropagation();
+        const removed = await removeQueueRowFromQueue(row);
+        if(removed){
+          closeQueueContextMenu();
+        }
+      });
+      menu.appendChild(removeBtn);
+
+      const changeWrap = document.createElement('div');
+      changeWrap.className = 'queue-context-change-wrap';
+      const changeBtn = document.createElement('button');
+      changeBtn.type = 'button';
+      changeBtn.className = 'queue-context-action';
+      changeBtn.innerHTML = '<span>change stem</span><span class="queue-context-caret">▸</span>';
+      changeWrap.appendChild(changeBtn);
+
+      const groupMenu = document.createElement('div');
+      groupMenu.className = 'queue-context-groups';
+      QUEUE_STEM_MENU_GROUPS.forEach((group) => {
+        const groupWrap = document.createElement('div');
+        groupWrap.className = 'queue-context-group';
+        const groupBtn = document.createElement('button');
+        groupBtn.type = 'button';
+        groupBtn.className = 'queue-context-action';
+        groupBtn.innerHTML = `<span>${group.label}</span><span class="queue-context-caret">▸</span>`;
+        groupWrap.appendChild(groupBtn);
+
+        const optionMenu = document.createElement('div');
+        optionMenu.className = 'queue-context-options';
+        group.options.forEach((option) => {
+          const optionBtn = document.createElement('button');
+          optionBtn.type = 'button';
+          optionBtn.className = 'queue-context-action';
+          optionBtn.textContent = option.label;
+          optionBtn.addEventListener('click', async (clickEvent) => {
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+            const changed = await applyQueueRowStemSelection(row, option.modeKey, clickEvent);
+            if(changed){
+              closeQueueContextMenu();
+            }
+          });
+          optionMenu.appendChild(optionBtn);
+        });
+        groupWrap.appendChild(optionMenu);
+        groupMenu.appendChild(groupWrap);
+      });
+      changeWrap.appendChild(groupMenu);
+      menu.appendChild(changeWrap);
+
+      appShell.appendChild(menu);
+      const nestedAllowance = 420;
+      const shellRect = appShell.getBoundingClientRect();
+      const localClientX = event.clientX - shellRect.left;
+      if(localClientX > (appShell.clientWidth - nestedAllowance)){
+        menu.classList.add('open-left');
+      }
+      const rect = menu.getBoundingClientRect();
+      const nestedRequiredHeight = measureQueueNestedRequiredHeight(menu);
+      const shellViewX = event.clientX - shellRect.left;
+      const shellViewY = event.clientY - shellRect.top;
+      const baseX = appShell.scrollLeft + shellViewX;
+      const baseY = appShell.scrollTop + shellViewY;
+      const minLeft = appShell.scrollLeft + 8;
+      const maxLeft = appShell.scrollLeft + appShell.clientWidth - rect.width - 8;
+      const minTop = appShell.scrollTop + 8;
+      const requiredHeight = Math.max(rect.height, nestedRequiredHeight);
+      const maxTop = appShell.scrollTop + appShell.clientHeight - requiredHeight - 8;
+      const safeMaxLeft = Math.max(minLeft, maxLeft);
+      const safeMaxTop = Math.max(minTop, maxTop);
+      const left = Math.max(minLeft, Math.min(baseX, safeMaxLeft));
+      const top = Math.max(minTop, Math.min(baseY, safeMaxTop));
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+
+      menu.__outsidePointerDown = (pointerEvent) => {
+        if(menu.contains(pointerEvent.target)) return;
+        closeQueueContextMenu();
+      };
+      menu.__escapeHandler = (keyEvent) => {
+        if(keyEvent.key === 'Escape'){
+          closeQueueContextMenu();
+        }
+      };
+      document.addEventListener('pointerdown', menu.__outsidePointerDown, true);
+      document.addEventListener('keydown', menu.__escapeHandler, true);
+      queueContextMenuEl = menu;
+    }
+
     function selectedStemGroups(){
       if(selectedPresetMode === 'all_stems'){
         return [['all_stems']];
@@ -6469,6 +7176,9 @@
         try{
           const body = startSettings || currentStartSettings();
           const startedTask = await requestTaskStart(pending.id, body);
+          if(startedTask && typeof startedTask.message === 'string' && startedTask.message.trim() && !isClearing){
+            showPopup(startedTask.message);
+          }
           const task = getTaskById(pending.id);
           if(task){
             task.stage = startedTask.stage || startedTask.status || 'queued';
@@ -6587,6 +7297,7 @@
       const startReadyTasks = async (startSettings) => {
         const existing = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
         let startError = '';
+        let queueNotice = '';
         for(const t of existing){
           if(!t || !t.id || isProcessing(t)) continue;
           const normalizedStage = String(t.stage || '').toLowerCase();
@@ -6594,6 +7305,9 @@
           if(isStartable){
             try{
               const startedTask = await requestTaskStart(t.id, startSettings);
+              if(!queueNotice && startedTask && typeof startedTask.message === 'string' && startedTask.message.trim()){
+                queueNotice = startedTask.message;
+              }
               t.stage = startedTask.stage || startedTask.status || 'queued';
               t.pct = typeof startedTask.pct === 'number' ? startedTask.pct : 0;
               t.downloaded = false;
@@ -6628,6 +7342,8 @@
         });
         if(startError && !isClearing){
           showPopup(startError);
+        }else if(queueNotice && !isClearing){
+          showPopup(queueNotice);
         }
       };
       try{
@@ -6759,7 +7475,7 @@
       if(lower.includes('harmon')) return 'harmonies';
       if(lower.includes('vocals')) return 'vocals';
       if(lower.includes('instrumental')) return 'instrumental';
-      if(lower.includes('karaoke')) return 'karaoke';
+      if(lower.includes('background vocal') || lower.includes('bg vocal') || lower.includes('karaoke')) return 'bg vocal';
       if(lower.includes('denoise')) return 'denoise';
       if(lower.includes('drums')) return 'drums';
       if(lower.includes('bass')) return 'bass';

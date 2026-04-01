@@ -288,11 +288,30 @@
       pointer-events: none;
     }
     #toast-wrap > * { pointer-events: auto; }
+    @keyframes toastCardIn {
+      from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes toastCardOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    }
     .toast-card {
       width: min(360px, calc(100vw - 32px));
       padding: 12px 14px;
       border-radius: 16px;
       color: var(--txt-main);
+      border: 1px solid rgba(255,255,255,.12);
+      background:
+        radial-gradient(circle at top right, rgba(142,216,255,.14), rgba(142,216,255,0) 44%),
+        linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      box-shadow: 0 14px 34px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.09);
+      transform-origin: top right;
+      animation: toastCardIn .24s cubic-bezier(.2,.7,.2,1) both;
+    }
+    .toast-card.toast-card-closing {
+      pointer-events: none;
+      animation: toastCardOut .18s ease both;
     }
     .toast-title {
       font-size: 13px;
@@ -1121,6 +1140,31 @@
       min-height: 42px;
       padding-inline: 14px;
     }
+    .settings-close-floating {
+      position: absolute;
+      top: -12px;
+      right: -8px;
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(12,18,22,.58);
+      color: rgba(245,251,255,.92);
+      font-size: 19px;
+      line-height: 1;
+      box-shadow: 0 8px 20px rgba(0,0,0,.34);
+      z-index: 5;
+      transition: transform .16s ease, background .16s ease, color .16s ease;
+    }
+    .settings-close-floating:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,.14);
+      color: rgba(255,255,255,.98);
+    }
     /* Prevent flashing UI before intro animation */
     .intro .pre-hide{ opacity: 0; }
     @view-transition { navigation: auto; }
@@ -1371,7 +1415,7 @@
       vocals: 'vocals',
       instrumental: 'instrumental',
       guitar: 'guitar',
-      mel_band_karaoke: 'karaoke',
+      mel_band_karaoke: 'bg vocal',
       denoise: 'denoise',
       bs_roformer_6s: 'full mix',
       htdemucs_ft_drums: 'drums',
@@ -1410,7 +1454,7 @@
       vocals: ['vocals'],
       instrumental: ['instrumental'],
       guitar: ['guitar'],
-      mel_band_karaoke: ['mel_band_karaoke'],
+      mel_band_karaoke: ['vocals', 'mel_band_karaoke'],
       bs_roformer_6s: ['bs_roformer_6s'],
       htdemucs_ft_drums: ['htdemucs_ft_drums'],
       htdemucs_ft_bass: ['htdemucs_ft_bass'],
@@ -1430,7 +1474,6 @@
         { kind: 'stem', id: 'htdemucs_ft_bass', label: 'bass', tooltip: 'fast bass' },
         { kind: 'stem', id: 'guitar', label: 'guitar', tooltip: 'medium guitar split' },
         { kind: 'stem', id: 'htdemucs_ft_other', label: 'other', tooltip: 'other stem with guitar removed first' },
-        { kind: 'stem', id: 'mel_band_karaoke', label: 'karaoke', tooltip: 'karaoke split' },
       ],
       multi: [
         { kind: 'stem', id: 'bs_roformer_6s', label: 'full mix', tooltip: BS_6S_TOOLTIP },
@@ -1441,6 +1484,7 @@
       presets: [
         { kind: 'preset', id: 'all_stems', label: 'all stems', tooltip: 'full stem graph' },
         { kind: 'preset', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
+        { kind: 'preset', id: 'mel_band_karaoke', label: 'bg vocal', tooltip: 'background vocal split' },
         { kind: 'preset', id: 'boost_harmonies', label: 'boost harmonies', tooltip: 'boost harmonies' },
       ],
     };
@@ -1448,7 +1492,7 @@
       vocals: 'single',
       instrumental: 'single',
       guitar: 'single',
-      mel_band_karaoke: 'single',
+      mel_band_karaoke: 'presets',
       htdemucs_ft_drums: 'single',
       htdemucs_ft_bass: 'single',
       htdemucs_ft_other: 'single',
@@ -2466,7 +2510,7 @@
         { label: 'vocals', stems: ['vocals'], tooltip: 'vocals' },
         { label: 'instrumental', stems: ['instrumental'], tooltip: 'instrumental' },
         { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
-        { label: 'karaoke', stems: ['mel_band_karaoke'], tooltip: 'karaoke' },
+        { label: 'bg vocal', stems: ['mel_band_karaoke'], tooltip: 'background vocal split' },
         { label: 'full mix', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
         { label: 'drum split - 6', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
         { label: 'drum split - 4', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
@@ -2938,21 +2982,9 @@
       const clamped = Math.round(Math.max(0, Math.min(100, Number(pct) || 0)));
       const eta = formatEta(etaSeconds);
       const state = String(etaState || '').toLowerCase();
-      if(eta){
-        return `${clamped}% • ${eta}`;
-      }
-      if(state === 'finishing'){
-        return `${clamped}% • finishing`;
-      }
-      if(state === 'steady' && (queueStarted || startPressed)){
-        return `${clamped}% • estimating`;
-      }
-      if(state === 'calibrating'){
-        return `${clamped}% • calibrating`;
-      }
-      if(state === 'estimating' && (queueStarted || startPressed)){
-        return `${clamped}% • estimating`;
-      }
+      // Keep ETA/state plumbing active, but hide ETA-related copy from the UI.
+      void eta;
+      void state;
       return `${clamped}%`;
     }
 
@@ -3081,7 +3113,7 @@
       container.innerHTML='';
       const pretty = {
         guitar: 'guitar',
-        mel_band_karaoke: 'karaoke',
+        mel_band_karaoke: 'bg vocal',
         all_stems: 'all stems',
         preset_denoise: 'denoise',
         denoise: 'denoise',
@@ -3883,14 +3915,38 @@
     renderModeChoices();
 
     function showError(msg){
-      const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 flex items-center justify-center backdrop-blur-sm';
-      overlay.innerHTML = `<div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)]"><p class="text-center">Upload failed: ${msg}</p><button class="mx-auto px-4 py-1 bg-[var(--accent)] rounded text-black">ok</button></div>`;
-      document.body.appendChild(overlay);
-      const btn = overlay.querySelector('button');
-      btn.onclick = () => overlay.remove();
-      overlay.tabIndex = 0; overlay.focus();
-      overlay.addEventListener('keydown', e => { if(e.key === 'Enter') btn.click(); });
+      const message = String(msg || 'unknown error');
+      const { overlay, card } = createOverlayCard('upload failed');
+      const copy = document.createElement('p');
+      copy.className = 'text-sm leading-relaxed text-[var(--txt-main)]/85';
+      copy.textContent = message;
+      const actions = document.createElement('div');
+      actions.className = 'flex justify-end gap-2';
+      const okBtn = makeActionButton('ok', 'bg-white text-black');
+      actions.append(okBtn);
+      card.append(copy, actions);
+      let settled = false;
+      const finish = () => {
+        if(settled) return;
+        settled = true;
+        closeOverlay(overlay);
+      };
+      okBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        finish();
+      });
+      overlay.addEventListener('click', (event) => {
+        if(event.target === overlay || (event.target && event.target.classList && event.target.classList.contains('overlay-bg'))){
+          finish();
+        }
+      }, true);
+      overlay.addEventListener('keydown', (event) => {
+        if(event.key === 'Escape' || event.key === 'Enter'){
+          event.preventDefault();
+          event.stopPropagation();
+          finish();
+        }
+      }, true);
     }
 
     function ensureToastWrap(){
@@ -3910,7 +3966,7 @@
       card.className = 'toast-card glass text-[var(--txt-main)]';
       wrap.appendChild(card);
       const isErrorLike = /errorcode\.|failed|error/i.test(String(msg || ''));
-      setTimeout(() => card.remove(), isErrorLike ? 8000 : 3000);
+      setTimeout(() => dismissToastCard(card), isErrorLike ? 8000 : 3000);
     }
     const reopenParam = new URLSearchParams(window.location.search).get('reopen');
     if(reopenParam === '1'){
@@ -3920,30 +3976,62 @@
 
     function showConfirm(msg){
       return new Promise((resolve) => {
-        const overlay = document.createElement('div');
-        overlay.className = 'fixed inset-0 z-[90] flex items-center justify-center px-4';
-        overlay.innerHTML = `
-          <div class="absolute inset-0 bg-black/55 backdrop-blur-md"></div>
-          <div class="glass p-6 rounded-xl flex flex-col gap-4 text-[var(--txt-main)] max-w-sm w-11/12 relative">
-            <p class="text-center">${msg}</p>
-            <div class="flex justify-center gap-3">
-              <button id="cfm-cancel" class="px-3 py-1 rounded bg-white/12 text-white">cancel</button>
-              <button id="cfm-ok" class="px-3 py-1 rounded text-[#0b1a1f]" style="background:linear-gradient(135deg,#8ed8ff,#68c9c0);">yes</button>
-            </div>
-          </div>`;
-        document.body.appendChild(overlay);
-        const ok = overlay.querySelector('#cfm-ok');
-        const cancel = overlay.querySelector('#cfm-cancel');
-        const done = (val) => { overlay.remove(); resolve(val); };
-        ok.onclick = () => done(true);
-        cancel.onclick = () => done(false);
-        overlay.addEventListener('keydown', (e) => {
-          if(e.key === 'Escape') done(false);
-          if(e.key === 'Enter') done(true);
+        const { overlay, card } = createOverlayCard('confirm action');
+        const copy = document.createElement('p');
+        copy.className = 'text-sm leading-relaxed text-[var(--txt-main)]/85';
+        copy.textContent = String(msg || '');
+        const actions = document.createElement('div');
+        actions.className = 'flex justify-end gap-2';
+        const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
+        const okBtn = makeActionButton('yes', 'bg-white text-black');
+        actions.append(cancelBtn, okBtn);
+        card.append(copy, actions);
+        let settled = false;
+        const finish = (result) => {
+          if(settled) return;
+          settled = true;
+          closeOverlay(overlay);
+          resolve(result);
+        };
+        cancelBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          finish(false);
         });
-        overlay.tabIndex = 0;
-        overlay.focus();
+        okBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          finish(true);
+        });
+        overlay.addEventListener('click', (event) => {
+          if(event.target === overlay || (event.target && event.target.classList && event.target.classList.contains('overlay-bg'))){
+            finish(false);
+          }
+        }, true);
+        overlay.addEventListener('keydown', (event) => {
+          if(event.key === 'Escape'){
+            event.preventDefault();
+            event.stopPropagation();
+            finish(false);
+          }else if(event.key === 'Enter'){
+            event.preventDefault();
+            event.stopPropagation();
+            finish(true);
+          }
+        }, true);
       });
+    }
+
+    function dismissToastCard(card, { immediate = false } = {}){
+      if(!card) return;
+      if(immediate){
+        if(card.parentNode) card.parentNode.removeChild(card);
+        return;
+      }
+      if(card.dataset.toastClosing === '1') return;
+      card.dataset.toastClosing = '1';
+      card.classList.add('toast-card-closing');
+      setTimeout(() => {
+        if(card.parentNode) card.parentNode.removeChild(card);
+      }, 190);
     }
 
     function closeOverlay(overlay){
@@ -4434,11 +4522,7 @@
       const card = activeModelToast.card;
       activeModelToast = null;
       if(!card) return;
-      if(immediate){
-        card.remove();
-        return;
-      }
-      setTimeout(() => card.remove(), 180);
+      dismissToastCard(card, { immediate });
     }
 
     function queueModelToastRemoval(delayMs){
@@ -4501,8 +4585,6 @@
         }
         const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
         if(rate) bits.push(rate);
-        const eta = formatDuration(status.eta_seconds);
-        if(eta) bits.push(eta);
         toast.body.textContent = bits.join(' · ');
         toast.meta.textContent = '';
         toast.progress.hidden = false;
@@ -4658,8 +4740,6 @@
           ];
           const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
           if(rate) bits.push(rate);
-          const eta = formatDuration(status.eta_seconds);
-          if(eta) bits.push(eta);
           modelsProgressMeta.textContent = bits.join(' · ');
         }else if(isError){
           modelsProgressMeta.textContent = status.error || 'download failed';
@@ -5418,11 +5498,17 @@
       pending.uploadPromise.then(async () => {
         if(!pending.id) return;
         try{
-          await fetch('/start/' + pending.id, {
+          const res = await fetch('/start/' + pending.id, {
             method:'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(currentStartSettings()),
           });
+          if(res.ok){
+            const payload = await res.json().catch(() => null);
+            if(payload && typeof payload.message === 'string' && payload.message.trim() && !isClearing){
+              showPopup(payload.message);
+            }
+          }
         }catch(_){ /* ignore */ }
       });
     }
@@ -5507,13 +5593,20 @@
       };
       const startReadyTasks = async () => {
         const existing = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+        let queueNotice = '';
         for(const t of existing){
           if(!t || !t.id || isProcessing(t)) continue;
           const normalizedStage = String(t.stage || '').toLowerCase();
           const isStartable = t.frozen && Number(t.pct || 0) === 0 && (normalizedStage === 'ready' || normalizedStage === 'queued');
           if(isStartable){
             try{
-              await fetch('/start/' + t.id, { method:'POST' });
+              const res = await fetch('/start/' + t.id, { method:'POST' });
+              if(res.ok){
+                const payload = await res.json().catch(() => null);
+                if(!queueNotice && payload && typeof payload.message === 'string' && payload.message.trim()){
+                  queueNotice = payload.message;
+                }
+              }
               t.stage = 'queued';
               t.pct = 0;
               t.downloaded = false;
@@ -5526,6 +5619,9 @@
         }
         saveTasks();
         markReadyQueuedUI();
+        if(queueNotice && !isClearing){
+          showPopup(queueNotice);
+        }
       };
       try{
         if(!freezeReadyBatch()){
@@ -5656,7 +5752,7 @@
       if(lower.includes('harmon')) return 'harmonies';
       if(lower.includes('vocals')) return 'vocals';
       if(lower.includes('instrumental')) return 'instrumental';
-      if(lower.includes('karaoke')) return 'karaoke';
+      if(lower.includes('background vocal') || lower.includes('bg vocal') || lower.includes('karaoke')) return 'bg vocal';
       if(lower.includes('denoise')) return 'denoise';
       if(lower.includes('drums')) return 'drums';
       if(lower.includes('bass')) return 'bass';
@@ -5923,7 +6019,7 @@
     <div id="settings-card"
          class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
          style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
-      <button id="settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
+      <button id="settings-close" title="close" class="settings-close-floating" type="button">✕</button>
       <h2 class="text-2xl font-light mb-3 select-none">settings</h2>
 
       <div class="flex flex-col gap-3">
@@ -6042,7 +6138,7 @@
     <div id="preset-settings-card"
          class="glass w-11/12 max-w-md p-6 rounded-2xl text-[var(--txt-main)] relative opacity-0"
          style="backdrop-filter: blur(8px) saturate(110%); -webkit-backdrop-filter: blur(8px) saturate(110%); background: rgba(23,35,41,0.45);">
-      <button id="preset-settings-close" title="close" class="absolute top-3 right-3 p-2 rounded hover:bg-white/10">✕</button>
+      <button id="preset-settings-close" title="close" class="settings-close-floating" type="button">✕</button>
       <h2 class="text-2xl font-light mb-3 select-none">preset settings</h2>
 
       <div class="preset-panel">
