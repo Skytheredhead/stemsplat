@@ -6,6 +6,7 @@ import contextlib
 import gc
 import importlib
 import inspect
+import ipaddress
 import json
 import logging
 import math
@@ -24,6 +25,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from urllib.parse import unquote, urlparse
 import uuid
 import webbrowser
 import zipfile
@@ -1154,6 +1156,7 @@ MODEL_DISPLAY_NAMES = {
     "drumsep_4s": "drum split - 4",
 }
 MODE_TO_STEMS = {
+    "unselected": (),
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
     "both_deux": ("deux",),
@@ -1175,6 +1178,7 @@ MODE_TO_STEMS = {
     "preset_denoise": ("preset_denoise",),
 }
 MODE_REQUIRED_MODELS = {
+    "unselected": (),
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
     "both_deux": ("deux",),
@@ -1189,13 +1193,14 @@ MODE_REQUIRED_MODELS = {
     "htdemucs_6s": ("htdemucs_6s",),
     "drumsep_6s": ("drumsep_6s",),
     "drumsep_4s": ("drumsep_4s",),
-    "preset_all_stems": ("vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "drumsep_6s"),
+    "preset_all_stems": ("vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"),
     "preset_voc_instrum": ("vocals", "instrumental"),
     "preset_boost_harmonies": ("vocals", "mel_band_karaoke"),
     "preset_boost_guitar": ("guitar",),
     "preset_denoise": ("denoise",),
 }
 MODE_OUTPUT_LABELS = {
+    "unselected": (),
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
     "both_deux": ("vocals", "instrumental"),
@@ -1621,7 +1626,12 @@ def _is_remote_client(request: Request | None) -> bool:
     if request is None or request.client is None:
         return False
     host = str(request.client.host or "").strip().lower()
-    return host not in {"127.0.0.1", "::1", "localhost"}
+    if not host or host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host not in {"127.0.0.1", "::1"}
 
 
 def _should_use_mobile_ui(request: Request | None) -> bool:
@@ -1805,6 +1815,8 @@ def _mode_to_stems(mode: str) -> list[str]:
 
 def _stems_to_mode(stems_raw: str) -> str:
     stems = [item.strip().lower() for item in stems_raw.split(",") if item.strip()]
+    if not stems:
+        return "unselected"
     for mode, expected in MODE_TO_STEMS.items():
         if stems == list(expected):
             return mode
@@ -3158,7 +3170,7 @@ def _runtime_model_sequence(mode: str) -> list[str]:
     if mode == "both_deux":
         return ["deux"]
     if mode == "preset_all_stems":
-        return ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "drumsep_6s"]
+        return ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"]
     if mode in {"both_separate", "preset_voc_instrum"}:
         return ["vocals", "instrumental"]
     if mode == "preset_boost_harmonies":
@@ -4267,7 +4279,7 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         if mode == "preset_all_stems" and stage_model == "mel_band_karaoke":
             span = max(1, ALL_STEMS_BACKGROUND_END_PCT - ALL_STEMS_BACKGROUND_START_PCT)
             return max(0.0, min(1.0, (clamped - ALL_STEMS_BACKGROUND_START_PCT) / span))
-        if mode == "preset_all_stems" and stage_model == "bs_roformer_6s":
+        if mode == "preset_all_stems" and stage_model in {"bs_roformer_6s", "guitar"}:
             span = max(1, ALL_STEMS_MULTI_END_PCT - ALL_STEMS_MULTI_START_PCT)
             return max(0.0, min(1.0, (clamped - ALL_STEMS_MULTI_START_PCT) / span))
         if mode == "preset_all_stems" and stage_model == "drumsep_6s":
@@ -4482,6 +4494,23 @@ def _finalize_written_outputs(task_id: str, out_dir: Path, output_paths: list[Pa
     for output_path in output_paths:
         _cleanup_path(output_path)
     return [archive_path]
+
+
+def _publish_staged_outputs(final_out_dir: Path, staging_root: Path, staged_paths: list[Path]) -> list[Path]:
+    published: list[Path] = []
+    _ensure_dir(final_out_dir)
+    for staged_path in staged_paths:
+        relative_path = Path(staged_path.name)
+        with contextlib.suppress(Exception):
+            relative_path = staged_path.relative_to(staging_root)
+        target_path = _unique_output_path(final_out_dir / relative_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            moved_path = Path(shutil.move(str(staged_path), str(target_path)))
+        except Exception as exc:
+            raise AppError(ErrorCode.SEPARATION_FAILED, f"Could not finalize export: {exc}") from exc
+        published.append(moved_path)
+    return published
 
 
 def _copy_outputs_to_directory(output_paths: list[Path], destination_dir: Path) -> list[Path]:
@@ -5110,6 +5139,27 @@ def _store_local_media_file(path: Path) -> tuple[str, Path]:
     return original_name, stored_path
 
 
+def _normalize_local_path_text(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    if text.lower().startswith("file://"):
+        try:
+            parsed = urlparse(text)
+            normalized = unquote(parsed.path or "")
+            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+                normalized = f"//{parsed.netloc}{normalized}"
+            if re.match(r"^/[A-Za-z]:/", normalized):
+                normalized = normalized[1:]
+            if normalized:
+                text = normalized
+        except Exception:
+            pass
+    return text
+
+
 def _queue_task(task_id: str, *, front: bool = False) -> None:
     if not front:
         task_queue.put(task_id)
@@ -5162,10 +5212,13 @@ def _register_task(
     output_format: str,
     video_handling: str,
     multi_stem_export: str | None = None,
+    output_same_as_input: bool | None = None,
     delivery: str = "folder",
     auto_start: bool,
     queue_front: bool = False,
 ) -> dict[str, Any]:
+    if auto_start and mode == "unselected":
+        raise AppError(ErrorCode.INVALID_REQUEST, "please select at least one stem before starting")
     task_id = str(uuid.uuid4())
     payload = _build_task_payload(
         task_id=task_id,
@@ -5178,7 +5231,11 @@ def _register_task(
         delivery=delivery,
         auto_start=auto_start,
     )
-    _apply_task_start_settings(payload, multi_stem_export=multi_stem_export)
+    _apply_task_start_settings(
+        payload,
+        multi_stem_export=multi_stem_export,
+        output_same_as_input=output_same_as_input,
+    )
     with tasks_lock:
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
@@ -5192,6 +5249,8 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
         task = tasks.get(task_id)
         if task is None:
             raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if str(task.get("mode") or "") == "unselected":
+            raise AppError(ErrorCode.INVALID_REQUEST, "please select at least one stem before starting")
         if task["status"] in {"queued", "running"}:
             return task
         if task["status"] in TERMINAL_STATUSES:
@@ -5415,6 +5474,7 @@ def _process_task(task_id: str) -> None:
             tasks[task_id]["version"] += 1
 
         temp_outputs: list[tuple[str, Path]] = []
+        staging_output_root = work_dir / "exports_staging"
 
         if mode == "vocals":
             vocals_model = manager.get("vocals")
@@ -5797,7 +5857,12 @@ def _process_task(task_id: str) -> None:
             instrumental_model = manager.get("instrumental")
             karaoke_model = manager.get("mel_band_karaoke")
             bs_6s_model = manager.get("bs_roformer_6s")
+            guitar_model = manager.get("guitar")
             drumsep_6s_model = manager.get("drumsep_6s")
+            all_stems_multi_mid_pct = ALL_STEMS_MULTI_START_PCT + max(
+                1,
+                (ALL_STEMS_MULTI_END_PCT - ALL_STEMS_MULTI_START_PCT) // 2,
+            )
 
             vocals_started_at = time.time()
             vocals_pred = _run_model_chunks(
@@ -5861,7 +5926,7 @@ def _process_task(task_id: str) -> None:
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running full mix model",
-                    _map_fraction(ALL_STEMS_MULTI_START_PCT, ALL_STEMS_MULTI_END_PCT, frac),
+                    _map_fraction(ALL_STEMS_MULTI_START_PCT, all_stems_multi_mid_pct, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
             )
@@ -5870,10 +5935,25 @@ def _process_task(task_id: str) -> None:
                 label: tensor
                 for label, tensor in zip(MODE_OUTPUT_LABELS["bs_roformer_6s"], bs_6s_pred, strict=False)
             }
-            for label in ("bass", "drums", "other", "guitar", "piano"):
+            for label in ("bass", "drums", "other", "piano"):
                 tensor = bs_outputs.get(label)
                 if tensor is not None:
                     _append_named_output(temp_outputs, work_dir, label, tensor)
+
+            guitar_started_at = time.time()
+            guitar_pred = _run_model_for_spec(
+                "guitar",
+                guitar_model,
+                instrumental_tensor,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running guitar model",
+                    _map_fraction(all_stems_multi_mid_pct, ALL_STEMS_MULTI_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
+            _append_named_output(temp_outputs, work_dir, "guitar", guitar_pred[0])
 
             drums_tensor = bs_outputs.get("drums")
             if drums_tensor is None:
@@ -5907,7 +5987,7 @@ def _process_task(task_id: str) -> None:
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
             export_label = f"{label} - deux" if mode == "both_deux" else label
             output_subdir = _output_subdir_for_label(mode, label)
-            output_parent = output_dir / output_subdir if output_subdir is not None else output_dir
+            output_parent = staging_output_root / output_subdir if output_subdir is not None else staging_output_root
             if export_video:
                 video_suffix, _audio_args = _resolve_video_output(source_info)
                 final_path = output_parent / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
@@ -5937,8 +6017,9 @@ def _process_task(task_id: str) -> None:
                 _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT, index / max(1, total_exports)),
             )
 
-        finalized_outputs = _finalize_written_outputs(task_id, output_dir, written_outputs)
-        _mark_task_done(task_id, output_dir, [_relative_output_name(output_path, output_dir) for output_path in finalized_outputs])
+        finalized_outputs = _finalize_written_outputs(task_id, staging_output_root, written_outputs)
+        published_outputs = _publish_staged_outputs(output_dir, staging_output_root, finalized_outputs)
+        _mark_task_done(task_id, output_dir, [_relative_output_name(output_path, output_dir) for output_path in published_outputs])
     except TaskStopped:
         for output_path in written_outputs:
             _cleanup_path(output_path)
@@ -6444,12 +6525,14 @@ async def open_terminal(request: Request) -> dict[str, str]:
 
 @app.post("/api/import_paths")
 async def import_paths(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot import host file paths.")
     body = await request.json()
     if not isinstance(body, dict):
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid import payload.").to_http()
     raw_paths = body.get("paths")
     raw_stems = body.get("stems")
     output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
+    output_same_as_input = bool(body.get("output_same_as_input")) if "output_same_as_input" in body else None
     multi_stem_export = _validate_multi_stem_export(
         str(body.get("multi_stem_export") or _compat_settings_payload().get("multi_stem_export") or "zip")
     )
@@ -6458,24 +6541,30 @@ async def import_paths(request: Request) -> dict[str, Any]:
         raise AppError(ErrorCode.INVALID_REQUEST, "No files selected.").to_http()
     if not isinstance(raw_stems, str):
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
+    raw_source_dirs = body.get("source_dirs")
+    source_dirs = raw_source_dirs if isinstance(raw_source_dirs, list) else []
     mode = _stems_to_mode(raw_stems)
     _validate_mode_and_output_format(mode, output_format)
-    delivery = "browser_download" if _is_remote_client(request) else "folder"
+    delivery = "folder"
     created: list[dict[str, Any]] = []
-    for item in raw_paths:
-        path_text = str(item or "").strip()
+    for index, item in enumerate(raw_paths):
+        path_text = _normalize_local_path_text(item)
         if not path_text:
             continue
         source_original = Path(path_text).expanduser()
         original_name, source_path = _store_local_media_file(source_original)
+        source_dir_text = _normalize_local_path_text(source_dirs[index] if index < len(source_dirs) else "")
+        if not source_dir_text:
+            source_dir_text = str(source_original.parent)
         payload = _register_task(
             original_name=original_name,
             source_path=source_path,
-            source_dir=str(source_original.parent),
+            source_dir=source_dir_text,
             mode=mode,
             output_format=output_format,
             video_handling=video_handling,
             multi_stem_export=multi_stem_export,
+            output_same_as_input=output_same_as_input,
             delivery=delivery,
             auto_start=False,
         )

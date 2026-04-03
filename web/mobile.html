@@ -3871,7 +3871,10 @@
     });
 
     // handle both dropped and picked files
-    dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+    dropzone.addEventListener('drop', e => {
+      captureDroppedSourceDirs(e);
+      handleFiles(e.dataTransfer.files);
+    });
     fileInput.addEventListener('change', e => handleFiles(e.target.files));
     if(modeSwitcher){
       modeSwitcher.addEventListener('click', (event) => {
@@ -5187,6 +5190,9 @@
       if(selectedPresetMode === 'denoise'){
         return [['preset_denoise']];
       }
+      if(selectedPresetMode === 'mel_band_karaoke'){
+        return [['mel_band_karaoke']];
+      }
       const groups = [];
       const pushGroup = (modeKey, stems) => {
         if(selectedStemModes.has(modeKey)){
@@ -5242,7 +5248,7 @@
       if(target instanceof Element && target.closest('input, textarea, select, button, a, [contenteditable=""], [contenteditable="true"], [role="button"]')){
         return false;
       }
-      return hasQueuedUploadReadyToStart() && selectedStemGroups().length > 0;
+      return hasQueuedUploadReadyToStart();
     }
 
     function selectedStems(){
@@ -5260,11 +5266,122 @@
       };
     }
 
-    function sourceDirForFile(file){
-      if(!file || typeof file.path !== 'string' || !file.path) return '';
-      const normalized = file.path.replace(/\\/g, '/');
+    async function responseErrorMessage(res, fallback){
+      try{
+        const payload = await res.json();
+        return payload?.message || payload?.detail?.message || payload?.detail || fallback;
+      }catch(_){
+        return fallback;
+      }
+    }
+
+    const droppedSourceDirByFile = new WeakMap();
+
+    function normalizeSourceDirPath(pathText){
+      if(typeof pathText !== 'string' || !pathText) return '';
+      const normalized = pathText.replace(/\\/g, '/');
       const index = normalized.lastIndexOf('/');
       return index > 0 ? normalized.slice(0, index) : '';
+    }
+
+    function normalizePickedPath(pathText){
+      if(typeof pathText !== 'string') return '';
+      let normalized = pathText.trim();
+      if(!normalized) return '';
+      if(
+        normalized.length >= 2 &&
+        ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+          (normalized.startsWith("'") && normalized.endsWith("'")))
+      ){
+        normalized = normalized.slice(1, -1).trim();
+      }
+      if(normalized.startsWith('file://')){
+        try{
+          const url = new URL(normalized);
+          let resolved = decodeURIComponent(url.pathname || '');
+          if(/^\/[A-Za-z]:\//.test(resolved)){
+            resolved = resolved.slice(1);
+          }
+          if(url.hostname && url.hostname !== 'localhost'){
+            resolved = `//${url.hostname}${resolved}`;
+          }
+          if(resolved){
+            normalized = resolved;
+          }
+        }catch(_){
+          // keep original text if parsing fails
+        }
+      }
+      return normalized;
+    }
+
+    function captureDroppedSourceDirs(event){
+      const dt = event && event.dataTransfer;
+      if(!dt) return;
+      const files = Array.from(dt.files || []);
+      if(!files.length) return;
+      const uriPayload = String(dt.getData('text/uri-list') || '').trim();
+      const plainPayload = String(dt.getData('text/plain') || '').trim();
+      const rawLines = (uriPayload || plainPayload)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'));
+      if(!rawLines.length) return;
+
+      const droppedPaths = [];
+      rawLines.forEach((line) => {
+        if(line.startsWith('file://')){
+          try{
+            const url = new URL(line);
+            let pathText = decodeURIComponent(url.pathname || '');
+            if(/^\/[A-Za-z]:\//.test(pathText)){
+              pathText = pathText.slice(1);
+            }
+            if(pathText){
+              droppedPaths.push(pathText);
+            }
+            return;
+          }catch(_){
+            // fall through to plain path parsing
+          }
+        }
+        if(line.startsWith('/')){
+          droppedPaths.push(line);
+        }
+      });
+
+      if(!droppedPaths.length) return;
+      const byName = new Map();
+      droppedPaths.forEach((pathText) => {
+        const normalized = pathText.replace(/\\/g, '/');
+        const name = normalized.slice(normalized.lastIndexOf('/') + 1);
+        if(!name) return;
+        const bucket = byName.get(name) || [];
+        bucket.push(pathText);
+        byName.set(name, bucket);
+      });
+
+      files.forEach((file, index) => {
+        if(!file || (typeof file.path === 'string' && file.path)) return;
+        const name = String(file.name || '');
+        const namedBucket = byName.get(name);
+        const matchedPath = namedBucket && namedBucket.length
+          ? namedBucket.shift()
+          : (droppedPaths[index] || '');
+        const sourceDir = normalizeSourceDirPath(matchedPath);
+        if(sourceDir){
+          droppedSourceDirByFile.set(file, sourceDir);
+        }
+      });
+    }
+
+    function sourceDirForFile(file){
+      if(!file) return '';
+      if(typeof file.path === 'string' && file.path){
+        return normalizeSourceDirPath(file.path);
+      }
+      const inferred = droppedSourceDirByFile.get(file);
+      return typeof inferred === 'string' ? inferred : '';
     }
 
     function createPendingQueueRow(name, stems, tempKey){
@@ -5318,26 +5435,22 @@
       }
       const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
       const stemGroups = selectedStemGroups();
+      const uploadStemGroups = stemGroups.length ? stemGroups : [[]];
       const displayStems = selectedStemUnion();
-      if(stemGroups.length === 0){
-        showPopup('please select at least one stem before uploading');
-        if (fileInput) fileInput.value = '';
-        return;
-      }
       const newPending = [];
       const files = [...fileList];
       const audioFiles = files.filter((file) => {
         return (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
       });
-      const taskCountNeeded = audioFiles.length * stemGroups.length;
+      const taskCountNeeded = audioFiles.length * uploadStemGroups.length;
       if(existingCount + taskCountNeeded > MAX_TASKS){
         const slots = Math.max(0, MAX_TASKS - existingCount);
-        const maxSongs = Math.floor(slots / stemGroups.length);
+        const maxSongs = Math.floor(slots / uploadStemGroups.length);
         if(maxSongs <= 0){
-          showPopup(`you need ${stemGroups.length} free slots for the selected models on one song`);
+          showPopup(`you need ${uploadStemGroups.length} free slots for the selected models on one song`);
         }else{
           const slotLabel = maxSongs === 1 ? 'song' : 'songs';
-          showPopup(`with ${stemGroups.length} selected models, you can only add ${maxSongs} more ${slotLabel}`);
+          showPopup(`with ${uploadStemGroups.length} selected models, you can only add ${maxSongs} more ${slotLabel}`);
         }
         return;
       }
@@ -5360,7 +5473,7 @@
         }
         const tempKey = makeTempKey();
         const sharedUi = createPendingQueueRow(file.name, displayStems, tempKey);
-        for(const stems of stemGroups){
+        for(const stems of uploadStemGroups){
           if(availableSlots <= 0) break;
           availableSlots -= 1;
           // record pending entry
@@ -5594,18 +5707,30 @@
       const startReadyTasks = async () => {
         const existing = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
         let queueNotice = '';
+        let startError = '';
         for(const t of existing){
           if(!t || !t.id || isProcessing(t)) continue;
           const normalizedStage = String(t.stage || '').toLowerCase();
           const isStartable = t.frozen && Number(t.pct || 0) === 0 && (normalizedStage === 'ready' || normalizedStage === 'queued');
           if(isStartable){
             try{
-              const res = await fetch('/start/' + t.id, { method:'POST' });
-              if(res.ok){
-                const payload = await res.json().catch(() => null);
-                if(!queueNotice && payload && typeof payload.message === 'string' && payload.message.trim()){
-                  queueNotice = payload.message;
+              const res = await fetch('/start/' + t.id, {
+                method:'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(currentStartSettings()),
+              });
+              if(!res.ok){
+                t.stage = 'ready';
+                t.pct = 0;
+                t.frozen = false;
+                if(!startError){
+                  startError = await responseErrorMessage(res, 'could not start song');
                 }
+                continue;
+              }
+              const payload = await res.json().catch(() => null);
+              if(!queueNotice && payload && typeof payload.message === 'string' && payload.message.trim()){
+                queueNotice = payload.message;
               }
               t.stage = 'queued';
               t.pct = 0;
@@ -5614,12 +5739,21 @@
               t.out_dir = null;
               t.frozen = true;
               ensureTaskProgressTracking(t);
-            }catch(_){}
+            }catch(err){
+              t.stage = 'ready';
+              t.pct = 0;
+              t.frozen = false;
+              if(!startError){
+                startError = err && err.message ? err.message : 'could not start song';
+              }
+            }
           }
         }
         saveTasks();
         markReadyQueuedUI();
-        if(queueNotice && !isClearing){
+        if(startError && !isClearing){
+          showPopup(startError);
+        }else if(queueNotice && !isClearing){
           showPopup(queueNotice);
         }
       };
@@ -5680,30 +5814,31 @@
         return;
       }
       const stemGroups = selectedStemGroups();
-      if(stemGroups.length === 0){
-        showPopup('please select at least one stem before uploading');
-        return;
-      }
+      const uploadStemGroups = stemGroups.length ? stemGroups : [[]];
       const availableSlots = Math.max(0, MAX_TASKS - existingCount);
-      const maxSongs = Math.floor(availableSlots / stemGroups.length);
+      const maxSongs = Math.floor(availableSlots / uploadStemGroups.length);
       if(maxSongs <= 0){
-        showPopup(`you need ${stemGroups.length} free slots for the selected models on one song`);
+        showPopup(`you need ${uploadStemGroups.length} free slots for the selected models on one song`);
         return;
       }
-      const trimmed = paths.slice(0, maxSongs);
+      const normalizedPaths = paths.map(normalizePickedPath).filter((pathText) => !!pathText);
+      const trimmed = normalizedPaths.slice(0, maxSongs);
       if(!trimmed.length){
         return;
       }
       try{
+        const sourceDirs = trimmed.map((pathText) => normalizeSourceDirPath(pathText));
         const importedTasks = [];
-        for(const stems of stemGroups){
+        for(const stems of uploadStemGroups){
           const res = await fetch('/api/import_paths', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               paths: trimmed,
+              source_dirs: sourceDirs,
               stems: stems.join(','),
               output_format: settingsState.output_format || 'same_as_input',
+              output_same_as_input: !!settingsState.output_same_as_input,
               multi_stem_export: settingsState.multi_stem_export || 'zip',
               video_handling: settingsState.video_handling || 'audio_only',
             }),
