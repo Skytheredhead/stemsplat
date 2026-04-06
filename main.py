@@ -43,7 +43,7 @@ import torch
 import yaml
 from beartype import beartype
 from beartype.typing import Callable as BeartypeCallable, Optional as BeartypeOptional, Tuple as BeartypeTuple
-from downloader import ModelDownloadError, SSL_CONTEXT, download_to
+from downloader import ModelDownloadError, SSL_CONTEXT, download_to, download_url_to_path
 from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
@@ -931,7 +931,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.2.0"
 DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -1756,12 +1756,248 @@ def _fetch_latest_release() -> dict[str, Any]:
     )
     with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as response:
         payload = json.loads(response.read().decode("utf-8"))
+    assets: list[dict[str, Any]] = []
+    for raw_asset in payload.get("assets") or []:
+        if not isinstance(raw_asset, dict):
+            continue
+        name = str(raw_asset.get("name") or "").strip()
+        url = str(raw_asset.get("browser_download_url") or "").strip()
+        if not name or not url:
+            continue
+        size_raw = raw_asset.get("size")
+        try:
+            size = int(size_raw) if size_raw is not None else None
+        except Exception:
+            size = None
+        assets.append(
+            {
+                "name": name,
+                "url": url,
+                "size": size,
+                "content_type": str(raw_asset.get("content_type") or "").strip(),
+            }
+        )
     return {
         "version": str(payload.get("tag_name") or "").strip(),
         "name": str(payload.get("name") or "").strip(),
         "url": str(payload.get("html_url") or "").strip(),
         "notes": str(payload.get("body") or "").strip(),
+        "assets": assets,
     }
+
+
+def _release_asset_score(asset: dict[str, Any]) -> int:
+    name = str(asset.get("name") or "").strip().lower()
+    url = str(asset.get("url") or "").strip().lower()
+    if not name or not url.startswith("https://"):
+        return -10_000
+    score = 0
+    if "stemsplat" in name:
+        score += 100
+    if name.endswith(".zip"):
+        score += 50
+    elif name.endswith(".dmg"):
+        score += 40
+    elif name.endswith(".pkg"):
+        score += 30
+    if any(token in name for token in ("mac", "macos", "darwin", "osx")):
+        score += 20
+    if any(token in name for token in ("arm64", "apple", "silicon")):
+        score += 10
+    if any(token in name for token in ("windows", "win64", ".exe", ".msi", "linux", ".deb", ".rpm", "appimage")):
+        score -= 200
+    return score
+
+
+def _select_release_download_asset(release: dict[str, Any]) -> dict[str, Any]:
+    assets = [asset for asset in (release.get("assets") or []) if isinstance(asset, dict)]
+    if not assets:
+        raise AppError(ErrorCode.INVALID_REQUEST, "The latest release does not have a downloadable app asset yet.")
+    ranked = sorted(
+        assets,
+        key=lambda asset: (_release_asset_score(asset), int(asset.get("size") or 0)),
+        reverse=True,
+    )
+    best = ranked[0]
+    if _release_asset_score(best) <= 0:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Could not find a compatible downloadable update asset.")
+    return best
+
+
+def _download_latest_release_to_downloads() -> tuple[dict[str, Any], Path]:
+    release = _fetch_latest_release()
+    asset = _select_release_download_asset(release)
+    destination_dir = _ensure_dir(OUTPUT_ROOT)
+    destination = destination_dir / str(asset.get("name") or "stemsplat-update.zip")
+    saved_path = download_url_to_path(
+        str(asset.get("url") or ""),
+        destination,
+        user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
+    )
+    latest_version = str(release.get("version") or "").strip()
+    if latest_version:
+        _set_compat_settings({"update_last_notified_version": latest_version})
+    return release, saved_path
+
+
+def _set_release_download_state(**patch: Any) -> None:
+    with release_download_lock:
+        release_download_state.update(patch)
+
+
+def _public_release_download_status() -> dict[str, Any]:
+    with release_download_lock:
+        return dict(release_download_state)
+
+
+def _release_download_error_message(exc: Exception) -> str:
+    if isinstance(exc, AppError):
+        return exc.message
+    if isinstance(exc, ModelDownloadError):
+        return str(exc)
+    return "download failed unexpectedly"
+
+
+def _run_release_download() -> None:
+    try:
+        release = _fetch_latest_release()
+        asset = _select_release_download_asset(release)
+    except Exception as exc:
+        logger.error("release metadata fetch failed", exc_info=True)
+        _set_release_download_state(
+            status="error",
+            step="download failed",
+            current_asset="",
+            download_rate_bytes_per_sec=0.0,
+            eta_seconds=None,
+            error=_release_download_error_message(exc),
+        )
+        return
+
+    asset_name = str(asset.get("name") or "update")
+    release_version = str(release.get("version") or "").strip()
+    release_name = str(release.get("name") or "").strip()
+    asset_size = int(asset.get("size") or 0)
+    _set_release_download_state(
+        status="downloading",
+        pct=1,
+        step=f"downloading {asset_name}",
+        current_asset=asset_name,
+        downloaded_bytes=0,
+        total_bytes=asset_size,
+        download_rate_bytes_per_sec=0.0,
+        eta_seconds=None,
+        started_at=time.time(),
+        error="",
+        path="",
+        filename=asset_name,
+        version=release_version,
+        release_name=release_name,
+    )
+
+    def _progress(update: dict[str, Any]) -> None:
+        downloaded_bytes = int(update.get("downloaded_bytes") or 0)
+        total_bytes = int(update.get("total_bytes") or 0)
+        with release_download_lock:
+            started_at = release_download_state.get("started_at")
+        eta_seconds: int | None = None
+        download_rate_bytes_per_sec = 0.0
+        if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
+            elapsed = max(1.0, time.time() - float(started_at))
+            remaining = max(0, total_bytes - downloaded_bytes)
+            download_rate_bytes_per_sec = max(downloaded_bytes / elapsed, 0.0)
+            eta_seconds = int(round(remaining / max(download_rate_bytes_per_sec, 1)))
+        _set_release_download_state(
+            status="downloading",
+            pct=int(update.get("pct") or 0),
+            step=f"downloading {asset_name}",
+            current_asset=asset_name,
+            downloaded_bytes=downloaded_bytes,
+            total_bytes=total_bytes,
+            download_rate_bytes_per_sec=download_rate_bytes_per_sec,
+            eta_seconds=eta_seconds,
+            error="",
+            filename=asset_name,
+            version=release_version,
+            release_name=release_name,
+        )
+
+    try:
+        saved_path = download_url_to_path(
+            str(asset.get("url") or ""),
+            _ensure_dir(OUTPUT_ROOT) / asset_name,
+            progress_cb=_progress,
+            user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
+        )
+    except Exception as exc:
+        logger.error("release download failed", exc_info=True)
+        _set_release_download_state(
+            status="error",
+            step="download failed",
+            current_asset=asset_name,
+            download_rate_bytes_per_sec=0.0,
+            eta_seconds=None,
+            error=_release_download_error_message(exc),
+            filename=asset_name,
+            version=release_version,
+            release_name=release_name,
+        )
+        return
+
+    _set_compat_settings(
+        {
+            "update_last_checked_at": time.time(),
+            "update_latest_version": release_version,
+            "update_latest_name": release_name,
+            "update_latest_url": str(release.get("url") or "").strip(),
+            "update_latest_notes": str(release.get("notes") or "").strip(),
+            "update_last_notified_version": release_version,
+        }
+    )
+    saved_size = max(asset_size, int(saved_path.stat().st_size) if saved_path.exists() else 0)
+    _set_release_download_state(
+        status="done",
+        pct=100,
+        step="download complete",
+        current_asset=asset_name,
+        downloaded_bytes=saved_size,
+        total_bytes=saved_size,
+        download_rate_bytes_per_sec=0.0,
+        eta_seconds=0,
+        error="",
+        path=str(saved_path),
+        filename=saved_path.name,
+        version=release_version,
+        release_name=release_name,
+    )
+
+
+def _start_release_download() -> dict[str, Any]:
+    global release_download_thread
+    with release_download_lock:
+        if release_download_thread is not None and release_download_thread.is_alive():
+            return dict(release_download_state)
+        release_download_state.update(
+            {
+                "status": "starting",
+                "pct": 0,
+                "step": "preparing download",
+                "current_asset": "",
+                "downloaded_bytes": 0,
+                "total_bytes": 0,
+                "download_rate_bytes_per_sec": 0.0,
+                "eta_seconds": None,
+                "started_at": time.time(),
+                "error": "",
+                "path": "",
+                "filename": "",
+                "version": "",
+                "release_name": "",
+            }
+        )
+        release_download_thread = threading.Thread(target=_run_release_download, daemon=True)
+        release_download_thread.start()
+        return dict(release_download_state)
 
 
 def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
@@ -2022,7 +2258,7 @@ def _fallback_source_info(path: Path) -> SourceInfo:
                     raw_bit_rate = getattr(info, "bitrate", None)
                     raw_codec = getattr(info, "codec", None) or getattr(info, "codec_description", None)
                     if raw_channels:
-                        channels = max(1, min(2, int(raw_channels)))
+                        channels = max(1, int(raw_channels))
                     if raw_bit_rate:
                         bit_rate = int(raw_bit_rate)
                     if raw_codec:
@@ -2078,7 +2314,7 @@ def _probe_source(path: Path) -> SourceInfo:
         suffix=path.suffix.lower(),
         codec=audio_stream.get("codec_name") or fallback.codec,
         bit_rate=bit_rate if isinstance(bit_rate, int) else fallback.bit_rate,
-        channels=max(1, min(2, int(audio_stream.get("channels") or fallback.channels or 2))),
+        channels=max(1, int(audio_stream.get("channels") or fallback.channels or 2)),
         has_cover=has_cover or fallback.has_cover,
         has_video=has_video,
     )
@@ -2289,6 +2525,11 @@ def _decode_audio_to_wav(
     *,
     stop_check: Callable[[], None] | None = None,
 ) -> Path:
+    if channels > 2:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "Multichannel audio is not supported yet. Please convert the file to mono or stereo first.",
+        )
     ffmpeg_path = _ensure_ffmpeg()
     decoded_path = work_dir / "input.wav"
     cmd = [
@@ -2360,6 +2601,8 @@ def _normalize_prediction(pred: torch.Tensor, input_channels: int, chunk_len: in
 def _prepare_model_input(waveform: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, int]:
     original_channels = waveform.shape[0]
     if original_channels == 1:
+        # Current bundled checkpoints are stereo-configured, so mono audio is
+        # mirrored to dual-mono for inference and collapsed back afterward.
         waveform = waveform.repeat(2, 1)
     elif original_channels > 2:
         waveform = waveform[:2]
@@ -3623,6 +3866,24 @@ model_download_state: dict[str, Any] = {
     "error": "",
 }
 model_download_thread: threading.Thread | None = None
+release_download_lock = threading.RLock()
+release_download_state: dict[str, Any] = {
+    "status": "idle",
+    "pct": 0,
+    "step": "",
+    "current_asset": "",
+    "downloaded_bytes": 0,
+    "total_bytes": 0,
+    "download_rate_bytes_per_sec": 0.0,
+    "eta_seconds": None,
+    "started_at": None,
+    "error": "",
+    "path": "",
+    "filename": "",
+    "version": "",
+    "release_name": "",
+}
+release_download_thread: threading.Thread | None = None
 ffmpeg_status_lock = threading.RLock()
 ffmpeg_status_cache: dict[str, Any] = {"checked_at": 0.0, "available": True, "message": ""}
 
@@ -4498,7 +4759,11 @@ def _finalize_written_outputs(task_id: str, out_dir: Path, output_paths: list[Pa
 
 def _publish_staged_outputs(final_out_dir: Path, staging_root: Path, staged_paths: list[Path]) -> list[Path]:
     published: list[Path] = []
-    _ensure_dir(final_out_dir)
+    if not final_out_dir.exists() or not final_out_dir.is_dir():
+        raise AppError(
+            ErrorCode.SEPARATION_FAILED,
+            f"Could not finalize export: output folder is no longer available: {final_out_dir}",
+        )
     for staged_path in staged_paths:
         relative_path = Path(staged_path.name)
         with contextlib.suppress(Exception):
@@ -5086,7 +5351,7 @@ def _validate_multi_stem_export(multi_stem_export: str) -> str:
 def _validate_media_type(name: str, content_type: str | None = None) -> str:
     suffix = Path(name).suffix.lower()
     kind = (content_type or "").lower()
-    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES:
+    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES and not (kind.startswith("audio/") or kind.startswith("video/")):
         raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
     if not suffix and not (kind.startswith("audio/") or kind.startswith("video/")):
         raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio or video file.")
@@ -6388,8 +6653,8 @@ async def open_models_folder(request: Request) -> dict[str, str]:
 
 
 @app.get("/api/release_status")
-async def release_status() -> dict[str, Any]:
-    return _release_status_payload()
+async def release_status(refresh: bool = False) -> dict[str, Any]:
+    return _release_status_payload(refresh=refresh)
 
 
 @app.get("/api/runtime_status")
@@ -6449,6 +6714,17 @@ async def ack_release_status(request: Request) -> dict[str, Any]:
     if latest:
         _set_compat_settings({"update_last_notified_version": latest})
     return _release_status_payload()
+
+
+@app.post("/api/release_download")
+async def download_latest_release(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN clients cannot download files onto the host machine.")
+    return _start_release_download()
+
+
+@app.get("/api/release_download_status")
+async def release_download_status() -> dict[str, Any]:
+    return _public_release_download_status()
 
 
 @app.post("/api/release_status/skip")

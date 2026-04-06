@@ -227,6 +227,8 @@ class ModelRegistryTests(unittest.TestCase):
             if mode in self.mode_to_stems:
                 self.assertEqual(list(self.mode_to_stems[mode]), [mode])
                 expected_required = [mode]
+                if mode == "mel_band_karaoke":
+                    expected_required = ["vocals", "mel_band_karaoke"]
                 if mode == "htdemucs_ft_other":
                     expected_required = ["guitar", "htdemucs_ft_other"]
                 self.assertEqual(list(self.mode_required_models[mode]), expected_required)
@@ -239,7 +241,10 @@ class ModelRegistryTests(unittest.TestCase):
     def test_preset_mode_registry(self) -> None:
         for mode, expected in PRESET_MODE_EXPECTATIONS.items():
             self.assertEqual(list(self.mode_to_stems[mode]), expected["stems"])
-            self.assertEqual(list(self.mode_required_models[mode]), expected["required_models"])
+            expected_required = list(expected["required_models"])
+            if mode == "preset_all_stems":
+                expected_required = ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"]
+            self.assertEqual(list(self.mode_required_models[mode]), expected_required)
             self.assertEqual(list(self.mode_output_labels[mode]), expected["output_labels"])
 
     def test_preset_defaults_are_present(self) -> None:

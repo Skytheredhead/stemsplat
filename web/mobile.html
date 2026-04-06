@@ -1388,6 +1388,7 @@
     let lastStorageWarning = 0;
     let lastMemoryWarning = 0;
     let modelStatusPoll = null;
+    let releaseStatusPoll = null;
     let activeReleaseOverlay = null;
     let activePortOverlay = null;
     let activeHostClosedOverlay = null;
@@ -1398,6 +1399,7 @@
     let modelPreviewTimer = null;
     let nerdStuffExpanded = false;
     let copyResetTimers = new WeakMap();
+    let activeReleaseOverlayUi = null;
     let activeModelToast = null;
     let modelToastTimer = null;
     let tooltipEl = null;
@@ -1530,6 +1532,8 @@
       drumsep_4s: 'https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.5',
     };
     const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
+    const RELEASE_REMIND_LATER_MS = 12 * 60 * 60 * 1000;
+    const RELEASE_SNOOZE_STORAGE_KEY = 'releaseUpdateSnooze';
     const isLanClient = true;
 
     let startPressed = false;
@@ -4131,7 +4135,11 @@
       overlay.addEventListener('click', (e) => {
         if(e.target === overlay || e.target === bg){
           closeOverlay(overlay);
-          if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
+          if(activeReleaseOverlay === overlay){
+            activeReleaseOverlay = null;
+            activeReleaseOverlayUi = null;
+            stopReleaseStatusPolling();
+          }
           if(activePortOverlay === overlay) activePortOverlay = null;
           if(activeHostClosedOverlay === overlay) activeHostClosedOverlay = null;
         }
@@ -4139,7 +4147,11 @@
       overlay.addEventListener('keydown', (e) => {
         if(e.key === 'Escape'){
           closeOverlay(overlay);
-          if(activeReleaseOverlay === overlay) activeReleaseOverlay = null;
+          if(activeReleaseOverlay === overlay){
+            activeReleaseOverlay = null;
+            activeReleaseOverlayUi = null;
+            stopReleaseStatusPolling();
+          }
           if(activePortOverlay === overlay) activePortOverlay = null;
           if(activeHostClosedOverlay === overlay) activeHostClosedOverlay = null;
         }
@@ -4316,6 +4328,8 @@
       closeOverlay(activeReleaseOverlay);
       activePortOverlay = null;
       activeReleaseOverlay = null;
+      activeReleaseOverlayUi = null;
+      stopReleaseStatusPolling();
 
       const { overlay, card } = createOverlayCard('program was closed on host');
       activeHostClosedOverlay = overlay;
@@ -4847,8 +4861,141 @@
       }
     }
 
+    function stopReleaseStatusPolling(){
+      if(releaseStatusPoll){
+        clearInterval(releaseStatusPoll);
+        releaseStatusPoll = null;
+      }
+    }
+
+    function syncReleaseOverlayProgress(status){
+      const ui = activeReleaseOverlayUi;
+      if(!ui) return;
+      const statusText = String(status && status.status || '').toLowerCase();
+      const isStarting = statusText === 'starting';
+      const isDownloading = statusText === 'downloading';
+      const isBusy = isStarting || isDownloading;
+      const isError = statusText === 'error';
+      const isDone = statusText === 'done';
+      const showProgress = isBusy || isError || isDone;
+      ui.progressWrap.hidden = !showProgress;
+      ui.progressWrap.classList.toggle('open', showProgress);
+      ui.progressFill.style.width = `${Math.max(0, Math.min(100, Number(status && status.pct) || 0))}%`;
+
+      if(isBusy){
+        ui.progressNote.textContent = isStarting
+          ? 'preparing download...'
+          : `downloading ${status.current_asset || status.filename || 'update'}`;
+        const bits = [];
+        if(Number(status.total_bytes || 0) > 0){
+          bits.push(`${Math.max(0, status.pct || 0)}%`);
+          bits.push(`${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`);
+        }
+        const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
+        if(rate) bits.push(rate);
+        const eta = formatEta(status.eta_seconds);
+        if(eta) bits.push(`${eta} remaining`);
+        ui.progressMeta.textContent = bits.join(' · ');
+      }else if(isError){
+        ui.progressNote.textContent = 'download failed';
+        ui.progressMeta.textContent = status.error || 'could not download update';
+      }else if(isDone){
+        ui.progressNote.textContent = `downloaded ${status.filename || 'update'} to Downloads`;
+        ui.progressMeta.textContent = `${formatBytes(status.downloaded_bytes)} saved`;
+      }else{
+        ui.progressNote.textContent = '';
+        ui.progressMeta.textContent = '';
+      }
+
+      ui.laterBtn.disabled = isBusy;
+      ui.laterBtn.classList.toggle('dimmed-control', isBusy);
+      ui.downloadBtn.disabled = isBusy || isDone;
+      if(isBusy){
+        ui.downloadBtn.textContent = 'downloading...';
+      }else if(isDone){
+        ui.downloadBtn.textContent = 'downloaded';
+      }else if(isError){
+        ui.downloadBtn.textContent = 'retry download';
+      }else{
+        ui.downloadBtn.textContent = 'download update';
+      }
+
+      if(isDone){
+        stopReleaseStatusPolling();
+        const message = `downloaded ${status.filename || 'update'} to Downloads`;
+        closeOverlay(activeReleaseOverlay);
+        activeReleaseOverlay = null;
+        activeReleaseOverlayUi = null;
+        showPopup(message);
+      }else if(isError){
+        stopReleaseStatusPolling();
+      }
+    }
+
+    async function refreshReleaseDownloadStatus(){
+      try{
+        const res = await fetch('/api/release_download_status');
+        if(!res.ok){
+          return null;
+        }
+        const data = await res.json();
+        syncReleaseOverlayProgress(data);
+        return data;
+      }catch(err){
+        console.warn('release download status failed', err);
+        return null;
+      }
+    }
+
+    function startReleaseStatusPolling(){
+      if(releaseStatusPoll) return;
+      releaseStatusPoll = setInterval(() => {
+        refreshReleaseDownloadStatus();
+      }, 800);
+    }
+
+    async function downloadReleaseUpdate(){
+      try{
+        const res = await fetch('/api/release_download', { method: 'POST' });
+        if(!res.ok){
+          throw new Error(await responseErrorMessage(res, 'could not download update'));
+        }
+        const data = await res.json();
+        syncReleaseOverlayProgress(data);
+        startReleaseStatusPolling();
+      }catch(err){
+        showPopup((err && err.message) || 'could not download update');
+      }
+    }
+
+    function readReleaseSnooze(){
+      try{
+        return JSON.parse(localStorage.getItem(RELEASE_SNOOZE_STORAGE_KEY) || 'null');
+      }catch(err){
+        console.warn('release snooze read failed', err);
+        return null;
+      }
+    }
+
+    function writeReleaseSnooze(version){
+      try{
+        if(!version){
+          localStorage.removeItem(RELEASE_SNOOZE_STORAGE_KEY);
+          return;
+        }
+        localStorage.setItem(RELEASE_SNOOZE_STORAGE_KEY, JSON.stringify({
+          version,
+          until: Date.now() + RELEASE_REMIND_LATER_MS,
+        }));
+      }catch(err){
+        console.warn('release snooze write failed', err);
+      }
+    }
+
     function showReleaseOverlay(status){
+      stopReleaseStatusPolling();
       closeOverlay(activeReleaseOverlay);
+      activeReleaseOverlayUi = null;
       const { overlay, card } = createOverlayCard('new release available');
       activeReleaseOverlay = overlay;
       const headline = status.latest_name || status.latest_version || 'new release';
@@ -4871,29 +5018,57 @@
       row.className = 'flex gap-3 justify-end flex-wrap';
       const laterBtn = makeActionButton('later', 'bg-white/10 text-white');
       const downloadBtn = makeActionButton('download update', 'bg-white text-black');
+      const progressWrap = document.createElement('div');
+      progressWrap.className = 'model-overlay-progress space-y-2';
+      progressWrap.hidden = true;
+      const progressNote = document.createElement('div');
+      progressNote.className = 'model-overlay-note';
+      const progressBar = document.createElement('div');
+      progressBar.className = 'bar';
+      const progressFill = document.createElement('div');
+      progressFill.className = 'bar-fill';
+      progressBar.appendChild(progressFill);
+      const progressMeta = document.createElement('div');
+      progressMeta.className = 'text-xs opacity-70';
+      progressWrap.append(progressNote, progressBar, progressMeta);
+      card.appendChild(progressWrap);
       laterBtn.onclick = async () => {
-        await acknowledgeRelease();
+        writeReleaseSnooze(status.latest_version || '');
+        stopReleaseStatusPolling();
         closeOverlay(activeReleaseOverlay);
         activeReleaseOverlay = null;
+        activeReleaseOverlayUi = null;
       };
       downloadBtn.onclick = async () => {
-        await acknowledgeRelease();
-        window.open(RELEASES_PAGE_URL, '_blank', 'noopener');
-        closeOverlay(activeReleaseOverlay);
-        activeReleaseOverlay = null;
+        await downloadReleaseUpdate();
       };
       row.append(laterBtn, downloadBtn);
       card.appendChild(row);
+      activeReleaseOverlayUi = {
+        overlay,
+        laterBtn,
+        downloadBtn,
+        progressWrap,
+        progressFill,
+        progressMeta,
+        progressNote,
+      };
+      void refreshReleaseDownloadStatus();
     }
 
     async function checkForReleaseUpdate(){
       try{
-        const res = await fetch('/api/release_status');
+        const res = await fetch('/api/release_status?refresh=1');
         if(!res.ok) return;
         const data = await res.json();
         const latest = data.latest_version || '';
         if(!data.update_available || !latest) return;
-        if(latest === (data.last_notified_version || '') || latest === (data.skipped_version || '')) return;
+        const snooze = readReleaseSnooze();
+        if(snooze?.version === latest && Number(snooze.until || 0) > Date.now()) return;
+        if(snooze?.version && snooze.version !== latest){
+          writeReleaseSnooze('');
+        }
+        if(latest === (data.skipped_version || '')) return;
         showReleaseOverlay(data);
       }catch(err){
         console.warn('release check failed', err);

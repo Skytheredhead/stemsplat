@@ -483,3 +483,124 @@ def download_to(
             downloaded_bytes=completed_bytes,
             total_bytes=total_bytes,
         )
+
+
+def download_url_to_path(
+    url: str,
+    dest: Path,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    user_agent: str = "app-downloader",
+) -> Path:
+    dest = Path(dest).expanduser().resolve()
+    item = {
+        "url": str(url or "").strip(),
+        "filename": dest.name,
+        "tag": dest.stem or dest.name,
+    }
+    url = str(item["url"])
+    if not url:
+        raise _download_error("invalid-config", "download url is missing", retryable=False, item=item)
+    if not url.startswith("https://"):
+        raise _download_error("insecure-url", f"refusing insecure download url for {item['filename']}", retryable=False, item=item)
+    if not dest.name:
+        raise _download_error("invalid-filename", "download destination filename is missing", retryable=False, item=item)
+
+    _ensure_destination_parent(dest, item=item)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    _ensure_regular_file_or_missing(dest, item=item, label="destination file")
+
+    remote_metadata = get_remote_file_metadata(url)
+    remote_len = remote_metadata.size
+    expected_sha256 = remote_metadata.sha256
+    if _matches_expected_file(dest, expected_size=remote_len, expected_sha256=expected_sha256):
+        existing_size = remote_len if isinstance(remote_len, int) and remote_len > 0 else dest.stat().st_size
+        _emit_progress(
+            progress_cb,
+            tag=str(item["tag"]),
+            filename=str(item["filename"]),
+            current_index=1,
+            total_files=1,
+            downloaded_bytes=existing_size,
+            total_bytes=existing_size,
+        )
+        return dest
+
+    _cleanup_partial_file(tmp, item=item)
+    _ensure_disk_space(dest.parent, required_bytes=remote_len, item=item)
+
+    bytes_written = 0
+    digest = hashlib.sha256()
+    try:
+        req = Request(url, headers={"User-Agent": user_agent})
+        with urlopen(req, timeout=REQUEST_TIMEOUT, context=SSL_CONTEXT) as response:
+            response_metadata = _metadata_from_headers(response.headers)
+            merged_metadata = _merge_remote_metadata(remote_metadata, response_metadata)
+            remote_len = merged_metadata.size
+            expected_sha256 = merged_metadata.sha256
+            _ensure_disk_space(dest.parent, required_bytes=remote_len, item=item)
+            try:
+                with open(tmp, "wb") as handle:
+                    while True:
+                        chunk = response.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        digest.update(chunk)
+                        bytes_written += len(chunk)
+                        _emit_progress(
+                            progress_cb,
+                            tag=str(item["tag"]),
+                            filename=str(item["filename"]),
+                            current_index=1,
+                            total_files=1,
+                            downloaded_bytes=bytes_written,
+                            total_bytes=remote_len or 0,
+                        )
+            except OSError as exc:
+                raise _map_os_error(exc, item=item, action="write the downloaded file") from exc
+    except ModelDownloadError:
+        _cleanup_partial_file(tmp, item=item)
+        raise
+    except (HTTPError, URLError, TimeoutError, ssl.SSLError) as exc:
+        _cleanup_partial_file(tmp, item=item)
+        raise _map_url_error(exc, item=item, action="download the file") from exc
+    except OSError as exc:
+        _cleanup_partial_file(tmp, item=item)
+        raise _map_os_error(exc, item=item, action="download the file", retryable=True) from exc
+    except Exception as exc:
+        _cleanup_partial_file(tmp, item=item)
+        raise _map_url_error(exc, item=item, action="download the file") from exc
+
+    if bytes_written <= 0:
+        _cleanup_partial_file(tmp, item=item)
+        raise _download_error("empty-download", f"downloaded zero bytes for {item['filename']}", retryable=True, item=item)
+    if remote_len is not None and bytes_written != remote_len:
+        _cleanup_partial_file(tmp, item=item)
+        raise _download_error(
+            "size-mismatch",
+            f"download size mismatch for {item['filename']} (expected {remote_len} bytes, got {bytes_written})",
+            retryable=True,
+            item=item,
+        )
+
+    downloaded_sha256 = digest.hexdigest()
+    if expected_sha256 is not None and downloaded_sha256 != expected_sha256:
+        _cleanup_partial_file(tmp, item=item)
+        raise _download_error("checksum-mismatch", f"checksum mismatch for {item['filename']}", retryable=True, item=item)
+    try:
+        os.replace(tmp, dest)
+    except OSError as exc:
+        _cleanup_partial_file(tmp, item=item)
+        raise _map_os_error(exc, item=item, action="finalize the downloaded file") from exc
+
+    _emit_progress(
+        progress_cb,
+        tag=str(item["tag"]),
+        filename=str(item["filename"]),
+        current_index=1,
+        total_files=1,
+        downloaded_bytes=remote_len if isinstance(remote_len, int) and remote_len > 0 else bytes_written,
+        total_bytes=remote_len if isinstance(remote_len, int) and remote_len > 0 else bytes_written,
+    )
+    return dest
