@@ -1076,6 +1076,132 @@
     .task-preset-btn[hidden] {
       display: none !important;
     }
+    .task-editor-btn {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 12;
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.07);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(245,251,255,.92);
+      transition: transform .16s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease, opacity .16s ease;
+    }
+    .task-editor-btn:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,.12);
+      border-color: rgba(255,255,255,.22);
+      box-shadow: 0 10px 22px rgba(0,0,0,.18);
+    }
+    .task-editor-btn[hidden] {
+      display: none !important;
+    }
+    .editor-wave-shell {
+      position: relative;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,.1);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      padding: 14px 14px 18px;
+    }
+    .editor-wave-canvas {
+      width: 100%;
+      height: 120px;
+      display: block;
+      border-radius: 12px;
+      background: rgba(10,17,20,.42);
+    }
+    .editor-wave-overlay {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      top: 14px;
+      height: 120px;
+      pointer-events: none;
+    }
+    .editor-wave-selection {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border-radius: 12px;
+      background: rgba(142,216,255,.14);
+      border: 1px solid rgba(142,216,255,.28);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
+    }
+    .editor-wave-head {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.12);
+    }
+    .editor-range-stack {
+      position: relative;
+      margin-top: 14px;
+      height: 28px;
+    }
+    .editor-range {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      width: 100%;
+      background: transparent;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .editor-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: #fff;
+      border: 0;
+      box-shadow: 0 4px 12px rgba(0,0,0,.28);
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    .editor-range::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: #fff;
+      border: 0;
+      box-shadow: 0 4px 12px rgba(0,0,0,.28);
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    .editor-range::-webkit-slider-runnable-track,
+    .editor-range::-moz-range-track {
+      background: transparent;
+      height: 4px;
+    }
+    .editor-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .editor-meta-chip {
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.09);
+      background: rgba(255,255,255,.05);
+      padding: 10px 12px;
+    }
+    .editor-transport {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .editor-transport .btn {
+      min-width: 0;
+    }
     .preset-choice {
       width: 100%;
       border-radius: 16px;
@@ -1676,6 +1802,12 @@
   <template id="item-template">
     <div class="item-row flex items-center gap-3">
       <div class="glass card rounded-xl px-4 py-4 flex-1">
+        <button class="task-editor-btn" type="button" title="edit clip" data-tooltip="edit song">
+          <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+          </svg>
+        </button>
         <button class="task-preset-btn" type="button" title="adjust preset" data-tooltip="adjust mix" hidden>
           <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="4" y1="21" x2="4" y2="14"></line>
@@ -3691,6 +3823,7 @@
         labels.classList.toggle('hidden', stemCount <= 0);
         labels.classList.toggle('labels-unlocked', stemCount > 0 && unlocked);
       }
+      bindTaskEditorButton(row.querySelector('.task-editor-btn'), task);
       bindTaskPresetButton(row.querySelector('.task-preset-btn'), task);
     }
 
@@ -3728,6 +3861,402 @@
         event.stopPropagation();
         openTaskPresetAdjuster(task);
       });
+    }
+
+    function taskPendingEntry(task){
+      if(!task) return null;
+      if(task.tempKey){
+        return pendingItems.find((pending) => pending && pending.tempKey === task.tempKey) || null;
+      }
+      if(task.id){
+        return pendingItems.find((pending) => pending && pending.id === task.id) || null;
+      }
+      return null;
+    }
+
+    function canOpenTaskEditor(task){
+      return !!(task && (task.id || taskPendingEntry(task)));
+    }
+
+    function taskClipState(task){
+      const startMs = Math.max(0, Number(task && task.clip_start_ms) || 0);
+      const endRaw = Number(task && task.clip_end_ms);
+      return {
+        startMs,
+        endMs: Number.isFinite(endRaw) && endRaw > 0 ? endRaw : null,
+        enabled: !!(task && task.clip_enabled),
+      };
+    }
+
+    function applyClipState(task, clip){
+      if(!task || !clip) return;
+      task.clip_start_ms = Math.max(0, Math.round(Number(clip.startMs) || 0));
+      task.clip_end_ms = Number.isFinite(Number(clip.endMs)) && Number(clip.endMs) > 0
+        ? Math.round(Number(clip.endMs))
+        : null;
+      task.clip_enabled = !!clip.enabled;
+    }
+
+    function syncPendingClipState(task, clip){
+      const pending = taskPendingEntry(task);
+      if(!pending) return;
+      pending.clip_start_ms = Math.max(0, Math.round(Number(clip.startMs) || 0));
+      pending.clip_end_ms = Number.isFinite(Number(clip.endMs)) && Number(clip.endMs) > 0
+        ? Math.round(Number(clip.endMs))
+        : null;
+      pending.clip_enabled = !!clip.enabled;
+    }
+
+    function editorTimeLabel(ms){
+      const safe = Math.max(0, Math.round(Number(ms) || 0));
+      const totalSeconds = Math.floor(safe / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      const millis = Math.floor((safe % 1000) / 10);
+      return `${minutes}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(2, '0')}`;
+    }
+
+    function bindTaskEditorButton(btn, task){
+      if(!btn) return;
+      bindDelayedTooltip(btn);
+      const visible = canOpenTaskEditor(task);
+      btn.hidden = !visible;
+      btn.disabled = !visible;
+      if(!visible) return;
+      guardClick(btn, (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openTaskEditor(task);
+      });
+    }
+
+    async function openTaskEditor(task){
+      if(!task) return;
+      const pending = taskPendingEntry(task);
+      const { overlay, card } = createOverlayCard(task.name || 'editor');
+      card.style.maxWidth = '760px';
+
+      const description = document.createElement('div');
+      description.className = 'text-sm opacity-75';
+      description.textContent = String(task.stage || '').toLowerCase() === 'done'
+        ? 'preview the original or finished outputs, and update trim points for future reruns'
+        : 'set in and out points before splitting this song';
+      card.appendChild(description);
+
+      const sourceWrap = document.createElement('div');
+      sourceWrap.className = 'space-y-2';
+      let sourceSelect = null;
+      if(task.id && Array.isArray(task.outputs) && task.outputs.length){
+        const label = document.createElement('label');
+        label.className = 'text-xs uppercase tracking-[0.18em] opacity-60';
+        label.textContent = 'preview source';
+        sourceSelect = document.createElement('select');
+        sourceSelect.className = 'w-full rounded-xl border border-white/10 bg-[#132129] px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none';
+        sourceSelect.innerHTML = `<option value="source">original</option>${task.outputs.map((output) => `<option value="${String(output).replace(/"/g, '&quot;')}">${output}</option>`).join('')}`;
+        sourceWrap.append(label, sourceSelect);
+        card.appendChild(sourceWrap);
+      }
+
+      const waveShell = document.createElement('div');
+      waveShell.className = 'editor-wave-shell';
+      waveShell.innerHTML = `
+        <canvas class="editor-wave-canvas" width="1200" height="240"></canvas>
+        <div class="editor-wave-overlay">
+          <div class="editor-wave-selection"></div>
+          <div class="editor-wave-head"></div>
+        </div>
+        <div class="editor-range-stack">
+          <input class="editor-range editor-range-start" type="range" min="0" max="1000" value="0" step="1">
+          <input class="editor-range editor-range-end" type="range" min="0" max="1000" value="1000" step="1">
+        </div>
+      `;
+      card.appendChild(waveShell);
+
+      const meta = document.createElement('div');
+      meta.className = 'editor-meta-grid';
+      meta.innerHTML = `
+        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">in</div><div class="text-sm" data-role="in-label">0:00.00</div></div>
+        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">out</div><div class="text-sm" data-role="out-label">0:00.00</div></div>
+        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">cursor</div><div class="text-sm" data-role="cursor-label">0:00.00</div></div>
+      `;
+      card.appendChild(meta);
+
+      const transport = document.createElement('div');
+      transport.className = 'editor-transport';
+      const buttons = {
+        start: makeActionButton('|<', 'bg-white/10 text-white'),
+        jumpIn: makeActionButton('to in', 'bg-white/10 text-white'),
+        play: makeActionButton('play', 'bg-white text-black'),
+        jumpOut: makeActionButton('to out', 'bg-white/10 text-white'),
+        end: makeActionButton('>|', 'bg-white/10 text-white'),
+        setIn: makeActionButton('set in', 'bg-white/10 text-white'),
+        setOut: makeActionButton('set out', 'bg-white/10 text-white'),
+        clear: makeActionButton('clear trim', 'bg-white/10 text-white'),
+      };
+      Object.values(buttons).forEach((button) => transport.appendChild(button));
+      card.appendChild(transport);
+
+      const actions = document.createElement('div');
+      actions.className = 'flex gap-2 justify-end';
+      const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
+      const saveBtn = makeActionButton('save', 'bg-white text-black');
+      actions.append(cancelBtn, saveBtn);
+      card.appendChild(actions);
+
+      const canvas = waveShell.querySelector('.editor-wave-canvas');
+      const ctx = canvas.getContext('2d');
+      const selectionEl = waveShell.querySelector('.editor-wave-selection');
+      const headEl = waveShell.querySelector('.editor-wave-head');
+      const startRange = waveShell.querySelector('.editor-range-start');
+      const endRange = waveShell.querySelector('.editor-range-end');
+      const inLabel = meta.querySelector('[data-role="in-label"]');
+      const outLabel = meta.querySelector('[data-role="out-label"]');
+      const cursorLabel = meta.querySelector('[data-role="cursor-label"]');
+      const audio = document.createElement('audio');
+      audio.preload = 'metadata';
+      let durationMs = 0;
+      let peaks = [];
+      let activeObjectUrl = '';
+
+      overlay.__cleanupFns = overlay.__cleanupFns || [];
+      overlay.__cleanupFns.push(() => {
+        try { audio.pause(); } catch(_) {}
+        if(activeObjectUrl){ URL.revokeObjectURL(activeObjectUrl); activeObjectUrl = ''; }
+      });
+
+      const clip = taskClipState(task);
+
+      const clampClip = () => {
+        const safeDuration = Math.max(0, durationMs);
+        clip.startMs = Math.max(0, Math.min(safeDuration, Math.round(Number(clip.startMs) || 0)));
+        const fallbackEnd = safeDuration > 0 ? safeDuration : null;
+        clip.endMs = Number.isFinite(Number(clip.endMs)) ? Math.round(Number(clip.endMs)) : fallbackEnd;
+        if(Number.isFinite(Number(clip.endMs))){
+          clip.endMs = Math.max(clip.startMs, Math.min(safeDuration, Number(clip.endMs)));
+        }
+        clip.enabled = !!clip.enabled && safeDuration > 0 && (clip.startMs > 0 || (clip.endMs !== null && clip.endMs < safeDuration));
+        if(!clip.enabled){
+          clip.startMs = 0;
+          clip.endMs = fallbackEnd;
+        }
+      };
+
+      const drawWaveform = () => {
+        if(!ctx) return;
+        const width = canvas.width;
+        const height = canvas.height;
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = 'rgba(13, 24, 30, 0.82)';
+        ctx.fillRect(0, 0, width, height);
+        const values = Array.isArray(peaks) && peaks.length ? peaks : new Array(240).fill(0.12);
+        const step = width / values.length;
+        ctx.fillStyle = 'rgba(142, 216, 255, 0.78)';
+        values.forEach((value, index) => {
+          const amp = Math.max(0.04, Math.min(1, Number(value) || 0));
+          const barHeight = amp * (height * 0.86);
+          const x = index * step;
+          const y = (height - barHeight) / 2;
+          ctx.fillRect(x, y, Math.max(1, step - 1), barHeight);
+        });
+      };
+
+      const syncUi = () => {
+        clampClip();
+        const safeDuration = Math.max(1, durationMs || 1);
+        startRange.max = String(safeDuration);
+        endRange.max = String(safeDuration);
+        startRange.value = String(Math.max(0, Math.min(safeDuration, clip.startMs)));
+        endRange.value = String(Math.max(0, Math.min(safeDuration, clip.endMs == null ? safeDuration : clip.endMs)));
+        const startPct = (Number(startRange.value) / safeDuration) * 100;
+        const endPct = (Number(endRange.value) / safeDuration) * 100;
+        selectionEl.style.left = `${startPct}%`;
+        selectionEl.style.width = `${Math.max(0, endPct - startPct)}%`;
+        const currentMs = Math.max(0, Math.round((Number(audio.currentTime) || 0) * 1000));
+        const headPct = Math.max(0, Math.min(100, (currentMs / safeDuration) * 100));
+        headEl.style.left = `${headPct}%`;
+        inLabel.textContent = editorTimeLabel(clip.startMs);
+        outLabel.textContent = editorTimeLabel(clip.endMs == null ? safeDuration : clip.endMs);
+        cursorLabel.textContent = editorTimeLabel(currentMs);
+        buttons.play.textContent = audio.paused ? 'play' : 'pause';
+      };
+
+      const activePreviewSelection = () => sourceSelect ? sourceSelect.value : 'source';
+
+      const loadPreview = async () => {
+        const selected = activePreviewSelection();
+        if(activeObjectUrl){
+          URL.revokeObjectURL(activeObjectUrl);
+          activeObjectUrl = '';
+        }
+        peaks = [];
+        drawWaveform();
+        if(task.id){
+          const previewUrl = selected === 'source'
+            ? `/api/tasks/${task.id}/preview_audio`
+            : `/api/tasks/${task.id}/preview_audio?output=${encodeURIComponent(selected)}`;
+          audio.src = previewUrl;
+          try{
+            const waveformUrl = selected === 'source'
+              ? `/api/tasks/${task.id}/waveform`
+              : `/api/tasks/${task.id}/waveform?output=${encodeURIComponent(selected)}`;
+            const response = await fetch(waveformUrl, { cache: 'no-store' });
+            if(response.ok){
+              const payload = await response.json();
+              peaks = Array.isArray(payload.points) ? payload.points : [];
+              if(Number.isFinite(Number(payload.duration_ms)) && Number(payload.duration_ms) > 0){
+                durationMs = Math.round(Number(payload.duration_ms));
+              }
+              if(selected === 'source' && Number.isFinite(Number(payload.clip_start_ms))){
+                clip.startMs = Math.round(Number(payload.clip_start_ms));
+                clip.endMs = Number.isFinite(Number(payload.clip_end_ms)) ? Math.round(Number(payload.clip_end_ms)) : clip.endMs;
+                clip.enabled = !!payload.clip_enabled;
+              }
+            }
+          }catch(_){}
+        }else if(pending && pending.file){
+          activeObjectUrl = URL.createObjectURL(pending.file);
+          audio.src = activeObjectUrl;
+        }
+        audio.load();
+        drawWaveform();
+        syncUi();
+      };
+
+      audio.addEventListener('loadedmetadata', () => {
+        if(Number.isFinite(audio.duration) && audio.duration > 0){
+          durationMs = Math.round(audio.duration * 1000);
+        }
+        if(clip.endMs == null || clip.endMs <= 0){
+          clip.endMs = durationMs;
+        }
+        syncUi();
+      });
+      audio.addEventListener('timeupdate', () => {
+        const currentMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        if(clip.enabled && Number.isFinite(Number(clip.endMs)) && currentMs >= Number(clip.endMs)){
+          audio.pause();
+          audio.currentTime = Number(clip.endMs) / 1000;
+        }
+        syncUi();
+      });
+      audio.addEventListener('pause', syncUi);
+      audio.addEventListener('play', syncUi);
+      audio.addEventListener('ended', syncUi);
+
+      startRange.addEventListener('input', () => {
+        clip.startMs = Math.min(Number(startRange.value) || 0, Number(endRange.value) || durationMs || 0);
+        clip.enabled = true;
+        syncUi();
+      });
+      endRange.addEventListener('input', () => {
+        clip.endMs = Math.max(Number(endRange.value) || 0, Number(startRange.value) || 0);
+        clip.enabled = true;
+        syncUi();
+      });
+
+      guardClick(buttons.start, (event) => {
+        event.preventDefault();
+        audio.pause();
+        audio.currentTime = 0;
+        syncUi();
+      });
+      guardClick(buttons.jumpIn, (event) => {
+        event.preventDefault();
+        audio.currentTime = Math.max(0, clip.startMs) / 1000;
+        syncUi();
+      });
+      guardClick(buttons.play, async (event) => {
+        event.preventDefault();
+        if(audio.paused){
+          if(clip.enabled && Math.round((Number(audio.currentTime) || 0) * 1000) >= Number(clip.endMs || durationMs)){
+            audio.currentTime = clip.startMs / 1000;
+          }
+          try { await audio.play(); } catch(_) {}
+        }else{
+          audio.pause();
+        }
+        syncUi();
+      });
+      guardClick(buttons.jumpOut, (event) => {
+        event.preventDefault();
+        const outMs = Number.isFinite(Number(clip.endMs)) ? Number(clip.endMs) : durationMs;
+        audio.currentTime = Math.max(0, outMs) / 1000;
+        syncUi();
+      });
+      guardClick(buttons.end, (event) => {
+        event.preventDefault();
+        audio.pause();
+        audio.currentTime = Math.max(0, durationMs - 50) / 1000;
+        syncUi();
+      });
+      guardClick(buttons.setIn, (event) => {
+        event.preventDefault();
+        clip.startMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        clip.enabled = true;
+        syncUi();
+      });
+      guardClick(buttons.setOut, (event) => {
+        event.preventDefault();
+        clip.endMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        clip.enabled = true;
+        syncUi();
+      });
+      guardClick(buttons.clear, (event) => {
+        event.preventDefault();
+        clip.startMs = 0;
+        clip.endMs = durationMs || null;
+        clip.enabled = false;
+        syncUi();
+      });
+      if(sourceSelect){
+        sourceSelect.addEventListener('change', () => {
+          audio.pause();
+          loadPreview();
+        });
+      }
+      guardClick(cancelBtn, (event) => {
+        event.preventDefault();
+        closeOverlay(overlay);
+      });
+      guardClick(saveBtn, async (event) => {
+        event.preventDefault();
+        clampClip();
+        if(saveBtn.dataset.busy === '1') return;
+        saveBtn.dataset.busy = '1';
+        saveBtn.textContent = 'saving...';
+        const payload = {
+          clip_start_ms: clip.startMs,
+          clip_end_ms: clip.endMs,
+          clip_enabled: clip.enabled,
+        };
+        try{
+          if(task.id){
+            const res = await fetch(`/api/tasks/${task.id}/edit`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok){
+              throw new Error((data && data.detail && data.detail.message) || 'could not save editor changes');
+            }
+            applyClipState(task, data);
+          }else{
+            applyClipState(task, payload);
+            syncPendingClipState(task, payload);
+          }
+          saveTasks();
+          updateUI();
+          closeOverlay(overlay);
+          showPopup('editor changes saved');
+        }catch(err){
+          showPopup((err && err.message) || 'could not save editor changes');
+          saveBtn.dataset.busy = '';
+          saveBtn.textContent = 'save';
+        }
+      });
+
+      await loadPreview();
     }
 
     function formatEta(seconds){
@@ -7390,7 +7919,7 @@
           if(availableSlots <= 0) break;
           availableSlots -= 1;
           // record pending entry
-          const pending = { file, ui:sharedUi, started:false, id:null, stems:stems.slice(), groupStems: displayStems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false };
+          const pending = { file, ui:sharedUi, started:false, id:null, stems:stems.slice(), groupStems: displayStems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false, clip_start_ms:0, clip_end_ms:null, clip_enabled:false, outputs:[] };
           pending.validationPromise = (async () => {
             const duration = await getAudioDuration(file);
             if(duration > 0){
@@ -7408,7 +7937,7 @@
           pendingItems.push(pending);
           newPending.push(pending);
           // persist placeholder task (no id yet)
-          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), groupStems: displayStems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
+          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), groupStems: displayStems.slice(), file:null, tempKey, out_dir:null, clip_start_ms:0, clip_end_ms:null, clip_enabled:false, outputs:[], downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
           saveTasks();
           updateUI();
         }
@@ -7434,6 +7963,11 @@
         data.append('output_format', settingsState.output_format || 'same_as_input');
         data.append('multi_stem_export', settingsState.multi_stem_export || 'zip');
         data.append('video_handling', settingsState.video_handling || 'audio_only');
+        data.append('clip_start_ms', String(Number(pending.clip_start_ms) || 0));
+        if(Number.isFinite(Number(pending.clip_end_ms))){
+          data.append('clip_end_ms', String(Math.max(0, Number(pending.clip_end_ms))));
+        }
+        data.append('clip_enabled', pending.clip_enabled ? 'true' : 'false');
         const sourceDir = sourceDirForFile(file);
         if(sourceDir){
           data.append('source_dir', sourceDir);
@@ -7483,7 +8017,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, groupStems: pending.groupStems || parsed.stems, tempKey: pending.tempKey, out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
+          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, groupStems: pending.groupStems || parsed.stems, tempKey: pending.tempKey, out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, clip_start_ms: Number(parsed.clip_start_ms) || Number(pending.clip_start_ms) || 0, clip_end_ms: Number.isFinite(Number(parsed.clip_end_ms)) ? Number(parsed.clip_end_ms) : (Number.isFinite(Number(pending.clip_end_ms)) ? Number(pending.clip_end_ms) : null), clip_enabled: typeof parsed.clip_enabled === 'boolean' ? !!parsed.clip_enabled : !!pending.clip_enabled, outputs: Array.isArray(parsed.outputs) ? parsed.outputs.slice() : [], downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           if(startPressed || pending.autoStart){
             t.stage = 'queued';
@@ -7806,6 +8340,10 @@
             out_dir: task.out_dir || null,
             preset_settings: task.preset_settings || null,
             can_adjust_preset: !!task.can_adjust_preset,
+            clip_start_ms: Number(task.clip_start_ms) || 0,
+            clip_end_ms: Number.isFinite(Number(task.clip_end_ms)) ? Number(task.clip_end_ms) : null,
+            clip_enabled: !!task.clip_enabled,
+            outputs: Array.isArray(task.outputs) ? task.outputs.slice() : [],
             downloaded: false,
             delivery: task.delivery || 'folder',
             autoDownloaded: false,
@@ -7860,10 +8398,14 @@
           taskRef.eta_seconds = data.eta_seconds;
           taskRef.eta_state = data.eta_state ?? taskRef.eta_state ?? null;
           taskRef.mode = data.mode || taskRef.mode;
+          if(typeof data.clip_start_ms !== 'undefined') taskRef.clip_start_ms = Number(data.clip_start_ms) || 0;
+          if(typeof data.clip_end_ms !== 'undefined') taskRef.clip_end_ms = Number.isFinite(Number(data.clip_end_ms)) ? Number(data.clip_end_ms) : null;
+          if(typeof data.clip_enabled === 'boolean') taskRef.clip_enabled = !!data.clip_enabled;
           taskRef.out_dir = data.out_dir || null;
           taskRef.delivery = data.delivery || taskRef.delivery;
           taskRef.error = data.error || null;
           if(Array.isArray(data.stems)) taskRef.stems = data.stems;
+          if(Array.isArray(data.outputs)) taskRef.outputs = data.outputs.slice();
           if(data.preset_settings) taskRef.preset_settings = data.preset_settings;
           if(typeof data.can_adjust_preset === 'boolean') taskRef.can_adjust_preset = data.can_adjust_preset;
           saveTasks();
@@ -7971,7 +8513,11 @@
             }
             taskRef.eta_state = data.eta_state ?? taskRef.eta_state ?? null;
             if(data.mode) taskRef.mode = data.mode;
+            if(typeof data.clip_start_ms !== 'undefined') taskRef.clip_start_ms = Number(data.clip_start_ms) || 0;
+            if(typeof data.clip_end_ms !== 'undefined') taskRef.clip_end_ms = Number.isFinite(Number(data.clip_end_ms)) ? Number(data.clip_end_ms) : null;
+            if(typeof data.clip_enabled === 'boolean') taskRef.clip_enabled = !!data.clip_enabled;
             if(data.stems) taskRef.stems = data.stems;
+            if(Array.isArray(data.outputs)) taskRef.outputs = data.outputs.slice();
             if(data.out_dir) taskRef.out_dir = data.out_dir;
             if(data.zip) taskRef.zip = data.zip;
             if(data.delivery) taskRef.delivery = data.delivery;

@@ -10,6 +10,7 @@ import ipaddress
 import json
 import logging
 import math
+import mimetypes
 import os
 import platform
 import queue
@@ -1253,6 +1254,8 @@ BOTH_SEPARATE_INSTRUMENTAL_START_PCT = 50
 BOTH_SEPARATE_INSTRUMENTAL_END_PCT = 95
 EXPORT_PROGRESS_START_PCT = 96
 EXPORT_PROGRESS_END_PCT = 99
+EDITOR_WAVEFORM_POINTS = 640
+EDITOR_SAMPLE_RATE = 44_100
 
 MODE_CHOICES = set(MODE_TO_STEMS)
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
@@ -2594,6 +2597,86 @@ def _load_waveform(wav_path: Path) -> torch.Tensor:
     if waveform.shape[0] == 0:
         raise AppError(ErrorCode.AUDIO_LOAD_FAILED, "Decoded audio is empty.")
     return waveform
+
+
+def _coerce_optional_ms(value: Any, *, default: int | None = None) -> int | None:
+    if value is None or value == "":
+        return default
+    with contextlib.suppress(Exception):
+        parsed = int(round(float(value)))
+        return max(0, parsed)
+    return default
+
+
+def _normalize_clip_bounds_ms(
+    start_ms: Any,
+    end_ms: Any,
+    *,
+    duration_ms: int,
+    enabled: bool,
+) -> tuple[int, int | None, bool]:
+    safe_duration = max(0, int(duration_ms))
+    normalized_start = max(0, min(safe_duration, _coerce_optional_ms(start_ms, default=0) or 0))
+    raw_end = _coerce_optional_ms(end_ms, default=None)
+    normalized_end = safe_duration if raw_end is None else max(normalized_start, min(safe_duration, raw_end))
+    if normalized_end <= normalized_start:
+        normalized_end = safe_duration
+    clip_enabled = bool(enabled) and safe_duration > 0 and (normalized_start > 0 or normalized_end < safe_duration)
+    return normalized_start, (normalized_end if clip_enabled else None), clip_enabled
+
+
+def _task_clip_snapshot(task: dict[str, Any], *, duration_ms: int) -> dict[str, Any]:
+    start_ms, end_ms, clip_enabled = _normalize_clip_bounds_ms(
+        task.get("clip_start_ms"),
+        task.get("clip_end_ms"),
+        duration_ms=duration_ms,
+        enabled=bool(task.get("clip_enabled")),
+    )
+    return {
+        "clip_start_ms": start_ms,
+        "clip_end_ms": end_ms,
+        "clip_enabled": clip_enabled,
+    }
+
+
+def _apply_clip_to_waveform(task: dict[str, Any], waveform: torch.Tensor) -> tuple[torch.Tensor, dict[str, Any]]:
+    total_samples = int(waveform.shape[1]) if waveform.ndim == 2 else 0
+    duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
+    clip = _task_clip_snapshot(task, duration_ms=duration_ms)
+    if not clip["clip_enabled"] or total_samples <= 0:
+        return waveform, clip
+    start_sample = max(0, min(total_samples, int(round((clip["clip_start_ms"] / 1000.0) * EDITOR_SAMPLE_RATE))))
+    end_ms_value = clip["clip_end_ms"] if isinstance(clip["clip_end_ms"], int) else duration_ms
+    end_sample = max(start_sample, min(total_samples, int(round((end_ms_value / 1000.0) * EDITOR_SAMPLE_RATE))))
+    if end_sample <= start_sample:
+        return waveform, {"clip_start_ms": 0, "clip_end_ms": None, "clip_enabled": False}
+    return waveform[:, start_sample:end_sample], clip
+
+
+def _editor_waveform_payload_for_path(audio_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
+    temp_dir: Path | None = None
+    wav_path = audio_path
+    try:
+        if wav_path.suffix.lower() not in {".wav", ".wave"}:
+            source_info = _probe_source(audio_path)
+            temp_dir = Path(tempfile.mkdtemp(prefix="editor_waveform_", dir=str(WORK_DIR)))
+            wav_path = _decode_audio_to_wav(audio_path, temp_dir, source_info.channels)
+        waveform = _load_waveform(wav_path)
+        mono = waveform.abs().amax(dim=0) if waveform.shape[0] > 1 else waveform[0].abs()
+        total_samples = int(mono.shape[0])
+        duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
+        if total_samples <= 0:
+            return {"duration_ms": duration_ms, "points": []}
+        bucket_size = max(1, math.ceil(total_samples / max(8, points)))
+        payload_points: list[float] = []
+        for start in range(0, total_samples, bucket_size):
+            stop = min(total_samples, start + bucket_size)
+            window = mono[start:stop]
+            payload_points.append(round(float(window.max().item() if window.numel() else 0.0), 4))
+        return {"duration_ms": duration_ms, "points": payload_points}
+    finally:
+        if temp_dir is not None:
+            _cleanup_path(temp_dir)
 
 
 def _write_temp_wave(out_dir: Path, name: str, tensor: torch.Tensor) -> Path:
@@ -4461,6 +4544,15 @@ def _start_model_download(selection: list[str] | None = None) -> dict[str, Any]:
 
 
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
+    duration_ms = int(round(max(0.0, float(task.get("audio_seconds") or 0.0)) * 1000.0))
+    if duration_ms > 0:
+        clip = _task_clip_snapshot(task, duration_ms=duration_ms)
+    else:
+        clip = {
+            "clip_start_ms": int(max(0, int(task.get("clip_start_ms") or 0))),
+            "clip_end_ms": _coerce_optional_ms(task.get("clip_end_ms"), default=None),
+            "clip_enabled": bool(task.get("clip_enabled")),
+        }
     return {
         "id": task["id"],
         "name": task["original_name"],
@@ -4482,6 +4574,9 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "version": task["version"],
         "preset_settings": _task_preset_settings(task),
         "can_adjust_preset": _task_can_adjust_preset(task),
+        "clip_start_ms": clip["clip_start_ms"],
+        "clip_end_ms": clip["clip_end_ms"],
+        "clip_enabled": clip["clip_enabled"],
     }
 
 
@@ -4734,6 +4829,22 @@ def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
     if outputs and not existing_outputs:
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
     return out_path, existing_outputs
+
+
+def _task_named_output_path(task: dict[str, Any], output_name: str | None) -> Path:
+    requested = str(output_name or "").strip()
+    if not requested or requested == "source":
+        source_path = Path(str(task.get("source_path") or "")).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+        return source_path
+    out_dir, existing_outputs = _task_output_paths(task)
+    requested_path = (out_dir / requested).resolve()
+    for candidate in existing_outputs:
+        with contextlib.suppress(Exception):
+            if candidate.resolve() == requested_path:
+                return candidate
+    raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
 
 
 def _archive_mode_label(mode: str) -> str:
@@ -5118,6 +5229,9 @@ def _restart_task_payload(
         output_same_as_input=output_same_as_input,
         multi_stem_export=multi_stem_export,
     )
+    payload["clip_start_ms"] = int(max(0, int(old_task.get("clip_start_ms") or 0)))
+    payload["clip_end_ms"] = _coerce_optional_ms(old_task.get("clip_end_ms"), default=None)
+    payload["clip_enabled"] = bool(old_task.get("clip_enabled"))
     _enqueue_task(payload["id"], front=prioritize)
     return payload
 
@@ -5136,6 +5250,26 @@ def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]
             raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
         task["mode"] = mode
         _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
+        task["version"] += 1
+        return dict(task)
+
+
+def _update_task_clip_settings(
+    task_id: str,
+    *,
+    clip_start_ms: Any,
+    clip_end_ms: Any,
+    clip_enabled: Any,
+) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if str(task.get("status") or "") == "running":
+            raise AppError(ErrorCode.INVALID_REQUEST, "You can only edit a song before or after processing.")
+        task["clip_start_ms"] = max(0, int(_coerce_optional_ms(clip_start_ms, default=0) or 0))
+        task["clip_end_ms"] = _coerce_optional_ms(clip_end_ms, default=None)
+        task["clip_enabled"] = bool(clip_enabled)
         task["version"] += 1
         return dict(task)
 
@@ -5345,6 +5479,9 @@ def _build_task_payload(
         "last_progress_at": time.time(),
         "last_progress_pct": 0,
         "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
+        "clip_start_ms": 0,
+        "clip_end_ms": None,
+        "clip_enabled": False,
         "finished_at": None,
         "guard_error": None,
         "cleared": False,
@@ -5521,6 +5658,9 @@ def _register_task(
     video_handling: str,
     multi_stem_export: str | None = None,
     output_same_as_input: bool | None = None,
+    clip_start_ms: int | None = None,
+    clip_end_ms: int | None = None,
+    clip_enabled: bool | None = None,
     delivery: str = "folder",
     auto_start: bool,
     queue_front: bool = False,
@@ -5544,6 +5684,12 @@ def _register_task(
         multi_stem_export=multi_stem_export,
         output_same_as_input=output_same_as_input,
     )
+    if clip_start_ms is not None:
+        payload["clip_start_ms"] = max(0, int(clip_start_ms))
+    if clip_end_ms is not None:
+        payload["clip_end_ms"] = max(0, int(clip_end_ms))
+    if clip_enabled is not None:
+        payload["clip_enabled"] = bool(clip_enabled)
     with tasks_lock:
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
@@ -5636,6 +5782,9 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "outputs": public["outputs"],
         "preset_settings": public["preset_settings"],
         "can_adjust_preset": public["can_adjust_preset"],
+        "clip_start_ms": public["clip_start_ms"],
+        "clip_end_ms": public["clip_end_ms"],
+        "clip_enabled": public["clip_enabled"],
         "artwork_url": f"/api/tasks/{public['id']}/artwork",
     }
 
@@ -5772,9 +5921,13 @@ def _process_task(task_id: str) -> None:
         )
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
+        waveform, clip_snapshot = _apply_clip_to_waveform(task, waveform)
         mode = task["mode"]
         audio_seconds = waveform.shape[1] / 44100.0 if waveform.shape[1] > 0 else 0.0
         with tasks_lock:
+            tasks[task_id]["clip_start_ms"] = clip_snapshot["clip_start_ms"]
+            tasks[task_id]["clip_end_ms"] = clip_snapshot["clip_end_ms"]
+            tasks[task_id]["clip_enabled"] = clip_snapshot["clip_enabled"]
             tasks[task_id]["audio_seconds"] = audio_seconds
             _refresh_runtime_plan(tasks[task_id], audio_seconds=audio_seconds)
             tasks[task_id]["predicted_total_seconds"] = _predict_task_runtime_seconds(mode, audio_seconds)
@@ -6932,6 +7085,9 @@ async def create_task(
     multi_stem_export: str = Form("zip"),
     video_handling: str = Form("audio_only"),
     source_dir: str | None = Form(None),
+    clip_start_ms: int | None = Form(None),
+    clip_end_ms: int | None = Form(None),
+    clip_enabled: bool | None = Form(None),
 ):
     try:
         _validate_mode_and_output_format(mode, output_format)
@@ -6946,6 +7102,9 @@ async def create_task(
             output_format=output_format,
             video_handling=video_handling,
             multi_stem_export=multi_stem_export,
+            clip_start_ms=clip_start_ms,
+            clip_end_ms=clip_end_ms,
+            clip_enabled=clip_enabled,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=True,
         )
@@ -6988,6 +7147,56 @@ async def task_events(task_id: str):
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
     return _public_task(_require_task(task_id))
+
+
+@app.post("/api/tasks/{task_id}/edit")
+async def edit_task(task_id: str, request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        task = _update_task_clip_settings(
+            task_id,
+            clip_start_ms=body.get("clip_start_ms"),
+            clip_end_ms=body.get("clip_end_ms"),
+            clip_enabled=body.get("clip_enabled"),
+        )
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    return _public_task(task)
+
+
+@app.get("/api/tasks/{task_id}/preview_audio")
+async def task_preview_audio(task_id: str, output: str | None = None):
+    try:
+        task = _require_task(task_id)
+        audio_path = _task_named_output_path(task, output)
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    media_type, _encoding = mimetypes.guess_type(str(audio_path))
+    return FileResponse(
+        audio_path,
+        media_type=media_type or "audio/mpeg",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/api/tasks/{task_id}/waveform")
+async def task_waveform(task_id: str, output: str | None = None) -> dict[str, Any]:
+    try:
+        task = _require_task(task_id)
+        audio_path = _task_named_output_path(task, output)
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    payload = _editor_waveform_payload_for_path(audio_path)
+    payload.update(_task_clip_snapshot(task, duration_ms=int(payload.get("duration_ms") or 0)))
+    return payload
 
 
 @app.get("/api/tasks/{task_id}/artwork")
@@ -7393,6 +7602,9 @@ async def compat_upload(
     multi_stem_export: str | None = Form(None),
     video_handling: str | None = Form(None),
     source_dir: str | None = Form(None),
+    clip_start_ms: int | None = Form(None),
+    clip_end_ms: int | None = Form(None),
+    clip_enabled: bool | None = Form(None),
 ):
     try:
         mode = _stems_to_mode(stems)
@@ -7411,6 +7623,9 @@ async def compat_upload(
             output_format=resolved_output_format,
             video_handling=resolved_video_handling,
             multi_stem_export=resolved_multi_stem_export,
+            clip_start_ms=clip_start_ms,
+            clip_end_ms=clip_end_ms,
+            clip_enabled=clip_enabled,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=False,
         )
