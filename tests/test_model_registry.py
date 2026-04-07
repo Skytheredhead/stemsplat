@@ -231,6 +231,10 @@ class ModelRegistryTests(unittest.TestCase):
                     expected_required = ["vocals", "mel_band_karaoke"]
                 if mode == "htdemucs_ft_other":
                     expected_required = ["guitar", "htdemucs_ft_other"]
+                if mode == "drumsep_6s":
+                    expected_required = ["htdemucs_ft_drums", "drumsep_6s"]
+                if mode == "drumsep_4s":
+                    expected_required = ["htdemucs_ft_drums", "drumsep_4s"]
                 self.assertEqual(list(self.mode_required_models[mode]), expected_required)
 
         self.assertEqual(list(self.mode_to_stems["both_separate"]), ["vocals", "instrumental"])

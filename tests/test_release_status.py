@@ -162,7 +162,7 @@ class ReleaseStatusTests(unittest.TestCase):
                 {"name": "Stemsplat-v0.5.0.zip", "url": "https://example.com/Stemsplat-v0.5.0.zip", "size": 100},
             ],
         }
-        calls: list[tuple[str, Path, str]] = []
+        calls: list[tuple[str, Path, str, bool]] = []
 
         class _ImmediateThread:
             def __init__(self, *, target, args=(), daemon=None, **_kwargs) -> None:
@@ -180,8 +180,8 @@ class ReleaseStatusTests(unittest.TestCase):
             def is_alive(self) -> bool:
                 return self._alive
 
-        def _fake_download(url: str, dest: Path, *, user_agent: str, progress_cb=None) -> Path:
-            calls.append((url, dest, user_agent))
+        def _fake_download(url: str, dest: Path, *, user_agent: str, progress_cb=None, force_redownload: bool = False) -> Path:
+            calls.append((url, dest, user_agent, force_redownload))
             dest.parent.mkdir(parents=True, exist_ok=True)
             if progress_cb is not None:
                 progress_cb(
@@ -212,6 +212,60 @@ class ReleaseStatusTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "https://example.com/Stemsplat-v0.5.0.zip")
         self.assertEqual(calls[0][1], output_root / "Stemsplat-v0.5.0.zip")
         self.assertIn("stemsplat/", calls[0][2].lower())
+        self.assertTrue(calls[0][3])
+
+    def test_release_download_uses_unique_filename_when_asset_already_exists(self) -> None:
+        output_root = Path(self.tempdir.name) / "Downloads"
+        existing_path = output_root / "Stemsplat-v0.5.0.zip"
+        existing_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_path.write_bytes(b"old-bytes")
+        release = {
+            "version": "v0.5.0",
+            "name": "v0.5.0 release",
+            "url": "https://example.com/releases/v0.5.0",
+            "notes": "",
+            "assets": [
+                {"name": "Stemsplat-v0.5.0.zip", "url": "https://example.com/Stemsplat-v0.5.0.zip", "size": 100},
+            ],
+        }
+        calls: list[tuple[str, Path, str, bool]] = []
+
+        class _ImmediateThread:
+            def __init__(self, *, target, args=(), daemon=None, **_kwargs) -> None:
+                self._target = target
+                self._args = args
+                self._alive = False
+
+            def start(self) -> None:
+                self._alive = True
+                try:
+                    self._target(*self._args)
+                finally:
+                    self._alive = False
+
+            def is_alive(self) -> bool:
+                return self._alive
+
+        def _fake_download(url: str, dest: Path, *, user_agent: str, progress_cb=None, force_redownload: bool = False) -> Path:
+            calls.append((url, dest, user_agent, force_redownload))
+            dest.write_bytes(b"new-bytes")
+            return dest
+
+        with mock.patch.object(main, "_fetch_latest_release", return_value=release):
+            with mock.patch.object(main, "OUTPUT_ROOT", output_root):
+                with mock.patch.object(main, "download_url_to_path", side_effect=_fake_download):
+                    with mock.patch.object(main.threading, "Thread", _ImmediateThread):
+                        response = self.client.post("/api/release_download")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["filename"], "Stemsplat-v0.5.0_2.zip")
+        self.assertEqual(Path(payload["path"]), output_root / "Stemsplat-v0.5.0_2.zip")
+        self.assertEqual(existing_path.read_bytes(), b"old-bytes")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], output_root / "Stemsplat-v0.5.0_2.zip")
+        self.assertTrue(calls[0][3])
 
     def test_release_download_status_reports_current_state(self) -> None:
         main._set_release_download_state(status="downloading", pct=42, current_asset="Stemsplat.zip")

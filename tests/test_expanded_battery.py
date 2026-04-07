@@ -448,6 +448,30 @@ class ExpandedBatteryProcessingTests(ExpandedBatteryBase):
         self.assertTrue(archive_path.exists())
         self.assertEqual(archive_path.suffix, ".zip")
 
+    def test_drumsep_6s_runs_drums_model_before_drum_split(self) -> None:
+        source = self.make_audio("drumsplit6.wav", seconds=1.0)
+        payload = self.upload_task(source, stems="drumsep_6s", multi_stem_export="separate")
+        task_id = str(payload["task_id"])
+        self.start_task(task_id, output_root=self.output_root, multi_stem_export="separate")
+        task = self.run_task_to_completion(task_id)
+
+        self.assertEqual(task["status"], "done")
+        observed_models = [model_key for model_key, _shape in self.controller.observed_inputs]
+        self.assertEqual(observed_models[:2], ["htdemucs_ft_drums", "drumsep_6s"])
+        self.assertEqual(sorted(task["outputs"]), ["drumsplit6 - crash.wav", "drumsplit6 - hh.wav", "drumsplit6 - kick.wav", "drumsplit6 - ride.wav", "drumsplit6 - snare.wav", "drumsplit6 - toms.wav"])
+
+    def test_drumsep_4s_runs_drums_model_before_drum_split(self) -> None:
+        source = self.make_audio("drumsplit4.wav", seconds=1.0)
+        payload = self.upload_task(source, stems="drumsep_4s", multi_stem_export="separate")
+        task_id = str(payload["task_id"])
+        self.start_task(task_id, output_root=self.output_root, multi_stem_export="separate")
+        task = self.run_task_to_completion(task_id)
+
+        self.assertEqual(task["status"], "done")
+        observed_models = [model_key for model_key, _shape in self.controller.observed_inputs]
+        self.assertEqual(observed_models[:2], ["htdemucs_ft_drums", "drumsep_4s"])
+        self.assertEqual(sorted(task["outputs"]), ["drumsplit4 - cymbals.wav", "drumsplit4 - kick.wav", "drumsplit4 - snare.wav", "drumsplit4 - toms.wav"])
+
     def test_deep_path_import_survives_processing(self) -> None:
         nested_root = self.root / "deep"
         for index in range(12):

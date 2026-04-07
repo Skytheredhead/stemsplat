@@ -931,7 +931,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.4.1"
 DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -986,6 +986,9 @@ BOOST_GUITAR_MODEL_END_PCT = 92
 OTHER_FILTER_GUITAR_END_PCT = 44
 OTHER_FILTER_OTHER_START_PCT = 48
 OTHER_FILTER_OTHER_END_PCT = 92
+DRUM_SPLIT_DRUMS_END_PCT = 44
+DRUM_SPLIT_DETAIL_START_PCT = 48
+DRUM_SPLIT_DETAIL_END_PCT = 95
 ALL_STEMS_VOCALS_END_PCT = 20
 ALL_STEMS_INSTRUMENTAL_START_PCT = 22
 ALL_STEMS_INSTRUMENTAL_END_PCT = 36
@@ -1155,6 +1158,19 @@ MODEL_DISPLAY_NAMES = {
     "drumsep_6s": "drum split - 6",
     "drumsep_4s": "drum split - 4",
 }
+ARCHIVE_MODE_LABELS = {
+    "both_deux": "both",
+    "both_separate": "both",
+    "bs_roformer_6s": "full mix",
+    "htdemucs_6s": "full mix faster",
+    "drumsep_6s": "drum split - 6",
+    "drumsep_4s": "drum split - 4",
+    "preset_all_stems": "all stems",
+    "preset_voc_instrum": "vocals and instrumental",
+    "preset_boost_harmonies": "boost harmonies",
+    "preset_boost_guitar": "boost guitar",
+    "preset_denoise": "denoise",
+}
 MODE_TO_STEMS = {
     "unselected": (),
     "vocals": ("vocals",),
@@ -1191,8 +1207,8 @@ MODE_REQUIRED_MODELS = {
     "htdemucs_ft_bass": ("htdemucs_ft_bass",),
     "htdemucs_ft_other": ("guitar", "htdemucs_ft_other"),
     "htdemucs_6s": ("htdemucs_6s",),
-    "drumsep_6s": ("drumsep_6s",),
-    "drumsep_4s": ("drumsep_4s",),
+    "drumsep_6s": ("htdemucs_ft_drums", "drumsep_6s"),
+    "drumsep_4s": ("htdemucs_ft_drums", "drumsep_4s"),
     "preset_all_stems": ("vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"),
     "preset_voc_instrum": ("vocals", "instrumental"),
     "preset_boost_harmonies": ("vocals", "mel_band_karaoke"),
@@ -1824,15 +1840,19 @@ def _select_release_download_asset(release: dict[str, Any]) -> dict[str, Any]:
     return best
 
 
+def _release_download_destination(asset_name: str) -> Path:
+    return ensure_unique_path(_ensure_dir(OUTPUT_ROOT) / asset_name)
+
+
 def _download_latest_release_to_downloads() -> tuple[dict[str, Any], Path]:
     release = _fetch_latest_release()
     asset = _select_release_download_asset(release)
-    destination_dir = _ensure_dir(OUTPUT_ROOT)
-    destination = destination_dir / str(asset.get("name") or "stemsplat-update.zip")
+    destination = _release_download_destination(str(asset.get("name") or "stemsplat-update.zip"))
     saved_path = download_url_to_path(
         str(asset.get("url") or ""),
         destination,
         user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
+        force_redownload=True,
     )
     latest_version = str(release.get("version") or "").strip()
     if latest_version:
@@ -1875,14 +1895,16 @@ def _run_release_download() -> None:
         return
 
     asset_name = str(asset.get("name") or "update")
+    destination_path = _release_download_destination(asset_name)
+    destination_name = destination_path.name
     release_version = str(release.get("version") or "").strip()
     release_name = str(release.get("name") or "").strip()
     asset_size = int(asset.get("size") or 0)
     _set_release_download_state(
         status="downloading",
         pct=1,
-        step=f"downloading {asset_name}",
-        current_asset=asset_name,
+        step=f"downloading {destination_name}",
+        current_asset=destination_name,
         downloaded_bytes=0,
         total_bytes=asset_size,
         download_rate_bytes_per_sec=0.0,
@@ -1890,7 +1912,7 @@ def _run_release_download() -> None:
         started_at=time.time(),
         error="",
         path="",
-        filename=asset_name,
+        filename=destination_name,
         version=release_version,
         release_name=release_name,
     )
@@ -1910,14 +1932,14 @@ def _run_release_download() -> None:
         _set_release_download_state(
             status="downloading",
             pct=int(update.get("pct") or 0),
-            step=f"downloading {asset_name}",
-            current_asset=asset_name,
+            step=f"downloading {destination_name}",
+            current_asset=destination_name,
             downloaded_bytes=downloaded_bytes,
             total_bytes=total_bytes,
             download_rate_bytes_per_sec=download_rate_bytes_per_sec,
             eta_seconds=eta_seconds,
             error="",
-            filename=asset_name,
+            filename=destination_name,
             version=release_version,
             release_name=release_name,
         )
@@ -1925,20 +1947,21 @@ def _run_release_download() -> None:
     try:
         saved_path = download_url_to_path(
             str(asset.get("url") or ""),
-            _ensure_dir(OUTPUT_ROOT) / asset_name,
+            destination_path,
             progress_cb=_progress,
             user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
+            force_redownload=True,
         )
     except Exception as exc:
         logger.error("release download failed", exc_info=True)
         _set_release_download_state(
             status="error",
             step="download failed",
-            current_asset=asset_name,
+            current_asset=destination_name,
             download_rate_bytes_per_sec=0.0,
             eta_seconds=None,
             error=_release_download_error_message(exc),
-            filename=asset_name,
+            filename=destination_name,
             version=release_version,
             release_name=release_name,
         )
@@ -3373,6 +3396,7 @@ def _stage_model_key(stage_text: str) -> str | None:
         "running denoise model": "denoise",
         "running bs-roformer 6s model": "bs_roformer_6s",
         "running full mix model": "bs_roformer_6s",
+        "running drums model": "htdemucs_ft_drums",
         "running htdemucs4 ft drums model": "htdemucs_ft_drums",
         "running htdemucs4 ft bass model": "htdemucs_ft_bass",
         "running htdemucs4 ft other model": "htdemucs_ft_other",
@@ -3408,8 +3432,10 @@ def _runtime_model_sequence(mode: str) -> list[str]:
         return [mode]
     if mode == "htdemucs_ft_other":
         return ["guitar", "htdemucs_ft_other"]
-    if mode in {"drumsep_6s", "drumsep_4s"}:
-        return [mode]
+    if mode == "drumsep_6s":
+        return ["htdemucs_ft_drums", "drumsep_6s"]
+    if mode == "drumsep_4s":
+        return ["htdemucs_ft_drums", "drumsep_4s"]
     if mode == "both_deux":
         return ["deux"]
     if mode == "preset_all_stems":
@@ -3793,6 +3819,8 @@ def _update_task_runtime_view(task: dict[str, Any], *, now: float | None = None)
     runtime_plan = task.get("runtime_plan")
     if status != "running" or not isinstance(runtime_plan, dict):
         return
+    previous_pct = max(0, min(99, int(task.get("pct") or 0)))
+    last_progress_pct = max(0, min(99, int(task.get("last_progress_pct") or 0)))
 
     stages = [stage for stage in list(runtime_plan.get("stages") or []) if isinstance(stage, dict)]
     if not stages:
@@ -3831,6 +3859,7 @@ def _update_task_runtime_view(task: dict[str, Any], *, now: float | None = None)
     pct = max(0, min(99, pct))
     if remaining_seconds > max(45.0, predicted_total_seconds * 0.15):
         pct = min(pct, 90)
+    pct = max(pct, previous_pct, last_progress_pct)
 
     task["predicted_total_seconds"] = predicted_total_seconds
     task["pct"] = pct
@@ -4531,6 +4560,12 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         if mode == "htdemucs_ft_other" and stage_model == "htdemucs_ft_other":
             span = max(1, OTHER_FILTER_OTHER_END_PCT - OTHER_FILTER_OTHER_START_PCT)
             return max(0.0, min(1.0, (clamped - OTHER_FILTER_OTHER_START_PCT) / span))
+        if mode in {"drumsep_6s", "drumsep_4s"} and stage_model == "htdemucs_ft_drums":
+            span = max(1, DRUM_SPLIT_DRUMS_END_PCT - MODEL_PROGRESS_START_PCT)
+            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
+        if mode in {"drumsep_6s", "drumsep_4s"} and stage_model in {"drumsep_6s", "drumsep_4s"}:
+            span = max(1, DRUM_SPLIT_DETAIL_END_PCT - DRUM_SPLIT_DETAIL_START_PCT)
+            return max(0.0, min(1.0, (clamped - DRUM_SPLIT_DETAIL_START_PCT) / span))
         if mode == "preset_boost_harmonies" and stage_model == "mel_band_karaoke":
             span = max(1, BOOST_HARMONIES_BACKGROUND_END_PCT - BOOST_HARMONIES_BACKGROUND_START_PCT)
             return max(0.0, min(1.0, (clamped - BOOST_HARMONIES_BACKGROUND_START_PCT) / span))
@@ -4701,8 +4736,16 @@ def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
     return out_path, existing_outputs
 
 
+def _archive_mode_label(mode: str) -> str:
+    return str(ARCHIVE_MODE_LABELS.get(mode) or "").strip()
+
+
 def _download_label(task: dict[str, Any]) -> str:
-    return _safe_stem(str(task.get("original_name") or "stems"))
+    base = _safe_stem(str(task.get("original_name") or "stems"))
+    mode_label = _archive_mode_label(str(task.get("mode") or ""))
+    if mode_label:
+        return _safe_stem(f"{base} - {mode_label}")
+    return base
 
 
 def _output_subdir_for_label(mode: str, label: str) -> Path | None:
@@ -6084,16 +6127,32 @@ def _process_task(task_id: str) -> None:
             for label, tensor in zip(MODE_OUTPUT_LABELS["htdemucs_6s"], htdemucs_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
         elif mode == "drumsep_6s":
+            drums_model = manager.get("htdemucs_ft_drums")
             drumsep_6s_model = manager.get("drumsep_6s")
+            drums_started_at = time.time()
+            drums_pred = _run_model_for_spec(
+                "htdemucs_ft_drums",
+                drums_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running drums model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, DRUM_SPLIT_DRUMS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("htdemucs_ft_drums", audio_seconds, time.time() - drums_started_at)
+            drums_tensor = _extract_target_tensor("htdemucs_ft_drums", drums_model, drums_pred)
+
             drumsep_6s_started_at = time.time()
             drumsep_6s_pred = _run_model_for_spec(
                 "drumsep_6s",
                 drumsep_6s_model,
-                waveform,
+                drums_tensor,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running drumsep 6 stem model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                    _map_fraction(DRUM_SPLIT_DETAIL_START_PCT, DRUM_SPLIT_DETAIL_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
             )
@@ -6101,16 +6160,32 @@ def _process_task(task_id: str) -> None:
             for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_6s"], drumsep_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
         elif mode == "drumsep_4s":
+            drums_model = manager.get("htdemucs_ft_drums")
             drumsep_4s_model = manager.get("drumsep_4s")
+            drums_started_at = time.time()
+            drums_pred = _run_model_for_spec(
+                "htdemucs_ft_drums",
+                drums_model,
+                waveform,
+                progress_cb=lambda frac: _set_task_progress(
+                    task_id,
+                    "Running drums model",
+                    _map_fraction(MODEL_PROGRESS_START_PCT, DRUM_SPLIT_DRUMS_END_PCT, frac),
+                ),
+                stop_check=lambda: _stop_check(task_id),
+            )
+            _record_eta_sample("htdemucs_ft_drums", audio_seconds, time.time() - drums_started_at)
+            drums_tensor = _extract_target_tensor("htdemucs_ft_drums", drums_model, drums_pred)
+
             drumsep_4s_started_at = time.time()
             drumsep_4s_pred = _run_model_for_spec(
                 "drumsep_4s",
                 drumsep_4s_model,
-                waveform,
+                drums_tensor,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running drum sep 4 stem model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
+                    _map_fraction(DRUM_SPLIT_DETAIL_START_PCT, DRUM_SPLIT_DETAIL_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
             )
@@ -7152,7 +7227,7 @@ async def download_previous_file(entry_id: str):
         output = existing_outputs[0]
         return FileResponse(output, filename=output.name)
     archive_dir = _ensure_dir(RUNTIME_DIR / "downloads")
-    archive_name = f"{_safe_stem(str(entry.get('original_name') or 'stems'))}.zip"
+    archive_name = f"{_download_label(entry)}.zip"
     archive_path = archive_dir / f"history_{entry_id}_{archive_name}"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for output in existing_outputs:

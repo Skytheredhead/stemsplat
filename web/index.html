@@ -1829,6 +1829,7 @@
     let modelStatusPoll = null;
     let releaseStatusPoll = null;
     let activeReleaseOverlay = null;
+    let activeReleaseVersion = '';
     let activePortOverlay = null;
     let activeModelOverlay = null;
     let activeHostClosedOverlay = null;
@@ -1842,8 +1843,10 @@
     let activeModelOverlayUi = null;
     let activeReleaseOverlayUi = null;
     let activeModelToast = null;
+    let activeReleaseToast = null;
     let activeModelReminderToast = null;
     let modelToastTimer = null;
+    let releaseToastTimer = null;
     let modelDownloadIntentActive = false;
     let modelDownloadObservedActive = false;
     let ffmpegNoticeShown = false;
@@ -2022,7 +2025,7 @@
       drumsep_4s: 'https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.5',
     };
     const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
-    const RELEASE_REMIND_LATER_MS = 12 * 60 * 60 * 1000;
+    const RELEASE_SESSION_DISMISS_KEY = 'releaseUpdateDismissedThisSession';
     const RELEASE_SNOOZE_STORAGE_KEY = 'releaseUpdateSnooze';
     const isLanClient = !['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
 
@@ -5196,8 +5199,10 @@
         if(e.target === overlay || e.target === bg){
           closeOverlay(overlay);
           if(activeReleaseOverlay === overlay){
+            dismissReleaseUntilNextOpen(activeReleaseVersion);
             activeReleaseOverlay = null;
             activeReleaseOverlayUi = null;
+            activeReleaseVersion = '';
             stopReleaseStatusPolling();
           }
           if(activePortOverlay === overlay) activePortOverlay = null;
@@ -5209,8 +5214,10 @@
         if(e.key === 'Escape'){
           closeOverlay(overlay);
           if(activeReleaseOverlay === overlay){
+            dismissReleaseUntilNextOpen(activeReleaseVersion);
             activeReleaseOverlay = null;
             activeReleaseOverlayUi = null;
+            activeReleaseVersion = '';
             stopReleaseStatusPolling();
           }
           if(activePortOverlay === overlay) activePortOverlay = null;
@@ -5389,6 +5396,7 @@
       activePortOverlay = null;
       activeReleaseOverlay = null;
       activeReleaseOverlayUi = null;
+      activeReleaseVersion = '';
       stopReleaseStatusPolling();
       activeModelOverlay = null;
 
@@ -6142,24 +6150,75 @@
       }
     }
 
-    function syncReleaseOverlayProgress(status){
-      const ui = activeReleaseOverlayUi;
-      if(!ui) return;
+    function clearReleaseToastTimer(){
+      if(releaseToastTimer){
+        clearTimeout(releaseToastTimer);
+        releaseToastTimer = null;
+      }
+    }
+
+    function removeReleaseDownloadToast({ immediate = false } = {}){
+      clearReleaseToastTimer();
+      if(!activeReleaseToast) return;
+      const card = activeReleaseToast.card;
+      activeReleaseToast = null;
+      dismissToastCard(card, { immediate });
+    }
+
+    function queueReleaseToastRemoval(delayMs){
+      clearReleaseToastTimer();
+      releaseToastTimer = setTimeout(() => {
+        releaseToastTimer = null;
+        removeReleaseDownloadToast();
+      }, delayMs);
+    }
+
+    function ensureReleaseDownloadToast(){
+      if(activeReleaseToast && activeReleaseToast.card && activeReleaseToast.card.isConnected){
+        return activeReleaseToast;
+      }
+      const wrap = ensureToastWrap();
+      const card = document.createElement('div');
+      card.className = 'toast-card glass';
+      const title = document.createElement('div');
+      title.className = 'toast-title';
+      const body = document.createElement('div');
+      body.className = 'toast-body';
+      const progress = document.createElement('div');
+      progress.className = 'toast-progress';
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      bar.appendChild(fill);
+      const meta = document.createElement('div');
+      meta.className = 'text-xs opacity-70';
+      progress.append(bar, meta);
+      card.append(title, body, progress);
+      wrap.appendChild(card);
+      activeReleaseToast = { card, title, body, fill, meta, progress };
+      return activeReleaseToast;
+    }
+
+    function syncReleaseDownloadToast(status){
       const statusText = String(status && status.status || '').toLowerCase();
       const isStarting = statusText === 'starting';
       const isDownloading = statusText === 'downloading';
       const isBusy = isStarting || isDownloading;
       const isError = statusText === 'error';
       const isDone = statusText === 'done';
-      const showProgress = isBusy || isError || isDone;
-      ui.progressWrap.hidden = !showProgress;
-      ui.progressWrap.classList.toggle('open', showProgress);
-      ui.progressFill.style.width = `${Math.max(0, Math.min(100, Number(status && status.pct) || 0))}%`;
+      if(!isBusy && !isError && !isDone){
+        removeReleaseDownloadToast({ immediate: true });
+        return;
+      }
+
+      const toast = ensureReleaseDownloadToast();
+      const pct = Math.max(0, Math.min(100, Number(status && status.pct) || 0));
+      toast.fill.style.width = `${isDone ? 100 : pct}%`;
 
       if(isBusy){
-        ui.progressNote.textContent = isStarting
-          ? 'preparing download...'
-          : `downloading ${status.current_asset || status.filename || 'update'}`;
+        clearReleaseToastTimer();
+        const label = status.current_asset || status.filename || 'update';
         const bits = [];
         if(Number(status.total_bytes || 0) > 0){
           bits.push(`${Math.max(0, status.pct || 0)}%`);
@@ -6168,42 +6227,29 @@
         const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
         if(rate) bits.push(rate);
         const eta = formatEta(status.eta_seconds);
-        if(eta) bits.push(`${eta} remaining`);
-        ui.progressMeta.textContent = bits.join(' · ');
-      }else if(isError){
-        ui.progressNote.textContent = 'download failed';
-        ui.progressMeta.textContent = status.error || 'could not download update';
-      }else if(isDone){
-        ui.progressNote.textContent = `downloaded ${status.filename || 'update'} to Downloads`;
-        ui.progressMeta.textContent = `${formatBytes(status.downloaded_bytes)} saved`;
-      }else{
-        ui.progressNote.textContent = '';
-        ui.progressMeta.textContent = '';
+        toast.title.textContent = isStarting ? 'starting update download...' : `downloading ${label}`;
+        toast.body.textContent = bits.join(' · ');
+        toast.meta.textContent = eta ? `${eta} remaining` : '';
+        toast.progress.hidden = false;
+        return;
       }
 
-      ui.laterBtn.disabled = isBusy;
-      ui.laterBtn.classList.toggle('dimmed-control', isBusy);
-      ui.downloadBtn.disabled = isBusy || isDone;
-      if(isBusy){
-        ui.downloadBtn.textContent = 'downloading...';
-      }else if(isDone){
-        ui.downloadBtn.textContent = 'downloaded';
-      }else if(isError){
-        ui.downloadBtn.textContent = 'retry download';
-      }else{
-        ui.downloadBtn.textContent = 'download update';
+      if(isError){
+        toast.title.textContent = 'update download failed';
+        toast.body.textContent = status.error || 'could not download update';
+        toast.meta.textContent = '';
+        toast.progress.hidden = false;
+        stopReleaseStatusPolling();
+        queueReleaseToastRemoval(8000);
+        return;
       }
 
-      if(isDone){
-        stopReleaseStatusPolling();
-        const message = `downloaded ${status.filename || 'update'} to Downloads`;
-        closeOverlay(activeReleaseOverlay);
-        activeReleaseOverlay = null;
-        activeReleaseOverlayUi = null;
-        showPopup(message);
-      }else if(isError){
-        stopReleaseStatusPolling();
-      }
+      toast.title.textContent = 'update downloaded';
+      toast.body.textContent = `${status.filename || 'update'} · ${formatBytes(status.downloaded_bytes)} saved`;
+      toast.meta.textContent = 'Downloads';
+      toast.progress.hidden = false;
+      stopReleaseStatusPolling();
+      queueReleaseToastRemoval(3200);
     }
 
     async function refreshReleaseDownloadStatus(){
@@ -6213,7 +6259,7 @@
           return null;
         }
         const data = await res.json();
-        syncReleaseOverlayProgress(data);
+        syncReleaseDownloadToast(data);
         return data;
       }catch(err){
         console.warn('release download status failed', err);
@@ -6229,40 +6275,56 @@
     }
 
     async function downloadReleaseUpdate(){
+      stopReleaseStatusPolling();
+      closeOverlay(activeReleaseOverlay);
+      activeReleaseOverlay = null;
+      activeReleaseOverlayUi = null;
+      activeReleaseVersion = '';
       try{
         const res = await fetch('/api/release_download', { method: 'POST' });
         if(!res.ok){
           throw new Error(await responseErrorMessage(res, 'could not download update'));
         }
         const data = await res.json();
-        syncReleaseOverlayProgress(data);
-        startReleaseStatusPolling();
+        syncReleaseDownloadToast(data);
+        const statusText = String(data && data.status || '').toLowerCase();
+        if(statusText === 'starting' || statusText === 'downloading'){
+          startReleaseStatusPolling();
+        }
       }catch(err){
+        removeReleaseDownloadToast({ immediate: true });
         showPopup((err && err.message) || 'could not download update');
       }
     }
 
-    function readReleaseSnooze(){
+    function clearLegacyReleaseSnooze(){
       try{
-        return JSON.parse(localStorage.getItem(RELEASE_SNOOZE_STORAGE_KEY) || 'null');
+        localStorage.removeItem(RELEASE_SNOOZE_STORAGE_KEY);
       }catch(err){
-        console.warn('release snooze read failed', err);
-        return null;
+        console.warn('release snooze clear failed', err);
       }
     }
 
-    function writeReleaseSnooze(version){
+    function readReleaseSessionDismiss(){
       try{
+        clearLegacyReleaseSnooze();
+        return String(sessionStorage.getItem(RELEASE_SESSION_DISMISS_KEY) || '');
+      }catch(err){
+        console.warn('release dismiss read failed', err);
+        return '';
+      }
+    }
+
+    function dismissReleaseUntilNextOpen(version){
+      try{
+        clearLegacyReleaseSnooze();
         if(!version){
-          localStorage.removeItem(RELEASE_SNOOZE_STORAGE_KEY);
+          sessionStorage.removeItem(RELEASE_SESSION_DISMISS_KEY);
           return;
         }
-        localStorage.setItem(RELEASE_SNOOZE_STORAGE_KEY, JSON.stringify({
-          version,
-          until: Date.now() + RELEASE_REMIND_LATER_MS,
-        }));
+        sessionStorage.setItem(RELEASE_SESSION_DISMISS_KEY, version);
       }catch(err){
-        console.warn('release snooze write failed', err);
+        console.warn('release dismiss write failed', err);
       }
     }
 
@@ -6270,8 +6332,10 @@
       stopReleaseStatusPolling();
       closeOverlay(activeReleaseOverlay);
       activeReleaseOverlayUi = null;
+      activeReleaseVersion = '';
       const { overlay, card } = createOverlayCard('new release available');
       activeReleaseOverlay = overlay;
+      activeReleaseVersion = status.latest_version || '';
       const headline = status.latest_name || status.latest_version || 'new release';
       const info = document.createElement('div');
       info.className = 'text-sm opacity-90';
@@ -6292,42 +6356,20 @@
       row.className = 'flex gap-3 justify-end flex-wrap';
       const laterBtn = makeActionButton('later', 'bg-white/10 text-white');
       const downloadBtn = makeActionButton('download update', 'bg-white text-black');
-      const progressWrap = document.createElement('div');
-      progressWrap.className = 'model-overlay-progress space-y-2';
-      progressWrap.hidden = true;
-      const progressNote = document.createElement('div');
-      progressNote.className = 'model-overlay-note';
-      const progressBar = document.createElement('div');
-      progressBar.className = 'bar';
-      const progressFill = document.createElement('div');
-      progressFill.className = 'bar-fill';
-      progressBar.appendChild(progressFill);
-      const progressMeta = document.createElement('div');
-      progressMeta.className = 'text-xs opacity-70';
-      progressWrap.append(progressNote, progressBar, progressMeta);
-      card.appendChild(progressWrap);
       laterBtn.onclick = async () => {
-        writeReleaseSnooze(status.latest_version || '');
+        dismissReleaseUntilNextOpen(status.latest_version || '');
         stopReleaseStatusPolling();
         closeOverlay(activeReleaseOverlay);
         activeReleaseOverlay = null;
         activeReleaseOverlayUi = null;
+        activeReleaseVersion = '';
       };
       downloadBtn.onclick = async () => {
         await downloadReleaseUpdate();
       };
       row.append(laterBtn, downloadBtn);
       card.appendChild(row);
-      activeReleaseOverlayUi = {
-        overlay,
-        laterBtn,
-        downloadBtn,
-        progressWrap,
-        progressFill,
-        progressMeta,
-        progressNote,
-      };
-      void refreshReleaseDownloadStatus();
+      activeReleaseOverlayUi = { overlay, laterBtn, downloadBtn };
     }
 
     async function checkForReleaseUpdate(){
@@ -6337,10 +6379,10 @@
         const data = await res.json();
         const latest = data.latest_version || '';
         if(!data.update_available || !latest) return;
-        const snooze = readReleaseSnooze();
-        if(snooze?.version === latest && Number(snooze.until || 0) > Date.now()) return;
-        if(snooze?.version && snooze.version !== latest){
-          writeReleaseSnooze('');
+        const dismissedVersion = readReleaseSessionDismiss();
+        if(dismissedVersion === latest) return;
+        if(dismissedVersion && dismissedVersion !== latest){
+          dismissReleaseUntilNextOpen('');
         }
         if(latest === (data.skipped_version || '')) return;
         showReleaseOverlay(data);
@@ -7904,7 +7946,11 @@
           if(!data) return;
           const rawStage = data.stage;
           const stage = rawStage === 'errored' ? 'error' : rawStage;
-          const pct = data.pct;
+          const rawPct = data.pct;
+          const previousPct = taskRef && typeof taskRef.pct === 'number' && taskRef.pct >= 0 ? taskRef.pct : 0;
+          const pct = (typeof rawPct === 'number' && rawPct >= 0 && !['done', 'error', 'stopped'].includes(String(stage || '').toLowerCase()))
+            ? Math.max(rawPct, previousPct)
+            : rawPct;
           const stopPending = !!(taskRef && taskRef.stopRequested);
           const stopTerminal = stage === 'stopped' || stage === 'error' || stage === 'done';
           if(stopPending && !stopTerminal){

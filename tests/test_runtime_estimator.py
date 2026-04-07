@@ -186,6 +186,71 @@ class RuntimeEstimatorTests(unittest.TestCase):
         self.assertAlmostEqual(fraction, 0.2, places=3)
         self.assertEqual(eta_state, "calibrating")
 
+    def test_runtime_view_never_moves_running_progress_backward(self) -> None:
+        stats = main._blank_runtime_stats()
+        with mock.patch.object(main, "runtime_stats", stats):
+            task = {
+                "mode": "drumsep_6s",
+                "output_format": "wav",
+                "audio_seconds": 180.0,
+                "status": "running",
+                "stage": "Running drumsep 6 stem model",
+                "pct": 88,
+                "last_progress_pct": 88,
+                "eta_seconds": None,
+                "eta_state": None,
+                "eta_finish_at": None,
+                "eta_stage": None,
+                "runtime_plan": {
+                    "stages": [
+                        {
+                            "stage_key": "load_models",
+                            "predicted_seconds": 2.0,
+                            "started_at": 1.0,
+                            "completed_at": 3.0,
+                            "live_fraction": None,
+                            "supports_live_fraction": False,
+                        },
+                        {
+                            "stage_key": "prepare_audio",
+                            "predicted_seconds": 4.0,
+                            "started_at": 3.0,
+                            "completed_at": 7.0,
+                            "live_fraction": None,
+                            "supports_live_fraction": False,
+                        },
+                        {
+                            "stage_key": "htdemucs_ft_drums",
+                            "predicted_seconds": 70.0,
+                            "started_at": 7.0,
+                            "completed_at": 77.0,
+                            "live_fraction": None,
+                            "supports_live_fraction": True,
+                        },
+                        {
+                            "stage_key": "drumsep_6s",
+                            "predicted_seconds": 120.0,
+                            "started_at": 77.0,
+                            "completed_at": None,
+                            "live_fraction": 0.05,
+                            "supports_live_fraction": True,
+                        },
+                        {
+                            "stage_key": "export",
+                            "predicted_seconds": 12.0,
+                            "started_at": None,
+                            "completed_at": None,
+                            "live_fraction": None,
+                            "supports_live_fraction": False,
+                        },
+                    ]
+                },
+            }
+
+            main._update_task_runtime_view(task, now=90.0)
+
+        self.assertGreaterEqual(task["pct"], 88)
+
     def test_finalize_written_outputs_zips_multi_stem_exports_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
@@ -196,6 +261,7 @@ class RuntimeEstimatorTests(unittest.TestCase):
             task = {
                 "id": "task-1",
                 "original_name": "song.wav",
+                "mode": "both_separate",
                 "delivery": "folder",
                 "multi_stem_export_snapshot": "zip",
             }
@@ -206,11 +272,22 @@ class RuntimeEstimatorTests(unittest.TestCase):
             self.assertEqual(len(finalized), 1)
             archive_path = finalized[0]
             self.assertEqual(archive_path.suffix, ".zip")
+            self.assertEqual(archive_path.name, "song - both.zip")
             self.assertTrue(archive_path.exists())
             self.assertFalse(vocals.exists())
             self.assertFalse(drums.exists())
             with zipfile.ZipFile(archive_path) as archive:
                 self.assertEqual(sorted(archive.namelist()), ["song - drums.wav", "song - vocals.wav"])
+
+    def test_download_label_uses_preset_name_for_multi_output_archives(self) -> None:
+        label = main._download_label(
+            {
+                "original_name": "Stairway to Heaven.wav",
+                "mode": "preset_all_stems",
+            }
+        )
+
+        self.assertEqual(label, "Stairway to Heaven - all stems")
 
     def test_request_task_stop_pauses_queue_processing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

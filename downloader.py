@@ -491,6 +491,7 @@ def download_url_to_path(
     *,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     user_agent: str = "app-downloader",
+    force_redownload: bool = False,
 ) -> Path:
     dest = Path(dest).expanduser().resolve()
     item = {
@@ -513,7 +514,7 @@ def download_url_to_path(
     remote_metadata = get_remote_file_metadata(url)
     remote_len = remote_metadata.size
     expected_sha256 = remote_metadata.sha256
-    if _matches_expected_file(dest, expected_size=remote_len, expected_sha256=expected_sha256):
+    if not force_redownload and _matches_expected_file(dest, expected_size=remote_len, expected_sha256=expected_sha256):
         existing_size = remote_len if isinstance(remote_len, int) and remote_len > 0 else dest.stat().st_size
         _emit_progress(
             progress_cb,
