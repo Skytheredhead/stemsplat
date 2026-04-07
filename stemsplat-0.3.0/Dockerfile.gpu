@@ -1,0 +1,33 @@
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+
+# install Python + pip + git
+RUN apt-get update \
+ && apt-get install -y python3 python3-pip git \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# install dependencies
+RUN pip3 install --no-cache-dir \
+    torch \
+    torchaudio \
+    fastapi \
+    "uvicorn[standard]" \
+    click \
+    sse-starlette \
+    python-multipart \
+    numpy \
+    pyyaml \
+    soundfile \
+    tqdm \
+    einops \
+    rotary_embedding_torch \
+    packaging \
+    "beartype>=0.17" \
+    librosa \
+    imageio-ffmpeg \
+    certifi
+
+# copy your app and launch
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

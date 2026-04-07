@@ -25,12 +25,6 @@ ARGS=(
   --collect-submodules uvicorn
   --collect-submodules webview
   --collect-submodules imageio_ffmpeg
-  --collect-submodules demucs
-  --collect-submodules openunmix
-  --hidden-import numpy.core.multiarray
-  --hidden-import numpy.core.numeric
-  --hidden-import numpy._core.multiarray
-  --hidden-import numpy._core.numeric
   --collect-data imageio_ffmpeg
   --exclude-module librosa
   --exclude-module scipy
@@ -55,10 +49,10 @@ INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
 
 if [[ -f "${INFO_PLIST}" ]]; then
   /usr/libexec/PlistBuddy -c "Delete :LSUIElement" "${INFO_PLIST}" >/dev/null 2>&1 || true
-  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.4.2" "${INFO_PLIST}" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.4.2" "${INFO_PLIST}" >/dev/null
-  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 0.4.2" "${INFO_PLIST}" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 0.4.2" "${INFO_PLIST}" >/dev/null
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.3.0" "${INFO_PLIST}" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.3.0" "${INFO_PLIST}" >/dev/null
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 0.3.0" "${INFO_PLIST}" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 0.3.0" "${INFO_PLIST}" >/dev/null
   codesign --force --deep --sign - "${APP_BUNDLE}" >/dev/null
 fi
 

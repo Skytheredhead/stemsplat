@@ -1,0 +1,17 @@
+__pycache__/
+venv/
+build/
+dist/
+.pyinstaller-cache/
+.review-home/
+.format-test-home/
+.runtime/
+.install_state.json
+*.log
+Stemsplat.spec
+models/*
+!models/.gitkeep
+uploads/*
+!uploads/.gitkeep
+*.pyc
+.DS_Store

@@ -5,8 +5,6 @@ import asyncio
 import contextlib
 import gc
 import importlib
-import inspect
-import ipaddress
 import json
 import logging
 import math
@@ -16,7 +14,6 @@ import queue
 import re
 import resource
 import secrets
-import signal
 import shutil
 import socket
 import subprocess
@@ -25,7 +22,6 @@ import tempfile
 import threading
 import time
 import urllib.request
-from urllib.parse import unquote, urlparse
 import uuid
 import webbrowser
 import zipfile
@@ -43,17 +39,14 @@ import torch
 import yaml
 from beartype import beartype
 from beartype.typing import Callable as BeartypeCallable, Optional as BeartypeOptional, Tuple as BeartypeTuple
-from downloader import ModelDownloadError, SSL_CONTEXT, download_to, download_url_to_path
+from downloader import SSL_CONTEXT, download_to
 from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
     CONFIG_DIR,
-    INTERMEDIATE_CACHE_DIR,
     LOG_DIR,
     MODEL_DIR,
     OUTPUT_ROOT,
-    PREVIOUS_FILES_DIR,
-    PREVIOUS_FILES_INDEX_PATH,
     RESOURCE_DIR,
     RUNTIME_DIR,
     ETA_HISTORY_PATH,
@@ -72,17 +65,6 @@ from torch import einsum, nn
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 
-try:  # pragma: no cover - optional runtime dependency
-    from demucs.apply import TensorChunk, apply_model as demucs_apply_model
-    from demucs.states import set_state as demucs_set_state
-except Exception as exc:  # pragma: no cover - surfaced when fast models are used
-    TensorChunk = None  # type: ignore[assignment]
-    demucs_apply_model = None  # type: ignore[assignment]
-    demucs_set_state = None  # type: ignore[assignment]
-    _demucs_import_error = exc
-else:
-    _demucs_import_error = None
-
 try:
     from mutagen import File as MutagenFile
 except Exception:  # pragma: no cover - optional cleanup dependency
@@ -98,30 +80,6 @@ except Exception as exc:  # pragma: no cover - keep app importable for syntax ch
     _model_import_error = exc
 else:
     _model_import_error = None
-
-try:  # pragma: no cover - import failure is surfaced at runtime
-    from split.bs_roformer import BSRoformer
-except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
-    BSRoformer = None  # type: ignore[assignment]
-    _bs_model_import_error = exc
-else:
-    _bs_model_import_error = None
-
-try:  # pragma: no cover - import failure is surfaced at runtime
-    from split.drumsep_mdx23c import (
-        TFC_TDF_net,
-        config_namespace,
-        demix_mdx23c,
-        load_not_compatible_weights,
-    )
-except Exception as exc:  # pragma: no cover - keep app importable for syntax checks
-    TFC_TDF_net = None  # type: ignore[assignment]
-    config_namespace = None  # type: ignore[assignment]
-    demix_mdx23c = None  # type: ignore[assignment]
-    load_not_compatible_weights = None  # type: ignore[assignment]
-    _drumsep_import_error = exc
-else:
-    _drumsep_import_error = None
 
 
 def _optional_import(module_name: str) -> Any | None:
@@ -522,17 +480,15 @@ class MaskEstimator(Module):
         dim_inputs: BeartypeTuple[int, ...],
         depth,
         mlp_expansion_factor=4,
-        legacy_depth=False,
     ):
         super().__init__()
         self.dim_inputs = dim_inputs
         self.to_freqs = ModuleList([])
         dim_hidden = dim * mlp_expansion_factor
-        mlp_depth = max(1, depth - 1) if legacy_depth else depth
 
         for dim_in in dim_inputs:
             mlp = nn.Sequential(
-                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=mlp_depth),
+                MLP(dim, dim_in * 2, dim_hidden=dim_hidden, depth=depth),
                 nn.GLU(dim=-1),
             )
 
@@ -575,8 +531,6 @@ class MelBandRoformer(Module):
         stft_normalized=False,
         stft_window_fn: BeartypeOptional[BeartypeCallable] = None,
         mask_estimator_depth=1,
-        mlp_expansion_factor=4,
-        freqs_per_bands: BeartypeOptional[BeartypeTuple[int, ...]] = None,
         multi_stft_resolution_loss_weight=1.0,
         multi_stft_resolutions_window_sizes: BeartypeTuple[int, ...] = (
             4096,
@@ -645,36 +599,25 @@ class MelBandRoformer(Module):
             return_complex=True,
         ).shape[1]
 
-        band_count = len(freqs_per_bands) if freqs_per_bands is not None else num_bands
+        mel_filter_bank_fn = _mel_filter_bank or _local_mel_filter_bank
 
-        if freqs_per_bands is not None:
-            assert sum(freqs_per_bands) == freqs, "freqs_per_bands must sum to the STFT frequency bins"
-            freqs_per_band = torch.zeros((band_count, freqs), dtype=torch.bool)
-            start = 0
-            for band_index, band_width in enumerate(freqs_per_bands):
-                end = start + band_width
-                freqs_per_band[band_index, start:end] = True
-                start = end
-        else:
-            mel_filter_bank_fn = _mel_filter_bank or _local_mel_filter_bank
+        mel_filter_bank_numpy = mel_filter_bank_fn(
+            sample_rate=sample_rate,
+            n_fft=stft_n_fft,
+            n_mels=num_bands,
+        )
 
-            mel_filter_bank_numpy = mel_filter_bank_fn(
-                sample_rate=sample_rate,
-                n_fft=stft_n_fft,
-                n_mels=num_bands,
-            )
+        mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
 
-            mel_filter_bank = torch.from_numpy(mel_filter_bank_numpy)
+        mel_filter_bank[0][0] = 1.0
+        mel_filter_bank[-1, -1] = 1.0
 
-            mel_filter_bank[0][0] = 1.0
-            mel_filter_bank[-1, -1] = 1.0
-
-            freqs_per_band = mel_filter_bank > 0
+        freqs_per_band = mel_filter_bank > 0
         assert freqs_per_band.any(dim=0).all(), (
             "all frequencies need to be covered by all bands for now"
         )
 
-        repeated_freq_indices = repeat(torch.arange(freqs), "f -> b f", b=band_count)
+        repeated_freq_indices = repeat(torch.arange(freqs), "f -> b f", b=num_bands)
         freq_indices = repeated_freq_indices[freqs_per_band]
 
         if stereo:
@@ -701,11 +644,7 @@ class MelBandRoformer(Module):
 
         for _ in range(num_stems):
             mask_estimator = MaskEstimator(
-                dim=dim,
-                dim_inputs=freqs_per_bands_with_complex,
-                depth=mask_estimator_depth,
-                mlp_expansion_factor=mlp_expansion_factor,
-                legacy_depth=freqs_per_bands is not None,
+                dim=dim, dim_inputs=freqs_per_bands_with_complex, depth=mask_estimator_depth
             )
 
             self.mask_estimators.append(mask_estimator)
@@ -907,9 +846,6 @@ class ModelSpec:
     filename: str
     config: str
     segment: int
-    overlap: int = 2
-    kind: str = "roformer"
-    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -931,8 +867,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.4.2"
-DEFAULT_APP_PORT = 9876
+APP_VERSION = "0.3.0"
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 WATCHDOG_INTERVAL_SECONDS = 5.0
@@ -945,66 +880,16 @@ MPS_MEMORY_HEADROOM_RATIO = 0.88
 UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
 LAN_AUTH_COOKIE_NAME = "stemsplat_lan_auth"
 LAN_AUTH_TTL_CHOICES = {"15m", "1d", "1w", "never"}
-PREVIOUS_FILES_RETENTION_CHOICES: dict[str, int] = {
-    "12h": 12 * 60 * 60,
-    "1d": 24 * 60 * 60,
-    "3d": 3 * 24 * 60 * 60,
-    "1w": 7 * 24 * 60 * 60,
-    "2w": 14 * 24 * 60 * 60,
-    "1mo": 30 * 24 * 60 * 60,
-    "3mo": 90 * 24 * 60 * 60,
-    "6mo": 180 * 24 * 60 * 60,
-}
 LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth"}
 TERMINAL_TASK_RETENTION_LIMIT = 100
 MODEL_PROMPT_PENDING = "pending"
 MODEL_PROMPT_DISMISSED = "dismissed"
 MODEL_PROMPT_ACCEPTED = "accepted"
 MODEL_PROMPT_COMPLETE = "complete"
-PRESET_GAIN_DB_MIN = -18.0
-PRESET_GAIN_DB_MAX = 18.0
-PRESET_DEFAULT_OVERLAY_GAIN_DB = 3.0
-PRESET_DEFAULT_BASE_GAIN_DB = -3.0
-PREVIOUS_FILES_LIMIT_GB_MIN = 0.5
-PREVIOUS_FILES_LIMIT_GB_MAX = 1024.0
-PREVIOUS_FILES_WARN_GB_MIN = 0.1
-PREVIOUS_FILES_WARN_GB_MAX = 1024.0
-PREVIOUS_FILES_LIMIT_GB_DEFAULT = 10.0
-PREVIOUS_FILES_WARN_GB_DEFAULT = 8.0
-MULTI_STEM_EXPORT_CHOICES = {"zip", "separate"}
-BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
-BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
-BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB = PRESET_DEFAULT_OVERLAY_GAIN_DB
-BOOST_GUITAR_DEFAULT_BASE_GAIN_DB = PRESET_DEFAULT_BASE_GAIN_DB
-BOOST_HARMONIES_VOCALS_END_PCT = 44
-BOOST_HARMONIES_BACKGROUND_START_PCT = 48
-BOOST_HARMONIES_BACKGROUND_END_PCT = 92
-BG_VOCAL_VOCALS_END_PCT = 44
-BG_VOCAL_BACKGROUND_START_PCT = 48
-BG_VOCAL_BACKGROUND_END_PCT = 92
-BOOST_GUITAR_MODEL_END_PCT = 92
-OTHER_FILTER_GUITAR_END_PCT = 44
-OTHER_FILTER_OTHER_START_PCT = 48
-OTHER_FILTER_OTHER_END_PCT = 92
-DRUM_SPLIT_DRUMS_END_PCT = 44
-DRUM_SPLIT_DETAIL_START_PCT = 48
-DRUM_SPLIT_DETAIL_END_PCT = 95
-ALL_STEMS_VOCALS_END_PCT = 20
-ALL_STEMS_INSTRUMENTAL_START_PCT = 22
-ALL_STEMS_INSTRUMENTAL_END_PCT = 36
-ALL_STEMS_BACKGROUND_START_PCT = 38
-ALL_STEMS_BACKGROUND_END_PCT = 52
-ALL_STEMS_MULTI_START_PCT = 54
-ALL_STEMS_MULTI_END_PCT = 76
-ALL_STEMS_DRUMS_START_PCT = 78
-ALL_STEMS_DRUMS_END_PCT = 92
-INTERMEDIATE_CACHE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 COMPAT_SETTINGS_DEFAULTS = {
     "output_format": "same_as_input",
     "output_root": str(OUTPUT_ROOT),
-    "output_root_migrated_to_downloads": False,
     "output_same_as_input": False,
-    "multi_stem_export": "zip",
     "video_handling": "audio_only",
     "structure_mode": "flat",
     "model_prompt_state": MODEL_PROMPT_PENDING,
@@ -1018,13 +903,6 @@ COMPAT_SETTINGS_DEFAULTS = {
     "lan_passcode_enabled": False,
     "lan_passcode": "",
     "lan_passcode_ttl": "1d",
-    "previous_files_retention": "1w",
-    "previous_files_limit_gb": PREVIOUS_FILES_LIMIT_GB_DEFAULT,
-    "previous_files_warn_gb": PREVIOUS_FILES_WARN_GB_DEFAULT,
-    "boost_harmonies_background_vocals_gain_db": BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
-    "boost_harmonies_base_song_gain_db": BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
-    "boost_guitar_guitar_gain_db": BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
-    "boost_guitar_base_song_gain_db": BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
 }
 
 MODEL_SPECS: dict[str, ModelSpec] = {
@@ -1032,89 +910,16 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         filename="mel_band_roformer_vocals_becruily.ckpt",
         config="Mel Band Roformer Vocals Config.yaml",
         segment=352_800,
-        overlap=2,
     ),
     "instrumental": ModelSpec(
         filename="mel_band_roformer_instrumental_becruily.ckpt",
         config="Mel Band Roformer Instrumental Config.yaml",
         segment=352_800,
-        overlap=2,
     ),
     "deux": ModelSpec(
         filename="becruily_deux.ckpt",
         config="config_deux_becruily.yaml",
         segment=573_300,
-        overlap=2,
-    ),
-    "guitar": ModelSpec(
-        filename="becruily_guitar.ckpt",
-        config="config_guitar_becruily.yaml",
-        segment=485_100,
-        overlap=2,
-    ),
-    "mel_band_karaoke": ModelSpec(
-        filename="mel_band_roformer_karaoke_becruily.ckpt",
-        config="config_karaoke_becruily.yaml",
-        segment=485_100,
-        overlap=8,
-    ),
-    "denoise": ModelSpec(
-        filename="denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
-        config="model_mel_band_roformer_denoise.yaml",
-        segment=352_800,
-        overlap=4,
-    ),
-    "bs_roformer_6s": ModelSpec(
-        filename="BS-Rofo-SW-Fixed.ckpt",
-        config="BS-Rofo-SW-Fixed.yaml",
-        segment=588_800,
-        overlap=2,
-        kind="bs_roformer",
-    ),
-    "htdemucs_ft_drums": ModelSpec(
-        filename="f7e0c4bc-ba3fe64a.th",
-        config="config_musdb18_htdemucs.yaml",
-        segment=485_100,
-        overlap=4,
-        kind="demucs",
-        target="drums",
-    ),
-    "htdemucs_ft_bass": ModelSpec(
-        filename="d12395a8-e57c48e6.th",
-        config="config_musdb18_htdemucs.yaml",
-        segment=485_100,
-        overlap=4,
-        kind="demucs",
-        target="bass",
-    ),
-    "htdemucs_ft_other": ModelSpec(
-        filename="92cfc3b6-ef3bcb9c.th",
-        config="config_musdb18_htdemucs.yaml",
-        segment=485_100,
-        overlap=4,
-        kind="demucs",
-        target="other",
-    ),
-    "htdemucs_6s": ModelSpec(
-        filename="5c90dfd2-34c22ccb.th",
-        config="config_htdemucs_6stems.yaml",
-        segment=485_100,
-        overlap=4,
-        kind="demucs",
-    ),
-    "drumsep_6s": ModelSpec(
-        filename="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
-        config="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
-        segment=130_560,
-        overlap=4,
-        kind="mdx23c",
-    ),
-    "drumsep_4s": ModelSpec(
-        filename="model_drumsep.th",
-        config="config_drumsep.yaml",
-        segment=1_764_000,
-        overlap=4,
-        kind="demucs",
     ),
 }
 
@@ -1122,129 +927,17 @@ MODEL_ALIAS_MAP = {
     "mel_band_roformer_vocals_becruily.ckpt": ["Mel Band Roformer Vocals.ckpt"],
     "mel_band_roformer_instrumental_becruily.ckpt": ["Mel Band Roformer Instrumental.ckpt"],
     "becruily_deux.ckpt": ["Mel Band Roformer Deux.ckpt"],
-    "becruily_guitar.ckpt": ["Mel Band Roformer Guitar.ckpt"],
-    "mel_band_roformer_karaoke_becruily.ckpt": ["Mel Band Roformer Karaoke.ckpt"],
-    "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt": ["Mel Band Roformer Denoise.ckpt"],
-    "BS-Rofo-SW-Fixed.ckpt": ["BS-Rofo-SW-Fixed-v1.ckpt", "BS Rofo SW Fixed.ckpt"],
 }
 
 MODEL_URLS = {
     "vocals": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
     "instrumental": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
     "deux": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
-    "guitar": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-    "mel_band_karaoke": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-    "denoise": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
-    "bs_roformer_6s": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
-    "htdemucs_ft_drums": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
-    "htdemucs_ft_bass": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
-    "htdemucs_ft_other": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
-    "htdemucs_6s": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
-    "drumsep_6s": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
-    "drumsep_4s": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
 }
-MODEL_DISPLAY_NAMES = {
-    "vocals": "vocals",
-    "instrumental": "instrumental",
-    "deux": "both",
-    "guitar": "guitar",
-    "mel_band_karaoke": "bg vocal",
-    "denoise": "denoise",
-    "bs_roformer_6s": "full mix",
-    "htdemucs_ft_drums": "drums",
-    "htdemucs_ft_bass": "bass",
-    "htdemucs_ft_other": "other",
-    "htdemucs_6s": "full mix faster",
-    "drumsep_6s": "drum split - 6",
-    "drumsep_4s": "drum split - 4",
-}
-ARCHIVE_MODE_LABELS = {
-    "both_deux": "both",
-    "both_separate": "both",
-    "bs_roformer_6s": "full mix",
-    "htdemucs_6s": "full mix faster",
-    "drumsep_6s": "drum split - 6",
-    "drumsep_4s": "drum split - 4",
-    "preset_all_stems": "all stems",
-    "preset_voc_instrum": "vocals and instrumental",
-    "preset_boost_harmonies": "boost harmonies",
-    "preset_boost_guitar": "boost guitar",
-    "preset_denoise": "denoise",
-}
-MODE_TO_STEMS = {
-    "unselected": (),
-    "vocals": ("vocals",),
-    "instrumental": ("instrumental",),
-    "both_deux": ("deux",),
-    "both_separate": ("vocals", "instrumental"),
-    "guitar": ("guitar",),
-    "mel_band_karaoke": ("mel_band_karaoke",),
-    "denoise": ("denoise",),
-    "bs_roformer_6s": ("bs_roformer_6s",),
-    "htdemucs_ft_drums": ("htdemucs_ft_drums",),
-    "htdemucs_ft_bass": ("htdemucs_ft_bass",),
-    "htdemucs_ft_other": ("htdemucs_ft_other",),
-    "htdemucs_6s": ("htdemucs_6s",),
-    "drumsep_6s": ("drumsep_6s",),
-    "drumsep_4s": ("drumsep_4s",),
-    "preset_all_stems": ("all_stems",),
-    "preset_voc_instrum": ("voc_instrum",),
-    "preset_boost_harmonies": ("boost_harmonies",),
-    "preset_boost_guitar": ("boost_guitar",),
-    "preset_denoise": ("preset_denoise",),
-}
-MODE_REQUIRED_MODELS = {
-    "unselected": (),
-    "vocals": ("vocals",),
-    "instrumental": ("instrumental",),
-    "both_deux": ("deux",),
-    "both_separate": ("vocals", "instrumental"),
-    "guitar": ("guitar",),
-    "mel_band_karaoke": ("vocals", "mel_band_karaoke"),
-    "denoise": ("denoise",),
-    "bs_roformer_6s": ("bs_roformer_6s",),
-    "htdemucs_ft_drums": ("htdemucs_ft_drums",),
-    "htdemucs_ft_bass": ("htdemucs_ft_bass",),
-    "htdemucs_ft_other": ("guitar", "htdemucs_ft_other"),
-    "htdemucs_6s": ("htdemucs_6s",),
-    "drumsep_6s": ("htdemucs_ft_drums", "drumsep_6s"),
-    "drumsep_4s": ("htdemucs_ft_drums", "drumsep_4s"),
-    "preset_all_stems": ("vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"),
-    "preset_voc_instrum": ("vocals", "instrumental"),
-    "preset_boost_harmonies": ("vocals", "mel_band_karaoke"),
-    "preset_boost_guitar": ("guitar",),
-    "preset_denoise": ("denoise",),
-}
-MODE_OUTPUT_LABELS = {
-    "unselected": (),
-    "vocals": ("vocals",),
-    "instrumental": ("instrumental",),
-    "both_deux": ("vocals", "instrumental"),
-    "both_separate": ("vocals", "instrumental"),
-    "guitar": ("guitar",),
-    "mel_band_karaoke": ("bg vocal",),
-    "denoise": ("denoise",),
-    "bs_roformer_6s": ("bass", "drums", "other", "vocals", "guitar", "piano"),
-    "htdemucs_ft_drums": ("drums",),
-    "htdemucs_ft_bass": ("bass",),
-    "htdemucs_ft_other": ("other",),
-    "htdemucs_6s": ("drums", "bass", "other", "vocals", "guitar", "piano"),
-    "drumsep_6s": ("kick", "snare", "toms", "hh", "ride", "crash"),
-    "drumsep_4s": ("kick", "snare", "cymbals", "toms"),
-    "preset_all_stems": ("vocals", "background vocals", "bass", "drums", "other", "guitar", "piano", "kick", "snare", "toms", "hh", "ride", "crash"),
-    "preset_voc_instrum": ("vocals", "instrumental"),
-    "preset_boost_harmonies": ("boost harmonies",),
-    "preset_boost_guitar": ("boost guitar",),
-    "preset_denoise": ("denoise",),
-}
-ALL_STEMS_DRUM_OUTPUT_LABELS = frozenset(("kick", "snare", "toms", "hh", "ride", "crash"))
-ETA_HISTORY_KEYS = tuple(MODEL_SPECS.keys())
-RUNTIME_STATS_VERSION = 2
-RUNTIME_STATS_STAGE_LIMIT = 30
-RUNTIME_STATS_TASK_LIMIT = 30
-ETA_FINISHING_THRESHOLD_SECONDS = 15.0
-ETA_MIN_LIVE_FRACTION = 0.15
-ETA_MIN_LIVE_SECONDS = 5.0
+ETA_HISTORY_KEYS = ("vocals", "instrumental", "deux")
+ETA_HISTORY_LIMIT = 10
+ETA_PREP_OVERHEAD_SECONDS = 5.0
+ETA_EXPORT_PER_OUTPUT_SECONDS = 2.5
 MODEL_PROGRESS_START_PCT = 6
 SINGLE_MODEL_PROGRESS_END_PCT = 95
 DEUX_MODEL_PROGRESS_END_PCT = 95
@@ -1254,7 +947,7 @@ BOTH_SEPARATE_INSTRUMENTAL_END_PCT = 95
 EXPORT_PROGRESS_START_PCT = 96
 EXPORT_PROGRESS_END_PCT = 99
 
-MODE_CHOICES = set(MODE_TO_STEMS)
+MODE_CHOICES = {"vocals", "instrumental", "both_deux", "both_separate"}
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
 VIDEO_HANDLING_CHOICES = {"audio_only"}
 TERMINAL_STATUSES = {"done", "error", "stopped"}
@@ -1277,6 +970,7 @@ SUPPORTED_MEDIA_SUFFIXES = {
     ".mkv",
     ".avi",
 }
+OVERLAP_RATIO = 0.12
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 RUNTIME_CLEANUP_MAX_AGE_SEC = 24 * 60 * 60
 
@@ -1332,108 +1026,18 @@ def _locate_case_insensitive(path: Path) -> Path | None:
 compat_settings_lock = threading.RLock()
 
 
-def _coerce_gain_db(value: Any, default: float) -> float:
-    try:
-        parsed = float(value)
-    except Exception:
-        parsed = float(default)
-    if not math.isfinite(parsed):
-        parsed = float(default)
-    clamped = max(PRESET_GAIN_DB_MIN, min(PRESET_GAIN_DB_MAX, parsed))
-    return round(clamped * 10.0) / 10.0
-
-
-def _boost_harmonies_settings_payload(settings: dict[str, Any] | None = None) -> dict[str, float]:
-    source = settings or {}
-    return {
-        "overlay_gain_db": _coerce_gain_db(
-            source.get("boost_harmonies_background_vocals_gain_db"),
-            BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
-        ),
-        "base_song_gain_db": _coerce_gain_db(
-            source.get("boost_harmonies_base_song_gain_db"),
-            BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
-        ),
-    }
-
-
-def _boost_guitar_settings_payload(settings: dict[str, Any] | None = None) -> dict[str, float]:
-    source = settings or {}
-    return {
-        "overlay_gain_db": _coerce_gain_db(
-            source.get("boost_guitar_guitar_gain_db"),
-            BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
-        ),
-        "base_song_gain_db": _coerce_gain_db(
-            source.get("boost_guitar_base_song_gain_db"),
-            BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
-        ),
-    }
-
-
-def _preset_settings_payload_for_mode(mode: str, settings: dict[str, Any] | None = None) -> dict[str, float] | None:
-    if mode == "preset_boost_harmonies":
-        return _boost_harmonies_settings_payload(settings)
-    if mode == "preset_boost_guitar":
-        return _boost_guitar_settings_payload(settings)
-    return None
-
-
-def _coerce_storage_gb(value: Any, default: float, *, minimum: float, maximum: float) -> float:
-    try:
-        parsed = float(value)
-    except Exception:
-        parsed = float(default)
-    if not math.isfinite(parsed):
-        parsed = float(default)
-    clamped = max(minimum, min(maximum, parsed))
-    return round(clamped * 10.0) / 10.0
-
-
 def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(COMPAT_SETTINGS_DEFAULTS)
     normalized.update(settings)
     output_root = Path(str(normalized.get("output_root") or OUTPUT_ROOT)).expanduser()
-    legacy_documents_root = (Path.home() / "Documents").expanduser()
-    migrated_to_downloads = bool(normalized.get("output_root_migrated_to_downloads"))
-    if not migrated_to_downloads and output_root == legacy_documents_root:
-        output_root = OUTPUT_ROOT
-        migrated_to_downloads = True
-    elif output_root == OUTPUT_ROOT:
-        migrated_to_downloads = True
     normalized["output_root"] = str(output_root)
-    normalized["output_root_migrated_to_downloads"] = migrated_to_downloads
     normalized["output_same_as_input"] = bool(normalized.get("output_same_as_input"))
-    if str(normalized.get("multi_stem_export") or "") not in MULTI_STEM_EXPORT_CHOICES:
-        normalized["multi_stem_export"] = "zip"
     normalized["lan_passcode_enabled"] = bool(normalized.get("lan_passcode_enabled"))
     normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
     if str(normalized.get("lan_passcode_ttl") or "") not in LAN_AUTH_TTL_CHOICES:
         normalized["lan_passcode_ttl"] = "1d"
-    if str(normalized.get("previous_files_retention") or "") not in PREVIOUS_FILES_RETENTION_CHOICES:
-        normalized["previous_files_retention"] = "1w"
-    normalized["previous_files_limit_gb"] = _coerce_storage_gb(
-        normalized.get("previous_files_limit_gb"),
-        PREVIOUS_FILES_LIMIT_GB_DEFAULT,
-        minimum=PREVIOUS_FILES_LIMIT_GB_MIN,
-        maximum=PREVIOUS_FILES_LIMIT_GB_MAX,
-    )
-    normalized["previous_files_warn_gb"] = _coerce_storage_gb(
-        normalized.get("previous_files_warn_gb"),
-        PREVIOUS_FILES_WARN_GB_DEFAULT,
-        minimum=PREVIOUS_FILES_WARN_GB_MIN,
-        maximum=PREVIOUS_FILES_WARN_GB_MAX,
-    )
-    if normalized["previous_files_warn_gb"] > normalized["previous_files_limit_gb"]:
-        normalized["previous_files_warn_gb"] = normalized["previous_files_limit_gb"]
     if str(normalized.get("video_handling") or "") not in VIDEO_HANDLING_CHOICES:
         normalized["video_handling"] = "audio_only"
-    boost_harmonies_settings = _boost_harmonies_settings_payload(normalized)
-    normalized["boost_harmonies_background_vocals_gain_db"] = boost_harmonies_settings["overlay_gain_db"]
-    normalized["boost_harmonies_base_song_gain_db"] = boost_harmonies_settings["base_song_gain_db"]
-    boost_guitar_settings = _boost_guitar_settings_payload(normalized)
-    normalized["boost_guitar_guitar_gain_db"] = boost_guitar_settings["overlay_gain_db"]
-    normalized["boost_guitar_base_song_gain_db"] = boost_guitar_settings["base_song_gain_db"]
     normalized["structure_mode"] = "flat"
     return normalized
 
@@ -1453,34 +1057,8 @@ def _load_compat_settings() -> dict[str, Any]:
     return _normalize_settings_payload(settings)
 
 
-def _normalize_runtime_sample(entry: Any) -> dict[str, float] | None:
-    if not isinstance(entry, dict):
-        return None
-    try:
-        audio_seconds = float(entry.get("audio_seconds") or 0.0)
-        elapsed_seconds = float(entry.get("elapsed_seconds") or 0.0)
-        recorded_at = float(entry.get("recorded_at") or 0.0)
-    except Exception:
-        return None
-    if elapsed_seconds <= 0:
-        return None
-    return {
-        "audio_seconds": max(0.0, audio_seconds),
-        "elapsed_seconds": elapsed_seconds,
-        "recorded_at": recorded_at if recorded_at > 0 else time.time(),
-    }
-
-
-def _blank_runtime_stats() -> dict[str, Any]:
-    return {
-        "version": RUNTIME_STATS_VERSION,
-        "stage_samples": {},
-        "task_samples": {},
-    }
-
-
-def _load_runtime_stats() -> dict[str, Any]:
-    payload = _blank_runtime_stats()
+def _load_eta_history() -> dict[str, list[dict[str, float]]]:
+    payload: dict[str, list[dict[str, float]]] = {key: [] for key in ETA_HISTORY_KEYS}
     if not ETA_HISTORY_PATH.exists():
         return payload
     try:
@@ -1490,117 +1068,33 @@ def _load_runtime_stats() -> dict[str, Any]:
         return payload
     if not isinstance(data, dict):
         return payload
-
-    if int(data.get("version") or 0) >= RUNTIME_STATS_VERSION:
-        raw_stage_samples = data.get("stage_samples")
-        if isinstance(raw_stage_samples, dict):
-            for key, raw_entries in raw_stage_samples.items():
-                if not isinstance(key, str) or not isinstance(raw_entries, list):
-                    continue
-                entries = [
-                    normalized
-                    for normalized in (_normalize_runtime_sample(entry) for entry in raw_entries[-RUNTIME_STATS_STAGE_LIMIT:])
-                    if normalized is not None
-                ]
-                if entries:
-                    payload["stage_samples"][key] = entries[-RUNTIME_STATS_STAGE_LIMIT:]
-        raw_task_samples = data.get("task_samples")
-        if isinstance(raw_task_samples, dict):
-            for key, raw_entries in raw_task_samples.items():
-                if not isinstance(key, str) or not isinstance(raw_entries, list):
-                    continue
-                entries = [
-                    normalized
-                    for normalized in (_normalize_runtime_sample(entry) for entry in raw_entries[-RUNTIME_STATS_TASK_LIMIT:])
-                    if normalized is not None
-                ]
-                if entries:
-                    payload["task_samples"][key] = entries[-RUNTIME_STATS_TASK_LIMIT:]
-        return payload
-
-    # Backward compatibility for the previous per-model ETA history shape.
     for key in ETA_HISTORY_KEYS:
         raw_entries = data.get(key)
         if not isinstance(raw_entries, list):
             continue
-        normalized_entries = [
-            normalized
-            for normalized in (_normalize_runtime_sample(entry) for entry in raw_entries[-RUNTIME_STATS_STAGE_LIMIT:])
-            if normalized is not None
-        ]
-        if normalized_entries:
-            payload["stage_samples"][f"model:{key}"] = normalized_entries[-RUNTIME_STATS_STAGE_LIMIT:]
+        normalized_entries: list[dict[str, float]] = []
+        for entry in raw_entries[-ETA_HISTORY_LIMIT:]:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                audio_seconds = float(entry.get("audio_seconds") or 0.0)
+                elapsed_seconds = float(entry.get("elapsed_seconds") or 0.0)
+            except Exception:
+                continue
+            if audio_seconds <= 0 or elapsed_seconds <= 0:
+                continue
+            normalized_entries.append(
+                {
+                    "audio_seconds": audio_seconds,
+                    "elapsed_seconds": elapsed_seconds,
+                }
+            )
+        payload[key] = normalized_entries[-ETA_HISTORY_LIMIT:]
     return payload
 
 
-def _save_runtime_stats(stats: dict[str, Any]) -> None:
-    ETA_HISTORY_PATH.write_text(json.dumps(stats, indent=2), encoding="utf-8")
-
-
-def _normalize_previous_file_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
-    if not isinstance(entry, dict):
-        return None
-    entry_id = str(entry.get("id") or "").strip()
-    if not entry_id:
-        return None
-    original_name = str(entry.get("original_name") or "").strip()
-    storage_dir = str(entry.get("storage_dir") or "").strip()
-    source_path = str(entry.get("source_path") or "").strip()
-    finished_at = entry.get("finished_at")
-    if not original_name or not storage_dir or not source_path:
-        return None
-    if not isinstance(finished_at, (int, float)):
-        return None
-    outputs = entry.get("outputs")
-    if not isinstance(outputs, list):
-        outputs = []
-    stems = entry.get("stems")
-    if not isinstance(stems, list):
-        stems = []
-    normalized: dict[str, Any] = {
-        "id": entry_id,
-        "task_id": str(entry.get("task_id") or "").strip(),
-        "original_name": original_name,
-        "mode": str(entry.get("mode") or "").strip(),
-        "stems": [str(item) for item in stems if str(item).strip()],
-        "storage_dir": storage_dir,
-        "source_path": source_path,
-        "source_name": str(entry.get("source_name") or Path(source_path).name or original_name),
-        "outputs": [str(item) for item in outputs if str(item).strip()],
-        "finished_at": float(finished_at),
-        "artwork_path": str(entry.get("artwork_path") or "").strip(),
-        "output_format": str(entry.get("output_format") or "").strip(),
-        "video_handling": str(entry.get("video_handling") or "audio_only").strip() or "audio_only",
-        "preset_settings": entry.get("preset_settings") if isinstance(entry.get("preset_settings"), dict) else None,
-        "total_bytes": max(0, int(entry.get("total_bytes") or 0)),
-    }
-    return normalized
-
-
-def _load_previous_files_index() -> list[dict[str, Any]]:
-    if not PREVIOUS_FILES_INDEX_PATH.exists():
-        return []
-    try:
-        data = json.loads(PREVIOUS_FILES_INDEX_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        logging.getLogger("stemsplat").debug(
-            "failed to load previous files from %s",
-            PREVIOUS_FILES_INDEX_PATH,
-            exc_info=True,
-        )
-        return []
-    if not isinstance(data, list):
-        return []
-    normalized: list[dict[str, Any]] = []
-    for item in data:
-        entry = _normalize_previous_file_entry(item)
-        if entry is not None:
-            normalized.append(entry)
-    return normalized
-
-
-def _save_previous_files_index(entries: list[dict[str, Any]]) -> None:
-    PREVIOUS_FILES_INDEX_PATH.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+def _save_eta_history(history: dict[str, list[dict[str, float]]]) -> None:
+    ETA_HISTORY_PATH.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
 def _save_compat_settings(settings: dict[str, Any]) -> None:
@@ -1642,12 +1136,7 @@ def _is_remote_client(request: Request | None) -> bool:
     if request is None or request.client is None:
         return False
     host = str(request.client.host or "").strip().lower()
-    if not host or host == "localhost":
-        return False
-    try:
-        return not ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host not in {"127.0.0.1", "::1"}
+    return host not in {"127.0.0.1", "::1", "localhost"}
 
 
 def _should_use_mobile_ui(request: Request | None) -> bool:
@@ -1772,255 +1261,12 @@ def _fetch_latest_release() -> dict[str, Any]:
     )
     with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    assets: list[dict[str, Any]] = []
-    for raw_asset in payload.get("assets") or []:
-        if not isinstance(raw_asset, dict):
-            continue
-        name = str(raw_asset.get("name") or "").strip()
-        url = str(raw_asset.get("browser_download_url") or "").strip()
-        if not name or not url:
-            continue
-        size_raw = raw_asset.get("size")
-        try:
-            size = int(size_raw) if size_raw is not None else None
-        except Exception:
-            size = None
-        assets.append(
-            {
-                "name": name,
-                "url": url,
-                "size": size,
-                "content_type": str(raw_asset.get("content_type") or "").strip(),
-            }
-        )
     return {
         "version": str(payload.get("tag_name") or "").strip(),
         "name": str(payload.get("name") or "").strip(),
         "url": str(payload.get("html_url") or "").strip(),
         "notes": str(payload.get("body") or "").strip(),
-        "assets": assets,
     }
-
-
-def _release_asset_score(asset: dict[str, Any]) -> int:
-    name = str(asset.get("name") or "").strip().lower()
-    url = str(asset.get("url") or "").strip().lower()
-    if not name or not url.startswith("https://"):
-        return -10_000
-    score = 0
-    if "stemsplat" in name:
-        score += 100
-    if name.endswith(".zip"):
-        score += 50
-    elif name.endswith(".dmg"):
-        score += 40
-    elif name.endswith(".pkg"):
-        score += 30
-    if any(token in name for token in ("mac", "macos", "darwin", "osx")):
-        score += 20
-    if any(token in name for token in ("arm64", "apple", "silicon")):
-        score += 10
-    if any(token in name for token in ("windows", "win64", ".exe", ".msi", "linux", ".deb", ".rpm", "appimage")):
-        score -= 200
-    return score
-
-
-def _select_release_download_asset(release: dict[str, Any]) -> dict[str, Any]:
-    assets = [asset for asset in (release.get("assets") or []) if isinstance(asset, dict)]
-    if not assets:
-        raise AppError(ErrorCode.INVALID_REQUEST, "The latest release does not have a downloadable app asset yet.")
-    ranked = sorted(
-        assets,
-        key=lambda asset: (_release_asset_score(asset), int(asset.get("size") or 0)),
-        reverse=True,
-    )
-    best = ranked[0]
-    if _release_asset_score(best) <= 0:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Could not find a compatible downloadable update asset.")
-    return best
-
-
-def _release_download_destination(asset_name: str) -> Path:
-    return ensure_unique_path(_ensure_dir(OUTPUT_ROOT) / asset_name)
-
-
-def _download_latest_release_to_downloads() -> tuple[dict[str, Any], Path]:
-    release = _fetch_latest_release()
-    asset = _select_release_download_asset(release)
-    destination = _release_download_destination(str(asset.get("name") or "stemsplat-update.zip"))
-    saved_path = download_url_to_path(
-        str(asset.get("url") or ""),
-        destination,
-        user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
-        force_redownload=True,
-    )
-    latest_version = str(release.get("version") or "").strip()
-    if latest_version:
-        _set_compat_settings({"update_last_notified_version": latest_version})
-    return release, saved_path
-
-
-def _set_release_download_state(**patch: Any) -> None:
-    with release_download_lock:
-        release_download_state.update(patch)
-
-
-def _public_release_download_status() -> dict[str, Any]:
-    with release_download_lock:
-        return dict(release_download_state)
-
-
-def _release_download_error_message(exc: Exception) -> str:
-    if isinstance(exc, AppError):
-        return exc.message
-    if isinstance(exc, ModelDownloadError):
-        return str(exc)
-    return "download failed unexpectedly"
-
-
-def _run_release_download() -> None:
-    try:
-        release = _fetch_latest_release()
-        asset = _select_release_download_asset(release)
-    except Exception as exc:
-        logger.error("release metadata fetch failed", exc_info=True)
-        _set_release_download_state(
-            status="error",
-            step="download failed",
-            current_asset="",
-            download_rate_bytes_per_sec=0.0,
-            eta_seconds=None,
-            error=_release_download_error_message(exc),
-        )
-        return
-
-    asset_name = str(asset.get("name") or "update")
-    destination_path = _release_download_destination(asset_name)
-    destination_name = destination_path.name
-    release_version = str(release.get("version") or "").strip()
-    release_name = str(release.get("name") or "").strip()
-    asset_size = int(asset.get("size") or 0)
-    _set_release_download_state(
-        status="downloading",
-        pct=1,
-        step=f"downloading {destination_name}",
-        current_asset=destination_name,
-        downloaded_bytes=0,
-        total_bytes=asset_size,
-        download_rate_bytes_per_sec=0.0,
-        eta_seconds=None,
-        started_at=time.time(),
-        error="",
-        path="",
-        filename=destination_name,
-        version=release_version,
-        release_name=release_name,
-    )
-
-    def _progress(update: dict[str, Any]) -> None:
-        downloaded_bytes = int(update.get("downloaded_bytes") or 0)
-        total_bytes = int(update.get("total_bytes") or 0)
-        with release_download_lock:
-            started_at = release_download_state.get("started_at")
-        eta_seconds: int | None = None
-        download_rate_bytes_per_sec = 0.0
-        if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
-            elapsed = max(1.0, time.time() - float(started_at))
-            remaining = max(0, total_bytes - downloaded_bytes)
-            download_rate_bytes_per_sec = max(downloaded_bytes / elapsed, 0.0)
-            eta_seconds = int(round(remaining / max(download_rate_bytes_per_sec, 1)))
-        _set_release_download_state(
-            status="downloading",
-            pct=int(update.get("pct") or 0),
-            step=f"downloading {destination_name}",
-            current_asset=destination_name,
-            downloaded_bytes=downloaded_bytes,
-            total_bytes=total_bytes,
-            download_rate_bytes_per_sec=download_rate_bytes_per_sec,
-            eta_seconds=eta_seconds,
-            error="",
-            filename=destination_name,
-            version=release_version,
-            release_name=release_name,
-        )
-
-    try:
-        saved_path = download_url_to_path(
-            str(asset.get("url") or ""),
-            destination_path,
-            progress_cb=_progress,
-            user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
-            force_redownload=True,
-        )
-    except Exception as exc:
-        logger.error("release download failed", exc_info=True)
-        _set_release_download_state(
-            status="error",
-            step="download failed",
-            current_asset=destination_name,
-            download_rate_bytes_per_sec=0.0,
-            eta_seconds=None,
-            error=_release_download_error_message(exc),
-            filename=destination_name,
-            version=release_version,
-            release_name=release_name,
-        )
-        return
-
-    _set_compat_settings(
-        {
-            "update_last_checked_at": time.time(),
-            "update_latest_version": release_version,
-            "update_latest_name": release_name,
-            "update_latest_url": str(release.get("url") or "").strip(),
-            "update_latest_notes": str(release.get("notes") or "").strip(),
-            "update_last_notified_version": release_version,
-        }
-    )
-    saved_size = max(asset_size, int(saved_path.stat().st_size) if saved_path.exists() else 0)
-    _set_release_download_state(
-        status="done",
-        pct=100,
-        step="download complete",
-        current_asset=asset_name,
-        downloaded_bytes=saved_size,
-        total_bytes=saved_size,
-        download_rate_bytes_per_sec=0.0,
-        eta_seconds=0,
-        error="",
-        path=str(saved_path),
-        filename=saved_path.name,
-        version=release_version,
-        release_name=release_name,
-    )
-
-
-def _start_release_download() -> dict[str, Any]:
-    global release_download_thread
-    with release_download_lock:
-        if release_download_thread is not None and release_download_thread.is_alive():
-            return dict(release_download_state)
-        release_download_state.update(
-            {
-                "status": "starting",
-                "pct": 0,
-                "step": "preparing download",
-                "current_asset": "",
-                "downloaded_bytes": 0,
-                "total_bytes": 0,
-                "download_rate_bytes_per_sec": 0.0,
-                "eta_seconds": None,
-                "started_at": time.time(),
-                "error": "",
-                "path": "",
-                "filename": "",
-                "version": "",
-                "release_name": "",
-            }
-        )
-        release_download_thread = threading.Thread(target=_run_release_download, daemon=True)
-        release_download_thread.start()
-        return dict(release_download_state)
 
 
 def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
@@ -2069,24 +1315,33 @@ def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
 
 
 def _mode_to_stems(mode: str) -> list[str]:
-    return list(MODE_TO_STEMS.get(mode, ()))
+    if mode == "vocals":
+        return ["vocals"]
+    if mode == "instrumental":
+        return ["instrumental"]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode == "both_separate":
+        return ["vocals", "instrumental"]
+    return []
 
 
 def _stems_to_mode(stems_raw: str) -> str:
     stems = [item.strip().lower() for item in stems_raw.split(",") if item.strip()]
-    if not stems:
-        return "unselected"
-    for mode, expected in MODE_TO_STEMS.items():
-        if stems == list(expected):
-            return mode
-    if sorted(stems) == ["instrumental", "vocals"]:
+    if stems == ["vocals"]:
+        return "vocals"
+    if stems == ["instrumental"]:
+        return "instrumental"
+    if stems == ["deux"]:
+        return "both_deux"
+    if stems == ["vocals", "instrumental"] or stems == ["instrumental", "vocals"]:
         return "both_separate"
     raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.")
 
 
 _compat_settings = _load_compat_settings()
-runtime_stats_lock = threading.RLock()
-runtime_stats = _load_runtime_stats()
+eta_history_lock = threading.RLock()
+eta_history = _load_eta_history()
 lan_auth_lock = threading.RLock()
 lan_auth_sessions: dict[str, dict[str, Any]] = {}
 
@@ -2143,21 +1398,24 @@ def _cleanup_old_runtime_entries(path: Path, max_age_seconds: int = RUNTIME_CLEA
 
 
 def _required_models_for_mode(mode: str) -> list[str]:
-    return list(MODE_REQUIRED_MODELS.get(mode, ()))
-
-
-def _locate_model_file(filename: str) -> Path | None:
-    search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
-    for base_dir in MODEL_SEARCH_DIRS:
-        for search_name in search_names:
-            match = _locate_case_insensitive(base_dir / search_name)
-            if match:
-                return match
-    return None
+    if mode == "vocals":
+        return ["vocals"]
+    if mode == "instrumental":
+        return ["instrumental"]
+    if mode == "both_deux":
+        return ["deux"]
+    if mode == "both_separate":
+        return ["vocals", "instrumental"]
+    return []
 
 
 def _model_file_exists(filename: str) -> bool:
-    return _locate_model_file(filename) is not None
+    search_names = [filename, *MODEL_ALIAS_MAP.get(filename, [])]
+    for base_dir in MODEL_SEARCH_DIRS:
+        for search_name in search_names:
+            if _locate_case_insensitive(base_dir / search_name):
+                return True
+    return False
 
 
 def _find_missing_models_for_mode(mode: str) -> list[str]:
@@ -2183,45 +1441,6 @@ def _port_available(port: int) -> bool:
             return True
         except OSError:
             return False
-
-
-def _run_interruptible_subprocess(
-    cmd: list[str],
-    *,
-    stop_check: Callable[[], None] | None = None,
-) -> None:
-    if stop_check is None:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        return
-
-    stop_check()
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        while True:
-            stop_check()
-            if process.poll() is not None:
-                break
-            time.sleep(0.12)
-        _stdout, stderr = process.communicate()
-    except TaskStopped:
-        with contextlib.suppress(Exception):
-            process.terminate()
-        with contextlib.suppress(Exception):
-            process.wait(timeout=1.5)
-        if process.poll() is None:
-            with contextlib.suppress(Exception):
-                process.kill()
-        with contextlib.suppress(Exception):
-            process.communicate(timeout=1.0)
-        raise
-
-    if process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, cmd, stderr=stderr)
 
 
 def _ensure_ffmpeg() -> str:
@@ -2281,7 +1500,7 @@ def _fallback_source_info(path: Path) -> SourceInfo:
                     raw_bit_rate = getattr(info, "bitrate", None)
                     raw_codec = getattr(info, "codec", None) or getattr(info, "codec_description", None)
                     if raw_channels:
-                        channels = max(1, int(raw_channels))
+                        channels = max(1, min(2, int(raw_channels)))
                     if raw_bit_rate:
                         bit_rate = int(raw_bit_rate)
                     if raw_codec:
@@ -2337,7 +1556,7 @@ def _probe_source(path: Path) -> SourceInfo:
         suffix=path.suffix.lower(),
         codec=audio_stream.get("codec_name") or fallback.codec,
         bit_rate=bit_rate if isinstance(bit_rate, int) else fallback.bit_rate,
-        channels=max(1, int(audio_stream.get("channels") or fallback.channels or 2)),
+        channels=max(1, min(2, int(audio_stream.get("channels") or fallback.channels or 2))),
         has_cover=has_cover or fallback.has_cover,
         has_video=has_video,
     )
@@ -2422,8 +1641,6 @@ def _export_stem(
     dest_path: Path,
     plan: ExportPlan,
     has_cover: bool,
-    *,
-    stop_check: Callable[[], None] | None = None,
 ) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2460,9 +1677,12 @@ def _export_stem(
     last_error: Exception | None = None
     for include_cover in attempts:
         try:
-            _run_interruptible_subprocess(
+            subprocess.run(
                 _build_command(include_cover),
-                stop_check=stop_check,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
             )
             _strip_title_metadata(candidate)
             return candidate
@@ -2494,8 +1714,6 @@ def _export_video_stem(
     source_path: Path,
     dest_path: Path,
     source_info: SourceInfo,
-    *,
-    stop_check: Callable[[], None] | None = None,
 ) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2530,9 +1748,12 @@ def _export_video_stem(
     if suffix in {".mp4", ".m4v", ".mov"}:
         cmd.extend(["-movflags", "+faststart"])
     try:
-        _run_interruptible_subprocess(
+        subprocess.run(
             cmd,
-            stop_check=stop_check,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         _strip_title_metadata(candidate)
         return candidate
@@ -2541,18 +1762,7 @@ def _export_video_stem(
         raise AppError(ErrorCode.SEPARATION_FAILED, f"Video export failed: {exc}") from exc
 
 
-def _decode_audio_to_wav(
-    source_path: Path,
-    work_dir: Path,
-    channels: int,
-    *,
-    stop_check: Callable[[], None] | None = None,
-) -> Path:
-    if channels > 2:
-        raise AppError(
-            ErrorCode.INVALID_REQUEST,
-            "Multichannel audio is not supported yet. Please convert the file to mono or stereo first.",
-        )
+def _decode_audio_to_wav(source_path: Path, work_dir: Path, channels: int) -> Path:
     ffmpeg_path = _ensure_ffmpeg()
     decoded_path = work_dir / "input.wav"
     cmd = [
@@ -2571,7 +1781,7 @@ def _decode_audio_to_wav(
         str(decoded_path),
     ]
     try:
-        _run_interruptible_subprocess(cmd, stop_check=stop_check)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError as exc:
         raise AppError(ErrorCode.FFMPEG_MISSING, "ffmpeg not found.") from exc
     except Exception as exc:
@@ -2624,8 +1834,6 @@ def _normalize_prediction(pred: torch.Tensor, input_channels: int, chunk_len: in
 def _prepare_model_input(waveform: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, int]:
     original_channels = waveform.shape[0]
     if original_channels == 1:
-        # Current bundled checkpoints are stereo-configured, so mono audio is
-        # mirrored to dual-mono for inference and collapsed back afterward.
         waveform = waveform.repeat(2, 1)
     elif original_channels > 2:
         waveform = waveform[:2]
@@ -2637,29 +1845,6 @@ def _restore_output_channels(tensor: torch.Tensor, original_channels: int) -> to
     if original_channels <= 1 and tensor.shape[0] > 1:
         return tensor.mean(dim=0, keepdim=True)
     return tensor[: max(1, original_channels)]
-
-
-def _normalize_audio_tensor(audio: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-    mono = audio.mean(dim=0)
-    mean = mono.mean()
-    std = mono.std().clamp_min(1e-8)
-    return (audio - mean) / std, (mean, std)
-
-
-def _denormalize_audio_tensor(audio: torch.Tensor, norm_params: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-    mean, std = norm_params
-    return (audio * std) + mean
-
-
-def _bs_windowing_array(window_size: int, fade_size: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    if fade_size <= 0:
-        return torch.ones(window_size, device=device, dtype=dtype)
-    fadein = torch.linspace(0, 1, fade_size, device=device, dtype=dtype)
-    fadeout = torch.linspace(1, 0, fade_size, device=device, dtype=dtype)
-    window = torch.ones(window_size, device=device, dtype=dtype)
-    window[-fade_size:] = fadeout
-    window[:fade_size] = fadein
-    return window
 
 
 def _map_fraction(start_pct: int, end_pct: int, fraction: float) -> int:
@@ -2755,145 +1940,10 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Roformer import failed: {_model_import_error}")
     with config_path.open("r", encoding="utf-8") as handle:
         cfg = yaml.unsafe_load(handle)
-    raw_model_cfg = dict(cfg.get("model") or {})
-    valid_params = set(inspect.signature(MelBandRoformer.__init__).parameters)
-    valid_params.discard("self")
-    model_kwargs = {key: value for key, value in raw_model_cfg.items() if key in valid_params}
-    ignored = sorted(set(raw_model_cfg) - set(model_kwargs))
-    if ignored:
-        logger.info("ignoring unsupported model config keys for %s: %s", config_path.name, ", ".join(ignored))
-    model = MelBandRoformer(**model_kwargs)
-    state = _torch_load_compat(model_path, map_location="cpu", weights_only=None)
+    model = MelBandRoformer(**(cfg.get("model") or {}))
+    state = torch.load(model_path, map_location="cpu")
     model.load_state_dict(state.get("state_dict", state), strict=False)
     return model.to(device).eval()
-
-
-def _load_bs_roformer_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
-    if BSRoformer is None:
-        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"BS-Roformer import failed: {_bs_model_import_error}")
-    with config_path.open("r", encoding="utf-8") as handle:
-        cfg = yaml.unsafe_load(handle)
-    raw_model_cfg = dict(cfg.get("model") or {})
-    valid_params = set(inspect.signature(BSRoformer.__init__).parameters)
-    valid_params.discard("self")
-    model_kwargs = {key: value for key, value in raw_model_cfg.items() if key in valid_params}
-    ignored = sorted(set(raw_model_cfg) - set(model_kwargs))
-    if ignored:
-        logger.info(
-            "ignoring unsupported bs-roformer config keys for %s: %s",
-            config_path.name,
-            ", ".join(ignored),
-        )
-    model = BSRoformer(**model_kwargs)
-    state = _torch_load_compat(model_path, map_location="cpu", weights_only=None)
-    missing, unexpected = model.load_state_dict(state.get("state_dict", state), strict=False)
-    if missing or unexpected:
-        raise AppError(
-            ErrorCode.MODEL_IMPORT_FAILED,
-            "BS-Roformer checkpoint does not match the expected architecture. "
-            f"Missing keys: {len(missing)}, unexpected keys: {len(unexpected)}.",
-        )
-    setattr(model, "_stemsplat_config", cfg)
-    return model.to(device).eval()
-
-
-def _load_model_config(config_path: Path) -> dict[str, Any]:
-    with config_path.open("r", encoding="utf-8") as handle:
-        data = yaml.unsafe_load(handle) or {}
-    if not isinstance(data, dict):
-        raise AppError(ErrorCode.CONFIG_MISSING, f"Invalid config structure: {config_path.name}")
-    return data
-
-
-def _prepare_torch_pickle_compat() -> None:
-    alias_pairs = (
-        ("numpy.core.multiarray", "numpy._core.multiarray"),
-        ("numpy.core.numeric", "numpy._core.numeric"),
-        ("numpy._core.multiarray", "numpy.core.multiarray"),
-        ("numpy._core.numeric", "numpy.core.numeric"),
-    )
-    for alias_name, module_name in alias_pairs:
-        if alias_name in sys.modules:
-            continue
-        with contextlib.suppress(Exception):
-            sys.modules[alias_name] = importlib.import_module(module_name)
-
-
-def _torch_load_compat(model_path: Path, *, map_location: str | torch.device = "cpu", weights_only: bool | None = False) -> Any:
-    _prepare_torch_pickle_compat()
-    try:
-        kwargs: dict[str, Any] = {"map_location": map_location}
-        if weights_only is not None:
-            kwargs["weights_only"] = weights_only
-        return torch.load(model_path, **kwargs)
-    except Exception as exc:
-        message = str(exc)
-        lowered = message.lower()
-        if "numpy.core.multiarray" in message or "numpy.core.numeric" in message:
-            raise AppError(
-                ErrorCode.MODEL_IMPORT_FAILED,
-                "Missing NumPy checkpoint compatibility modules in the app bundle.",
-            ) from exc
-        if "incorrect header check" in lowered or "pytorchstreamreader failed" in lowered or "invalid load key" in lowered:
-            raise AppError(
-                ErrorCode.SEPARATION_FAILED,
-                f"Model file appears corrupted: {model_path.name}. Remove it and download it again.",
-            ) from exc
-        raise
-
-
-def _instantiate_demucs_package(package: dict[str, Any]) -> torch.nn.Module:
-    klass = package.get("klass")
-    args = tuple(package.get("args") or ())
-    kwargs = dict(package.get("kwargs") or {})
-    state = package.get("state")
-    if klass is None or state is None:
-        raise AppError(ErrorCode.SEPARATION_FAILED, "Demucs checkpoint is missing model metadata.")
-    valid_params = set(inspect.signature(klass).parameters)
-    valid_params.discard("self")
-    model_kwargs = {key: value for key, value in kwargs.items() if key in valid_params}
-    model = klass(*args, **model_kwargs)
-    if demucs_set_state is not None:
-        demucs_set_state(model, state)
-    else:
-        model.load_state_dict(state)
-    return model
-
-
-def _load_demucs_model(model_path: Path, device: torch.device) -> torch.nn.Module:
-    if TensorChunk is None or demucs_apply_model is None:
-        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Demucs import failed: {_demucs_import_error}")
-    package = _torch_load_compat(model_path, map_location="cpu", weights_only=False)
-    if isinstance(package, torch.nn.Module):
-        model = package
-    elif isinstance(package, dict):
-        model = _instantiate_demucs_package(package)
-    else:
-        raise AppError(ErrorCode.SEPARATION_FAILED, f"Unsupported Demucs checkpoint format: {type(package)!r}")
-    return model.to(device).eval()
-
-
-def _load_mdx23c_model(model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
-    if TFC_TDF_net is None or config_namespace is None or load_not_compatible_weights is None:
-        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"DrumSep import failed: {_drumsep_import_error}")
-    cfg = config_namespace(_load_model_config(config_path))
-    model = TFC_TDF_net(cfg)
-    state = _torch_load_compat(model_path, map_location="cpu", weights_only=False)
-    load_not_compatible_weights(model, state)
-    setattr(model, "_stemsplat_config", cfg)
-    return model.to(device).eval()
-
-
-def _load_model_from_spec(spec: ModelSpec, model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
-    if spec.kind == "roformer":
-        return _load_roformer_model(model_path, config_path, device)
-    if spec.kind == "bs_roformer":
-        return _load_bs_roformer_model(model_path, config_path, device)
-    if spec.kind == "demucs":
-        return _load_demucs_model(model_path, device)
-    if spec.kind == "mdx23c":
-        return _load_mdx23c_model(model_path, config_path, device)
-    raise AppError(ErrorCode.INVALID_REQUEST, f"Unknown model kind: {spec.kind}")
 
 
 def select_device() -> torch.device:
@@ -2931,7 +1981,7 @@ class ModelManager:
         spec = MODEL_SPECS[name]
         model_path = self._resolve_model_path(spec.filename)
         config_path = self._resolve_config_path(spec.config)
-        model = _load_model_from_spec(spec, model_path, config_path, self.device)
+        model = _load_roformer_model(model_path, config_path, self.device)
         self.cache[name] = model
         return model
 
@@ -2952,920 +2002,48 @@ def _run_model_chunks(
     model: torch.nn.Module,
     waveform: torch.Tensor,
     segment: int,
-    overlap: int,
     progress_cb: Callable[[float], None],
     stop_check: Callable[[], None],
 ) -> torch.Tensor:
     working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
     input_channels = working.shape[0]
     length = working.shape[1]
-    overlap = max(1, int(overlap))
-    step = max(1, segment // overlap)
-    border = max(0, segment - step)
-    padded = working
-
-    # Each config carries its own overlap-add expectations instead of using one global ratio.
-    if border > 0:
-        if padded.shape[-1] > 1:
-            remaining = border
-            while remaining > 0:
-                pad_amount = min(remaining, max(1, padded.shape[-1] - 1))
-                padded = F.pad(padded.unsqueeze(0), (pad_amount, pad_amount), mode="reflect").squeeze(0)
-                remaining -= pad_amount
-        else:
-            padded = F.pad(padded, (border, border))
-    if padded.shape[-1] < segment:
-        padded = F.pad(padded, (0, segment - padded.shape[-1]))
-
-    padded_length = padded.shape[-1]
-    starts = list(range(0, max(1, padded_length - segment + 1), step))
-    last_start = max(0, padded_length - segment)
-    if not starts or starts[-1] != last_start:
-        starts.append(last_start)
-
+    step = max(1, int(segment * (1.0 - OVERLAP_RATIO)))
     acc: torch.Tensor | None = None
-    counts = torch.zeros(padded_length, device=working.device, dtype=working.dtype)
-    if len(starts) <= 1 or step >= segment:
-        window = torch.ones(segment, device=working.device, dtype=working.dtype)
-    else:
-        window = torch.hann_window(segment, periodic=False, device=working.device, dtype=working.dtype).clamp_min(1e-6)
-    window_view = window.view(1, 1, -1)
+    counts = torch.zeros((1, length), device=working.device, dtype=working.dtype)
 
     progress_cb(0.0)
     with torch.no_grad():
-        for index, start in enumerate(starts, start=1):
+        for start in range(0, length, step):
             stop_check()
-            end = start + segment
-            chunk = padded[:, start:end]
-            pred = model(chunk.unsqueeze(0))[0]
-            pred = _normalize_prediction(pred, input_channels, segment)
-            pred_len = pred.shape[-1]
+            end = min(start + segment, length)
+            chunk = working[:, start:end]
+            if chunk.shape[1] < segment:
+                padded = torch.zeros((input_channels, segment), device=working.device, dtype=working.dtype)
+                padded[:, : chunk.shape[1]] = chunk
+            else:
+                padded = chunk
+            pred = model(padded.unsqueeze(0))[0]
+            pred = _normalize_prediction(pred, input_channels, chunk.shape[1])
             if acc is None:
                 acc = torch.zeros(
-                    (pred.shape[0], pred.shape[1], padded_length),
+                    (pred.shape[0], pred.shape[1], length),
                     device=working.device,
                     dtype=pred.dtype,
                 )
-            acc[:, :, start : start + pred_len] += pred * window_view[:, :, :pred_len]
-            counts[start : start + pred_len] += window[:pred_len]
-            progress_cb(index / max(1, len(starts)))
+            acc[:, :, start : start + pred.shape[-1]] += pred
+            counts[:, start : start + pred.shape[-1]] += 1
+            progress_cb(end / max(1, length))
 
     if acc is None:
         raise AppError(ErrorCode.SEPARATION_FAILED, "Model produced no output.")
 
-    denom = counts.clamp_min(1e-6).view(1, 1, -1)
+    denom = counts.clamp_min(1).unsqueeze(0)
     restored = acc / denom
-    crop_start = border
-    crop_end = crop_start + length
-    restored = restored[:, :, crop_start:crop_end]
     outputs = []
     for index in range(restored.shape[0]):
         outputs.append(_restore_output_channels(restored[index], original_channels))
     return torch.stack(outputs, dim=0)
-
-
-def _run_bs_roformer_chunks(
-    model: torch.nn.Module,
-    waveform: torch.Tensor,
-    progress_cb: Callable[[float], None],
-    stop_check: Callable[[], None],
-) -> torch.Tensor:
-    config = getattr(model, "_stemsplat_config", None) or {}
-    inference_cfg = dict(config.get("inference") or {})
-    audio_cfg = dict(config.get("audio") or {})
-
-    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
-    normalize = bool(inference_cfg.get("normalize", False))
-    norm_params: tuple[torch.Tensor, torch.Tensor] | None = None
-    if normalize:
-        working, norm_params = _normalize_audio_tensor(working)
-
-    chunk_size = int(inference_cfg.get("chunk_size") or audio_cfg.get("chunk_size") or working.shape[-1])
-    num_overlap = max(1, int(inference_cfg.get("num_overlap") or 1))
-    batch_size = max(1, int(inference_cfg.get("batch_size") or 1))
-    num_instruments = int(getattr(model, "num_stems", 1))
-    fade_size = max(0, chunk_size // 10)
-    step = max(1, chunk_size // num_overlap)
-    border = max(0, chunk_size - step)
-    length_init = int(working.shape[-1])
-
-    if length_init > 2 * border and border > 0:
-        working = F.pad(working, (border, border), mode="reflect")
-
-    total_samples = int(working.shape[-1])
-    total_chunks = max(1, math.ceil(total_samples / step))
-    result = torch.zeros(
-        (num_instruments, working.shape[0], total_samples),
-        device=working.device,
-        dtype=torch.float32,
-    )
-    counter = torch.zeros_like(result)
-    base_window = _bs_windowing_array(chunk_size, fade_size, working.device, torch.float32)
-
-    progress_cb(0.0)
-    batch_data: list[torch.Tensor] = []
-    batch_locations: list[tuple[int, int]] = []
-    processed_chunks = 0
-    index = 0
-
-    with torch.inference_mode():
-        while index < total_samples:
-            stop_check()
-            part = working[:, index : index + chunk_size]
-            chunk_len = int(part.shape[-1])
-            pad_mode = "reflect" if chunk_len > chunk_size // 2 else "constant"
-            part = F.pad(part, (0, chunk_size - chunk_len), mode=pad_mode, value=0.0)
-            batch_data.append(part)
-            batch_locations.append((index, chunk_len))
-            index += step
-
-            if len(batch_data) < batch_size and index < total_samples:
-                continue
-
-            batch_tensor = torch.stack(batch_data, dim=0)
-            predicted = model(batch_tensor)
-
-            for batch_index, (start, seg_len) in enumerate(batch_locations):
-                chunk_window = base_window.clone()
-                if start == 0:
-                    chunk_window[:fade_size] = 1.0
-                if start + step >= total_samples:
-                    chunk_window[-fade_size:] = 1.0
-                piece = predicted[batch_index, ..., :seg_len].to(dtype=torch.float32)
-                result[..., start : start + seg_len] += piece * chunk_window[:seg_len]
-                counter[..., start : start + seg_len] += chunk_window[:seg_len]
-                processed_chunks += 1
-                progress_cb(processed_chunks / total_chunks)
-
-            batch_data.clear()
-            batch_locations.clear()
-
-    estimated = result / counter.clamp_min(1e-8)
-
-    if length_init > 2 * border and border > 0:
-        estimated = estimated[..., border:-border]
-
-    if norm_params is not None:
-        estimated = _denormalize_audio_tensor(estimated, norm_params)
-
-    outputs = []
-    for stem_index in range(estimated.shape[0]):
-        outputs.append(_restore_output_channels(estimated[stem_index], original_channels))
-    return torch.stack(outputs, dim=0)
-
-
-def _overlap_fraction(overlap_count: int) -> float:
-    overlap_count = max(1, int(overlap_count))
-    return max(0.0, min(0.95, 1.0 - (1.0 / float(overlap_count))))
-
-
-def _run_demucs_chunks(
-    model: torch.nn.Module,
-    waveform: torch.Tensor,
-    segment: int,
-    overlap: int,
-    progress_cb: Callable[[float], None],
-    stop_check: Callable[[], None],
-) -> torch.Tensor:
-    if TensorChunk is None or demucs_apply_model is None:
-        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Demucs import failed: {_demucs_import_error}")
-    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
-    mix = working.unsqueeze(0)
-    length = int(mix.shape[-1])
-    segment_seconds = max(1.0 / 44100.0, float(segment) / 44100.0)
-    model_segment = getattr(model, "segment", None)
-    with contextlib.suppress(Exception):
-        if model_segment is not None:
-            segment_seconds = min(segment_seconds, float(model_segment))
-    segment_length = max(1, int(round(segment_seconds * float(getattr(model, "samplerate", 44100)))))
-    stride = max(1, int((1.0 - _overlap_fraction(overlap)) * segment_length))
-    offsets = list(range(0, length, stride)) or [0]
-    weight = torch.cat(
-        [
-            torch.arange(1, segment_length // 2 + 1, device=working.device),
-            torch.arange(segment_length - segment_length // 2, 0, -1, device=working.device),
-        ]
-    )
-    weight = weight / weight.max().clamp_min(1e-6)
-    out = torch.zeros((1, len(getattr(model, "sources", [])), working.shape[0], length), device=working.device)
-    sum_weight = torch.zeros(length, device=working.device)
-
-    progress_cb(0.0)
-    with torch.no_grad():
-        for index, offset in enumerate(offsets, start=1):
-            stop_check()
-            chunk = TensorChunk(mix, offset, segment_length)
-            chunk_out = demucs_apply_model(
-                model,
-                chunk,
-                shifts=0,
-                split=False,
-                overlap=_overlap_fraction(overlap),
-                device=working.device,
-                segment=segment_seconds,
-            )
-            chunk_length = int(chunk_out.shape[-1])
-            out[..., offset : offset + chunk_length] += weight[:chunk_length] * chunk_out[..., :chunk_length]
-            sum_weight[offset : offset + chunk_length] += weight[:chunk_length]
-            progress_cb(index / max(1, len(offsets)))
-
-    out = out / sum_weight.clamp_min(1e-6)
-    restored = out[0]
-    outputs = []
-    for index in range(restored.shape[0]):
-        outputs.append(_restore_output_channels(restored[index], original_channels))
-    return torch.stack(outputs, dim=0)
-
-
-def _run_mdx23c_chunks(
-    model: torch.nn.Module,
-    waveform: torch.Tensor,
-    progress_cb: Callable[[float], None],
-    stop_check: Callable[[], None],
-) -> torch.Tensor:
-    if demix_mdx23c is None:
-        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"DrumSep import failed: {_drumsep_import_error}")
-    config = getattr(model, "_stemsplat_config", None)
-    if config is None:
-        raise AppError(ErrorCode.CONFIG_MISSING, "DrumSep config missing from loaded model.")
-    working, original_channels = _prepare_model_input(waveform, next(model.parameters()).device)
-    predicted = demix_mdx23c(config, model, working, next(model.parameters()).device, progress_cb, stop_check)
-    outputs = []
-    for index in range(predicted.shape[0]):
-        outputs.append(_restore_output_channels(predicted[index], original_channels))
-    return torch.stack(outputs, dim=0)
-
-
-def _run_model_for_spec(
-    model_key: str,
-    model: torch.nn.Module,
-    waveform: torch.Tensor,
-    progress_cb: Callable[[float], None],
-    stop_check: Callable[[], None],
-) -> torch.Tensor:
-    spec = MODEL_SPECS[model_key]
-    if spec.kind == "roformer":
-        return _run_model_chunks(model, waveform, spec.segment, spec.overlap, progress_cb, stop_check)
-    if spec.kind == "bs_roformer":
-        return _run_bs_roformer_chunks(model, waveform, progress_cb, stop_check)
-    if spec.kind == "demucs":
-        return _run_demucs_chunks(model, waveform, spec.segment, spec.overlap, progress_cb, stop_check)
-    if spec.kind == "mdx23c":
-        return _run_mdx23c_chunks(model, waveform, progress_cb, stop_check)
-    raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported model kind: {spec.kind}")
-
-
-def _extract_target_tensor(model_key: str, model: torch.nn.Module, prediction: torch.Tensor) -> torch.Tensor:
-    spec = MODEL_SPECS[model_key]
-    if not spec.target:
-        return prediction[0]
-    sources = [str(item) for item in getattr(model, "sources", [])]
-    if spec.target in sources:
-        return prediction[sources.index(spec.target)]
-    expected_labels = MODE_OUTPUT_LABELS.get(model_key, ())
-    if spec.target in expected_labels:
-        return prediction[list(expected_labels).index(spec.target)]
-    raise AppError(ErrorCode.SEPARATION_FAILED, f"Target source '{spec.target}' not found in model output.")
-
-
-def _waveform_like(source: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
-    sliced = source[: reference.shape[0], : reference.shape[1]]
-    return sliced.to(device=reference.device, dtype=reference.dtype)
-
-
-def _residual_output(source: torch.Tensor, predicted: torch.Tensor) -> torch.Tensor:
-    return _waveform_like(source, predicted) - predicted
-
-
-def _db_to_gain(db_value: float) -> float:
-    return float(10.0 ** (float(db_value) / 20.0))
-
-
-def _boost_overlay_mix(
-    source_waveform: torch.Tensor,
-    overlay_tensor: torch.Tensor,
-    *,
-    base_song_gain_db: float,
-    overlay_gain_db: float,
-) -> torch.Tensor:
-    base_song = _waveform_like(source_waveform, overlay_tensor)
-    return (base_song * _db_to_gain(base_song_gain_db)) + (
-        overlay_tensor * _db_to_gain(overlay_gain_db)
-    )
-
-
-def _temp_audio_name(label: str) -> str:
-    cleaned = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
-    return f"{cleaned or 'stem'}.wav"
-
-
-def _append_named_output(
-    outputs: list[tuple[str, Path]],
-    work_dir: Path,
-    label: str,
-    tensor: torch.Tensor,
-) -> None:
-    outputs.append((label, _write_temp_wave(work_dir, _temp_audio_name(label), tensor)))
-
-
-def _cache_intermediate_output(task_id: str, label: str, tensor: torch.Tensor) -> Path | None:
-    cache_dir = _ensure_dir(INTERMEDIATE_CACHE_DIR / task_id)
-    try:
-        return _write_temp_wave(cache_dir, _temp_audio_name(label), tensor)
-    except Exception:
-        logger.warning("failed to cache intermediate output %s for task %s", label, task_id, exc_info=True)
-        return None
-
-
-def _cached_intermediate_output_path(task_id: str, label: str) -> Path | None:
-    candidate = INTERMEDIATE_CACHE_DIR / task_id / _temp_audio_name(label)
-    if candidate.exists() and candidate.is_file():
-        return candidate
-    return None
-
-
-def _preset_overlay_cache_label(mode: str) -> str | None:
-    if mode == "preset_boost_harmonies":
-        return "background_vocals"
-    if mode == "preset_boost_guitar":
-        return "guitar"
-    return None
-
-
-def _preset_output_label(mode: str) -> str | None:
-    labels = MODE_OUTPUT_LABELS.get(mode)
-    if labels:
-        return str(labels[0])
-    return None
-
-
-def _task_can_adjust_preset(task: dict[str, Any]) -> bool:
-    mode = str(task.get("mode") or "")
-    cache_label = _preset_overlay_cache_label(mode)
-    if cache_label is None:
-        return False
-    if str(task.get("status") or "").lower() != "done":
-        return False
-    source_path = Path(str(task.get("source_path") or "")).expanduser()
-    if not source_path.exists() or not source_path.is_file():
-        return False
-    return _cached_intermediate_output_path(str(task.get("id") or ""), cache_label) is not None
-
-
-def _export_cached_boost_harmonies_mix(task_id: str, preset_settings: dict[str, float]) -> dict[str, Any]:
-    task = _require_task(task_id)
-    mode = str(task.get("mode") or "")
-    cache_label = _preset_overlay_cache_label(mode)
-    output_label = _preset_output_label(mode)
-    if cache_label is None or output_label is None:
-        raise AppError(ErrorCode.INVALID_REQUEST, "This preset export is not available for this task.")
-    if not _task_can_adjust_preset(task):
-        raise AppError(
-            ErrorCode.INVALID_REQUEST,
-            "Cached preset files are unavailable. Run the preset again to create a new adjustable export.",
-        )
-
-    overlay_cache = _cached_intermediate_output_path(task_id, cache_label)
-    if overlay_cache is None:
-        raise AppError(
-            ErrorCode.INVALID_REQUEST,
-            "Cached preset overlay is unavailable. Run the preset again to recreate it.",
-        )
-
-    source_path = Path(str(task.get("source_path") or "")).expanduser()
-    work_dir = Path(tempfile.mkdtemp(prefix=f"presetmix_{task_id[:8]}_", dir=str(WORK_DIR)))
-    try:
-        source_info = _probe_source(source_path)
-        decoded_path = _decode_audio_to_wav(
-            source_path,
-            work_dir,
-            source_info.channels,
-            stop_check=lambda: _stop_check(task_id),
-        )
-        waveform = _load_waveform(decoded_path)
-        overlay_tensor = _load_waveform(overlay_cache)
-        boost_mix_tensor = _boost_overlay_mix(
-            waveform,
-            overlay_tensor,
-            base_song_gain_db=preset_settings["base_song_gain_db"],
-            overlay_gain_db=preset_settings["overlay_gain_db"],
-        )
-        temp_mix_path = _write_temp_wave(work_dir, _temp_audio_name(output_label), boost_mix_tensor)
-
-        output_dir = Path(str(task.get("out_dir") or "")).expanduser()
-        if not output_dir.exists() or not output_dir.is_dir():
-            output_dir = _create_output_dir(task)
-
-        export_plan = _resolve_export_plan(source_info, str(task.get("output_format") or _compat_settings_payload()["output_format"]))
-        final_path = output_dir / f"{_safe_stem(str(task['original_name']))} - {output_label}{export_plan.suffix}"
-        exported = _export_stem(temp_mix_path, source_path, final_path, export_plan, source_info.has_cover)
-
-        with tasks_lock:
-            current = tasks[task_id]
-            current["out_dir"] = str(output_dir)
-            current["preset_settings_snapshot"] = {
-                "overlay_gain_db": preset_settings["overlay_gain_db"],
-                "base_song_gain_db": preset_settings["base_song_gain_db"],
-            }
-            outputs = list(current.get("outputs") or [])
-            if exported.name not in outputs:
-                outputs.append(exported.name)
-            current["outputs"] = outputs
-            current["finished_at"] = time.time()
-            current["version"] += 1
-            snapshot = _public_task(current)
-        return snapshot
-    finally:
-        _cleanup_path(work_dir)
-
-
-def _expected_output_count(mode: str) -> int:
-    return len(MODE_OUTPUT_LABELS.get(mode, ()))
-
-
-def _stage_model_key(stage_text: str) -> str | None:
-    stage = str(stage_text or "").lower()
-    mapping = {
-        "running vocals model": "vocals",
-        "running instrumental model": "instrumental",
-        "running deux model": "deux",
-        "running guitar model": "guitar",
-        "running mel-band karaoke model": "mel_band_karaoke",
-        "running background vocal model": "mel_band_karaoke",
-        "running harmony background model": "mel_band_karaoke",
-        "running denoise model": "denoise",
-        "running bs-roformer 6s model": "bs_roformer_6s",
-        "running full mix model": "bs_roformer_6s",
-        "running drums model": "htdemucs_ft_drums",
-        "running htdemucs4 ft drums model": "htdemucs_ft_drums",
-        "running htdemucs4 ft bass model": "htdemucs_ft_bass",
-        "running htdemucs4 ft other model": "htdemucs_ft_other",
-        "running htdemucs4 6 stem model": "htdemucs_6s",
-        "running drumsep 6 stem model": "drumsep_6s",
-        "running drum sep 4 stem model": "drumsep_4s",
-    }
-    for prefix, model_key in mapping.items():
-        if prefix in stage:
-            return model_key
-    return None
-
-
-def _runtime_stage_key_for_display(stage_text: str) -> str | None:
-    stage = str(stage_text or "").lower()
-    if "loading models" in stage:
-        return "load_models"
-    if "preparing audio" in stage:
-        return "prepare_audio"
-    if "mixing boost harmonies" in stage or "mixing boost guitar" in stage:
-        return "mix_preset"
-    if "exporting" in stage:
-        return "export"
-    return _stage_model_key(stage)
-
-
-def _runtime_model_sequence(mode: str) -> list[str]:
-    if mode in {"vocals", "instrumental", "deux", "guitar", "denoise", "bs_roformer_6s"}:
-        return [mode]
-    if mode == "mel_band_karaoke":
-        return ["vocals", "mel_band_karaoke"]
-    if mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "htdemucs_6s"}:
-        return [mode]
-    if mode == "htdemucs_ft_other":
-        return ["guitar", "htdemucs_ft_other"]
-    if mode == "drumsep_6s":
-        return ["htdemucs_ft_drums", "drumsep_6s"]
-    if mode == "drumsep_4s":
-        return ["htdemucs_ft_drums", "drumsep_4s"]
-    if mode == "both_deux":
-        return ["deux"]
-    if mode == "preset_all_stems":
-        return ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"]
-    if mode in {"both_separate", "preset_voc_instrum"}:
-        return ["vocals", "instrumental"]
-    if mode == "preset_boost_harmonies":
-        return ["vocals", "mel_band_karaoke"]
-    if mode == "preset_boost_guitar":
-        return ["guitar"]
-    if mode == "preset_denoise":
-        return ["denoise"]
-    return []
-
-
-def _runtime_stage_samples(stats_key: str) -> list[dict[str, float]]:
-    with runtime_stats_lock:
-        return list(runtime_stats.get("stage_samples", {}).get(stats_key) or [])
-
-
-def _runtime_task_samples(task_key: str) -> list[dict[str, float]]:
-    with runtime_stats_lock:
-        return list(runtime_stats.get("task_samples", {}).get(task_key) or [])
-
-
-def _append_runtime_sample(bucket: str, stats_key: str, sample: dict[str, float]) -> None:
-    normalized = _normalize_runtime_sample(sample)
-    if normalized is None:
-        return
-    limit = RUNTIME_STATS_STAGE_LIMIT if bucket == "stage_samples" else RUNTIME_STATS_TASK_LIMIT
-    with runtime_stats_lock:
-        target = runtime_stats.setdefault(bucket, {})
-        entries = list(target.get(stats_key) or [])
-        entries.append(normalized)
-        target[stats_key] = entries[-limit:]
-        _save_runtime_stats(runtime_stats)
-
-
-def _weighted_quantile(pairs: list[tuple[float, float]], quantile: float) -> float | None:
-    if not pairs:
-        return None
-    sorted_pairs = sorted(((float(value), max(1e-6, float(weight))) for value, weight in pairs), key=lambda item: item[0])
-    total_weight = sum(weight for _, weight in sorted_pairs)
-    if total_weight <= 0:
-        return None
-    threshold = max(0.0, min(1.0, quantile)) * total_weight
-    cumulative = 0.0
-    for value, weight in sorted_pairs:
-        cumulative += weight
-        if cumulative >= threshold:
-            return value
-    return sorted_pairs[-1][0]
-
-
-def _sample_weight(audio_seconds: float, sample: dict[str, float], *, index: int, total: int) -> float:
-    sample_audio = max(0.0, float(sample.get("audio_seconds") or 0.0))
-    if audio_seconds > 0 and sample_audio > 0:
-        rel_distance = abs(sample_audio - audio_seconds) / max(audio_seconds, sample_audio, 1.0)
-        audio_weight = 1.0 / max(0.12, 0.22 + (rel_distance * 1.8))
-    else:
-        audio_weight = 1.0
-    recency_weight = 0.65 + (0.35 * ((index + 1) / max(1, total)))
-    return audio_weight * recency_weight
-
-
-def _scaled_sample_elapsed(sample: dict[str, float], audio_seconds: float, *, scale_by_audio: bool) -> float:
-    elapsed_seconds = max(0.1, float(sample.get("elapsed_seconds") or 0.0))
-    if not scale_by_audio or audio_seconds <= 0:
-        return elapsed_seconds
-    sample_audio = max(0.1, float(sample.get("audio_seconds") or 0.0))
-    return max(0.1, elapsed_seconds * (audio_seconds / sample_audio))
-
-
-def _predict_from_samples(
-    samples: list[dict[str, float]],
-    *,
-    audio_seconds: float,
-    scale_by_audio: bool,
-    conservative: bool,
-) -> tuple[float | None, int]:
-    if not samples:
-        return None, 0
-    recent_samples = samples[-RUNTIME_STATS_STAGE_LIMIT:]
-    weighted_predictions = [
-        (
-            _scaled_sample_elapsed(sample, audio_seconds, scale_by_audio=scale_by_audio),
-            _sample_weight(audio_seconds, sample, index=index, total=len(recent_samples)),
-        )
-        for index, sample in enumerate(recent_samples)
-    ]
-    median = _weighted_quantile(weighted_predictions, 0.5)
-    if median is None:
-        return None, len(recent_samples)
-    if not conservative:
-        return max(0.1, median), len(recent_samples)
-    p70 = _weighted_quantile(weighted_predictions, 0.7)
-    if p70 is None:
-        p70 = median
-    return max(0.1, (median * 0.7) + (p70 * 0.3)), len(recent_samples)
-
-
-def _fallback_model_runtime_seconds(model_key: str, audio_seconds: float) -> float:
-    seconds = max(1.0, float(audio_seconds or 0.0))
-    if model_key == "bs_roformer_6s":
-        return max(20.0, seconds * 0.95)
-    kind = MODEL_SPECS.get(model_key, ModelSpec("", "", 0, 0)).kind
-    if kind == "demucs":
-        return max(8.0, seconds * 0.18)
-    if kind == "mdx23c":
-        return max(10.0, seconds * 0.28)
-    return max(12.0, seconds * 0.55)
-
-
-def _predict_fixed_stage_runtime_seconds(stage_key: str, audio_seconds: float) -> tuple[float, int, str]:
-    samples = _runtime_stage_samples(f"fixed:{stage_key}")
-    prediction, count = _predict_from_samples(
-        samples,
-        audio_seconds=audio_seconds,
-        scale_by_audio=False,
-        conservative=False,
-    )
-    if prediction is not None:
-        return max(0.5, prediction), count, "history"
-    if stage_key == "load_models":
-        return 2.5, 0, "fallback"
-    if stage_key == "prepare_audio":
-        return max(3.0, min(18.0, max(1.0, audio_seconds) * 0.03)), 0, "fallback"
-    if stage_key == "mix_preset":
-        return 3.0, 0, "fallback"
-    return 1.0, 0, "fallback"
-
-
-def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> float | None:
-    if model_key not in ETA_HISTORY_KEYS:
-        return None
-    samples = _runtime_stage_samples(f"model:{model_key}")
-    prediction, _count = _predict_from_samples(
-        samples,
-        audio_seconds=audio_seconds,
-        scale_by_audio=True,
-        conservative=True,
-    )
-    if prediction is not None:
-        return prediction
-    return _fallback_model_runtime_seconds(model_key, audio_seconds)
-
-
-def _predict_model_stage_runtime(model_key: str, audio_seconds: float) -> tuple[float, int, str]:
-    samples = _runtime_stage_samples(f"model:{model_key}")
-    prediction, count = _predict_from_samples(
-        samples,
-        audio_seconds=audio_seconds,
-        scale_by_audio=True,
-        conservative=True,
-    )
-    if prediction is not None:
-        return prediction, count, "history"
-    return _fallback_model_runtime_seconds(model_key, audio_seconds), 0, "fallback"
-
-
-def _predict_export_runtime_seconds(output_format: str, output_count: int, audio_seconds: float) -> tuple[float, int, str]:
-    stats_key = f"export:{output_format}:{max(1, output_count)}"
-    samples = _runtime_stage_samples(stats_key)
-    prediction, count = _predict_from_samples(
-        samples,
-        audio_seconds=audio_seconds,
-        scale_by_audio=True,
-        conservative=False,
-    )
-    if prediction is not None:
-        return max(1.0, prediction), count, "history"
-    fallback = max(2.0, max(1, output_count) * (1.5 + (max(1.0, audio_seconds) * 0.01)))
-    return fallback, 0, "fallback"
-
-
-def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
-    if audio_seconds <= 0:
-        return None
-    samples = _runtime_task_samples(f"task:{mode}")
-    prediction, _count = _predict_from_samples(
-        samples,
-        audio_seconds=audio_seconds,
-        scale_by_audio=True,
-        conservative=True,
-    )
-    return prediction
-
-
-def _build_runtime_plan(task: dict[str, Any], *, audio_seconds: float | None = None) -> dict[str, Any]:
-    mode = str(task.get("mode") or "")
-    output_format = str(task.get("output_format") or _compat_settings_payload()["output_format"])
-    export_count = max(1, _expected_output_count(mode))
-    audio_value = max(0.0, float(audio_seconds if audio_seconds is not None else (task.get("audio_seconds") or 0.0)))
-    stages: list[dict[str, Any]] = []
-
-    load_seconds, load_count, load_basis = _predict_fixed_stage_runtime_seconds("load_models", audio_value)
-    stages.append(
-        {
-            "stage_key": "load_models",
-            "stats_key": "fixed:load_models",
-            "predicted_seconds": load_seconds,
-            "started_at": None,
-            "completed_at": None,
-            "live_fraction": None,
-            "supports_live_fraction": False,
-            "prediction_basis": load_basis,
-            "prediction_samples": load_count,
-        }
-    )
-
-    prep_seconds, prep_count, prep_basis = _predict_fixed_stage_runtime_seconds("prepare_audio", audio_value)
-    stages.append(
-        {
-            "stage_key": "prepare_audio",
-            "stats_key": "fixed:prepare_audio",
-            "predicted_seconds": prep_seconds,
-            "started_at": None,
-            "completed_at": None,
-            "live_fraction": None,
-            "supports_live_fraction": False,
-            "prediction_basis": prep_basis,
-            "prediction_samples": prep_count,
-        }
-    )
-
-    for model_key in _runtime_model_sequence(mode):
-        predicted_seconds, sample_count, basis = _predict_model_stage_runtime(model_key, audio_value)
-        stages.append(
-            {
-                "stage_key": model_key,
-                "stats_key": f"model:{model_key}",
-                "predicted_seconds": predicted_seconds,
-                "started_at": None,
-                "completed_at": None,
-                "live_fraction": None,
-                "supports_live_fraction": True,
-                "prediction_basis": basis,
-                "prediction_samples": sample_count,
-            }
-        )
-
-    if mode in {"preset_boost_harmonies", "preset_boost_guitar"}:
-        mix_seconds, mix_count, mix_basis = _predict_fixed_stage_runtime_seconds("mix_preset", audio_value)
-        stages.append(
-            {
-                "stage_key": "mix_preset",
-                "stats_key": "fixed:mix_preset",
-                "predicted_seconds": mix_seconds,
-                "started_at": None,
-                "completed_at": None,
-                "live_fraction": None,
-                "supports_live_fraction": False,
-                "prediction_basis": mix_basis,
-                "prediction_samples": mix_count,
-            }
-        )
-
-    export_seconds, export_count_samples, export_basis = _predict_export_runtime_seconds(
-        output_format,
-        export_count,
-        audio_value,
-    )
-    stages.append(
-        {
-            "stage_key": "export",
-            "stats_key": f"export:{output_format}:{export_count}",
-            "predicted_seconds": export_seconds,
-            "started_at": None,
-            "completed_at": None,
-            "live_fraction": None,
-            "supports_live_fraction": True,
-            "prediction_basis": export_basis,
-            "prediction_samples": export_count_samples,
-        }
-    )
-
-    return {"stages": stages}
-
-
-def _refresh_runtime_plan(task: dict[str, Any], *, audio_seconds: float | None = None) -> None:
-    previous_plan = task.get("runtime_plan") if isinstance(task.get("runtime_plan"), dict) else {"stages": []}
-    previous_by_key = {
-        str(stage.get("stage_key") or ""): stage
-        for stage in list(previous_plan.get("stages") or [])
-        if isinstance(stage, dict)
-    }
-    next_plan = _build_runtime_plan(task, audio_seconds=audio_seconds)
-    for stage in next_plan["stages"]:
-        previous = previous_by_key.get(str(stage.get("stage_key") or ""))
-        if previous is None:
-            continue
-        stage["started_at"] = previous.get("started_at")
-        stage["completed_at"] = previous.get("completed_at")
-        stage["live_fraction"] = previous.get("live_fraction")
-        if previous.get("completed_at") and isinstance(previous.get("predicted_seconds"), (int, float)):
-            stage["predicted_seconds"] = max(0.1, float(previous["predicted_seconds"]))
-    task["runtime_plan"] = next_plan
-
-
-def _runtime_plan_stage(task: dict[str, Any], stage_key: str) -> dict[str, Any] | None:
-    runtime_plan = task.get("runtime_plan")
-    if not isinstance(runtime_plan, dict):
-        return None
-    for stage in list(runtime_plan.get("stages") or []):
-        if isinstance(stage, dict) and str(stage.get("stage_key") or "") == stage_key:
-            return stage
-    return None
-
-
-def _complete_runtime_stage(task: dict[str, Any], stage_key: str | None, *, now: float, record_sample: bool = True) -> None:
-    if not stage_key:
-        return
-    stage = _runtime_plan_stage(task, stage_key)
-    if stage is None or stage.get("completed_at") is not None:
-        return
-    started_at = stage.get("started_at")
-    if not isinstance(started_at, (int, float)):
-        return
-    elapsed_seconds = max(0.1, now - float(started_at))
-    stage["completed_at"] = now
-    stage["live_fraction"] = 1.0 if stage.get("supports_live_fraction") else None
-    stage["predicted_seconds"] = elapsed_seconds
-    if record_sample and not str(stage.get("stats_key") or "").startswith("model:"):
-        _append_runtime_sample(
-            "stage_samples",
-            str(stage.get("stats_key") or ""),
-            {
-                "audio_seconds": float(task.get("audio_seconds") or 0.0),
-                "elapsed_seconds": elapsed_seconds,
-                "recorded_at": now,
-            },
-        )
-
-
-def _stage_live_fraction_from_legacy_pct(task: dict[str, Any], stage_text: str, pct: int) -> float | None:
-    stage_key = _runtime_stage_key_for_display(stage_text)
-    if stage_key is None:
-        return None
-    if stage_key == "export":
-        span = max(1, EXPORT_PROGRESS_END_PCT - EXPORT_PROGRESS_START_PCT)
-        return max(0.0, min(1.0, (max(0, min(100, int(pct))) - EXPORT_PROGRESS_START_PCT) / span))
-    return _stage_progress_fraction(str(task.get("mode") or ""), stage_text, pct)
-
-
-def _effective_runtime_stage_progress(task: dict[str, Any], stage: dict[str, Any], now: float) -> tuple[float, float, str]:
-    predicted_seconds = max(0.1, float(stage.get("predicted_seconds") or 0.1))
-    started_at = float(stage.get("started_at") or now)
-    elapsed_seconds = max(0.0, now - started_at)
-    live_fraction = stage.get("live_fraction")
-    live_fraction_value = None
-    if isinstance(live_fraction, (int, float)):
-        live_fraction_value = max(0.0, min(1.0, float(live_fraction)))
-
-    basis = str(stage.get("prediction_basis") or "fallback")
-    sample_count = int(stage.get("prediction_samples") or 0)
-    eta_state = "steady" if basis == "history" and sample_count >= 3 else "estimating"
-
-    if bool(stage.get("supports_live_fraction")):
-        if live_fraction_value is not None and live_fraction_value > 0:
-            if live_fraction_value >= ETA_MIN_LIVE_FRACTION and elapsed_seconds >= ETA_MIN_LIVE_SECONDS:
-                live_total = elapsed_seconds / max(live_fraction_value, 1e-3)
-                live_weight = min(0.75, live_fraction_value * 0.75)
-                predicted_seconds = max(
-                    elapsed_seconds + 1.0,
-                    (predicted_seconds * (1.0 - live_weight)) + (live_total * live_weight),
-                )
-                eta_state = "steady" if live_fraction_value >= 0.4 else "calibrating"
-            else:
-                eta_state = "calibrating"
-            return predicted_seconds, live_fraction_value, eta_state
-        fraction = min(0.97, elapsed_seconds / max(predicted_seconds, 1e-3))
-        return predicted_seconds, fraction, eta_state
-
-    fraction = min(0.97, elapsed_seconds / max(predicted_seconds, 1e-3))
-    return predicted_seconds, fraction, eta_state
-
-
-def _update_task_runtime_view(task: dict[str, Any], *, now: float | None = None) -> None:
-    now = time.time() if now is None else now
-    status = str(task.get("status") or "")
-    runtime_plan = task.get("runtime_plan")
-    if status != "running" or not isinstance(runtime_plan, dict):
-        return
-    previous_pct = max(0, min(99, int(task.get("pct") or 0)))
-    last_progress_pct = max(0, min(99, int(task.get("last_progress_pct") or 0)))
-
-    stages = [stage for stage in list(runtime_plan.get("stages") or []) if isinstance(stage, dict)]
-    if not stages:
-        return
-
-    completed_seconds = 0.0
-    consumed_seconds = 0.0
-    predicted_total_seconds = 0.0
-    eta_state = "estimating"
-    current_stage_key = _runtime_stage_key_for_display(str(task.get("stage") or ""))
-
-    for stage in stages:
-        stage_key = str(stage.get("stage_key") or "")
-        if stage.get("completed_at") is not None:
-            stage_seconds = max(0.1, float(stage.get("predicted_seconds") or 0.1))
-            completed_seconds += stage_seconds
-            predicted_total_seconds += stage_seconds
-            consumed_seconds = completed_seconds
-            continue
-        if current_stage_key and stage_key == current_stage_key and stage.get("started_at") is not None:
-            effective_seconds, fraction, stage_eta_state = _effective_runtime_stage_progress(task, stage, now)
-            predicted_total_seconds += effective_seconds
-            consumed_seconds = completed_seconds + (effective_seconds * max(0.0, min(1.0, fraction)))
-            eta_state = stage_eta_state
-            continue
-        predicted_total_seconds += max(0.1, float(stage.get("predicted_seconds") or 0.1))
-
-    if predicted_total_seconds <= 0:
-        task["pct"] = max(0, min(99, int(task.get("pct") or 0)))
-        task["eta_seconds"] = None
-        task["eta_state"] = "estimating"
-        return
-
-    remaining_seconds = max(0.0, predicted_total_seconds - consumed_seconds)
-    pct = int(math.floor(100.0 * (consumed_seconds / predicted_total_seconds)))
-    pct = max(0, min(99, pct))
-    if remaining_seconds > max(45.0, predicted_total_seconds * 0.15):
-        pct = min(pct, 90)
-    pct = max(pct, previous_pct, last_progress_pct)
-
-    task["predicted_total_seconds"] = predicted_total_seconds
-    task["pct"] = pct
-    task["eta_seconds"] = _stabilize_eta(task, remaining_seconds, now=now, stage_text=current_stage_key or "")
-    task["eta_state"] = "finishing" if remaining_seconds <= ETA_FINISHING_THRESHOLD_SECONDS else eta_state
-
 
 
 app = FastAPI()
@@ -3873,12 +2051,6 @@ app.state.runtime_status_provider = None
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
 task_queue: queue.Queue[str] = queue.Queue()
-task_runtime_lock = threading.RLock()
-task_runtimes: dict[str, dict[str, Any]] = {}
-queue_resume_event = threading.Event()
-queue_resume_event.set()
-previous_files_lock = threading.RLock()
-previous_files_index: list[dict[str, Any]] = _load_previous_files_index()
 model_download_lock = threading.RLock()
 model_download_state: dict[str, Any] = {
     "status": "idle",
@@ -3887,7 +2059,6 @@ model_download_state: dict[str, Any] = {
     "current_model": "",
     "downloaded_bytes": 0,
     "total_bytes": 0,
-    "download_rate_bytes_per_sec": 0.0,
     "eta_seconds": None,
     "retry_count": 0,
     "retry_label": "0",
@@ -3895,24 +2066,6 @@ model_download_state: dict[str, Any] = {
     "error": "",
 }
 model_download_thread: threading.Thread | None = None
-release_download_lock = threading.RLock()
-release_download_state: dict[str, Any] = {
-    "status": "idle",
-    "pct": 0,
-    "step": "",
-    "current_asset": "",
-    "downloaded_bytes": 0,
-    "total_bytes": 0,
-    "download_rate_bytes_per_sec": 0.0,
-    "eta_seconds": None,
-    "started_at": None,
-    "error": "",
-    "path": "",
-    "filename": "",
-    "version": "",
-    "release_name": "",
-}
-release_download_thread: threading.Thread | None = None
 ffmpeg_status_lock = threading.RLock()
 ffmpeg_status_cache: dict[str, Any] = {"checked_at": 0.0, "available": True, "message": ""}
 
@@ -3924,9 +2077,9 @@ def set_runtime_status_provider(provider: Callable[[], dict[str, Any]] | None) -
 def _runtime_status_payload() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "windowed": False,
-        "preferred_port": DEFAULT_APP_PORT,
-        "current_port": DEFAULT_APP_PORT,
-        "client_url": f"http://127.0.0.1:{DEFAULT_APP_PORT}/",
+        "preferred_port": 8000,
+        "current_port": 8000,
+        "client_url": "http://127.0.0.1:8000/",
         "lan_url": "",
         "lan_local_url": "",
         "lan_display": "",
@@ -3978,274 +2131,6 @@ def _settings_response_payload(request: Request | None = None) -> dict[str, Any]
     return payload
 
 
-def _previous_files_retention_seconds(settings: dict[str, Any] | None = None) -> int:
-    source = settings or _compat_settings_payload()
-    choice = str(source.get("previous_files_retention") or "1w")
-    return PREVIOUS_FILES_RETENTION_CHOICES.get(choice, PREVIOUS_FILES_RETENTION_CHOICES["1w"])
-
-
-def _previous_files_limit_gb(settings: dict[str, Any] | None = None) -> float:
-    source = settings or _compat_settings_payload()
-    return _coerce_storage_gb(
-        source.get("previous_files_limit_gb"),
-        PREVIOUS_FILES_LIMIT_GB_DEFAULT,
-        minimum=PREVIOUS_FILES_LIMIT_GB_MIN,
-        maximum=PREVIOUS_FILES_LIMIT_GB_MAX,
-    )
-
-
-def _previous_files_warn_gb(settings: dict[str, Any] | None = None) -> float:
-    source = settings or _compat_settings_payload()
-    limit_gb = _previous_files_limit_gb(source)
-    warn_gb = _coerce_storage_gb(
-        source.get("previous_files_warn_gb"),
-        PREVIOUS_FILES_WARN_GB_DEFAULT,
-        minimum=PREVIOUS_FILES_WARN_GB_MIN,
-        maximum=PREVIOUS_FILES_WARN_GB_MAX,
-    )
-    return min(limit_gb, warn_gb)
-
-
-def _gb_to_bytes(value_gb: float) -> int:
-    return max(0, int(round(float(value_gb) * (1024**3))))
-
-
-def _previous_files_limit_bytes(settings: dict[str, Any] | None = None) -> int:
-    return _gb_to_bytes(_previous_files_limit_gb(settings))
-
-
-def _previous_files_warn_bytes(settings: dict[str, Any] | None = None) -> int:
-    return _gb_to_bytes(_previous_files_warn_gb(settings))
-
-
-def _path_total_bytes(path: Path) -> int:
-    try:
-        if path.is_file():
-            return max(0, int(path.stat().st_size))
-        if not path.exists():
-            return 0
-        total = 0
-        for child in path.rglob("*"):
-            if child.is_file():
-                with contextlib.suppress(OSError):
-                    total += max(0, int(child.stat().st_size))
-        return total
-    except Exception:
-        return 0
-
-
-def _previous_file_entry_total_bytes(entry: dict[str, Any]) -> int:
-    storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
-    return _path_total_bytes(storage_dir)
-
-
-def _history_storage_payload(
-    entries: list[dict[str, Any]] | None = None,
-    settings: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    active_settings = settings or _compat_settings_payload()
-    active_entries = entries if entries is not None else _prune_previous_files(save=False)
-    usage_bytes = 0
-    for entry in active_entries:
-        size_bytes = max(0, int(entry.get("total_bytes") or 0))
-        if size_bytes <= 0:
-            size_bytes = _previous_file_entry_total_bytes(entry)
-        usage_bytes += size_bytes
-    limit_bytes = _previous_files_limit_bytes(active_settings)
-    warn_bytes = _previous_files_warn_bytes(active_settings)
-    return {
-        "usage_bytes": usage_bytes,
-        "limit_bytes": limit_bytes,
-        "warn_bytes": warn_bytes,
-        "near_limit": usage_bytes >= warn_bytes if warn_bytes > 0 else False,
-        "at_limit": usage_bytes >= limit_bytes if limit_bytes > 0 else False,
-    }
-
-
-def _previous_file_output_paths(entry: dict[str, Any]) -> tuple[Path, list[Path]]:
-    storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
-    if not storage_dir.exists() or not storage_dir.is_dir():
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
-    outputs_dir = storage_dir / "outputs"
-    outputs = [outputs_dir / str(name) for name in (entry.get("outputs") or [])]
-    existing_outputs = [path for path in outputs if path.exists() and path.is_file()]
-    if outputs and not existing_outputs:
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
-    return outputs_dir, existing_outputs
-
-
-def _public_previous_file(entry: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": str(entry.get("id") or ""),
-        "task_id": str(entry.get("task_id") or ""),
-        "name": str(entry.get("original_name") or ""),
-        "mode": str(entry.get("mode") or ""),
-        "stems": list(entry.get("stems") or []),
-        "outputs": list(entry.get("outputs") or []),
-        "finished_at": float(entry.get("finished_at") or 0.0),
-        "preset_settings": entry.get("preset_settings") if isinstance(entry.get("preset_settings"), dict) else None,
-        "total_bytes": max(0, int(entry.get("total_bytes") or 0)),
-        "artwork_url": f"/api/history/{entry['id']}/artwork",
-    }
-
-
-def _require_previous_file(entry_id: str) -> dict[str, Any]:
-    _prune_previous_files(save=False)
-    with previous_files_lock:
-        for entry in previous_files_index:
-            if str(entry.get("id") or "") == str(entry_id):
-                return dict(entry)
-    raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid previous file id")
-
-
-def _prune_previous_files(*, save: bool = True) -> list[dict[str, Any]]:
-    cutoff = time.time() - _previous_files_retention_seconds()
-    limit_bytes = _previous_files_limit_bytes()
-    kept: list[dict[str, Any]] = []
-    removed_dirs: list[Path] = []
-    with previous_files_lock:
-        for entry in previous_files_index:
-            storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
-            source_path = Path(str(entry.get("source_path") or "")).expanduser()
-            if float(entry.get("finished_at") or 0.0) < cutoff:
-                removed_dirs.append(storage_dir)
-                continue
-            if not storage_dir.exists() or not source_path.exists():
-                removed_dirs.append(storage_dir)
-                continue
-            try:
-                _previous_file_output_paths(entry)
-            except AppError:
-                removed_dirs.append(storage_dir)
-                continue
-            entry["total_bytes"] = _previous_file_entry_total_bytes(entry)
-            kept.append(entry)
-        kept.sort(key=lambda item: float(item.get("finished_at") or 0.0), reverse=True)
-        if limit_bytes > 0:
-            limited: list[dict[str, Any]] = []
-            usage_bytes = 0
-            for entry in kept:
-                entry_size = max(0, int(entry.get("total_bytes") or 0))
-                if usage_bytes + entry_size > limit_bytes:
-                    removed_dirs.append(Path(str(entry.get("storage_dir") or "")).expanduser())
-                    continue
-                limited.append(entry)
-                usage_bytes += entry_size
-            kept = limited
-        previous_files_index[:] = kept
-        if save:
-            _save_previous_files_index(previous_files_index)
-    for path in removed_dirs:
-        _cleanup_path(path)
-    return [dict(entry) for entry in kept]
-
-
-def _archive_previous_file(task_id: str, out_dir: Path, outputs: list[str]) -> dict[str, Any] | None:
-    with tasks_lock:
-        task = dict(tasks.get(task_id) or {})
-    if not task:
-        return None
-    source_path = Path(str(task.get("source_path") or "")).expanduser()
-    if not source_path.exists() or not outputs:
-        return None
-    entry_id = str(uuid.uuid4())
-    storage_dir = _ensure_dir(PREVIOUS_FILES_DIR / entry_id)
-    outputs_dir = _ensure_dir(storage_dir / "outputs")
-    stored_outputs: list[str] = []
-    for output_name in outputs:
-        source_output = out_dir / str(output_name)
-        if not source_output.exists() or not source_output.is_file():
-            continue
-        target_output = outputs_dir / str(output_name)
-        target_output.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            shutil.copy2(source_output, target_output)
-        except Exception:
-            logger.warning("failed to archive output %s for task %s", source_output, task_id, exc_info=True)
-            continue
-        stored_outputs.append(_relative_output_name(target_output, outputs_dir))
-    if not stored_outputs:
-        _cleanup_path(storage_dir)
-        return None
-    archived_source = storage_dir / source_path.name
-    try:
-        shutil.copy2(source_path, archived_source)
-    except Exception:
-        logger.warning("failed to archive source %s for task %s", source_path, task_id, exc_info=True)
-        _cleanup_path(storage_dir)
-        return None
-    artwork_path = ""
-    with contextlib.suppress(Exception):
-        current_artwork = _extract_task_artwork(task_id)
-        if current_artwork is not None and current_artwork.exists():
-            archived_artwork = storage_dir / f"artwork{current_artwork.suffix.lower() or '.jpg'}"
-            shutil.copy2(current_artwork, archived_artwork)
-            artwork_path = str(archived_artwork)
-    entry = {
-        "id": entry_id,
-        "task_id": task_id,
-        "original_name": str(task.get("original_name") or archived_source.name),
-        "mode": str(task.get("mode") or ""),
-        "stems": _mode_to_stems(str(task.get("mode") or "")),
-        "storage_dir": str(storage_dir),
-        "source_path": str(archived_source),
-        "source_name": archived_source.name,
-        "outputs": stored_outputs,
-        "finished_at": float(task.get("finished_at") or time.time()),
-        "artwork_path": artwork_path,
-        "output_format": str(task.get("output_format") or ""),
-        "video_handling": str(task.get("video_handling") or "audio_only"),
-        "preset_settings": task.get("preset_settings_snapshot") if isinstance(task.get("preset_settings_snapshot"), dict) else None,
-        "total_bytes": _path_total_bytes(storage_dir),
-    }
-    with previous_files_lock:
-        previous_files_index.insert(0, entry)
-        _save_previous_files_index(previous_files_index)
-    _prune_previous_files()
-    return entry
-
-
-def _task_boost_harmonies_settings(task: dict[str, Any]) -> dict[str, float]:
-    snapshot = task.get("preset_settings_snapshot")
-    if isinstance(snapshot, dict):
-        return {
-            "overlay_gain_db": _coerce_gain_db(
-                snapshot.get("overlay_gain_db", snapshot.get("background_vocals_gain_db")),
-                BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
-            ),
-            "base_song_gain_db": _coerce_gain_db(
-                snapshot.get("base_song_gain_db"),
-                BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
-            ),
-        }
-    return _boost_harmonies_settings_payload(_compat_settings_payload())
-
-
-def _task_boost_guitar_settings(task: dict[str, Any]) -> dict[str, float]:
-    snapshot = task.get("preset_settings_snapshot")
-    if isinstance(snapshot, dict):
-        return {
-            "overlay_gain_db": _coerce_gain_db(
-                snapshot.get("overlay_gain_db", snapshot.get("guitar_gain_db")),
-                BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
-            ),
-            "base_song_gain_db": _coerce_gain_db(
-                snapshot.get("base_song_gain_db"),
-                BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
-            ),
-        }
-    return _boost_guitar_settings_payload(_compat_settings_payload())
-
-
-def _task_preset_settings(task: dict[str, Any]) -> dict[str, float] | None:
-    mode = str(task.get("mode") or "")
-    if mode == "preset_boost_harmonies":
-        return _task_boost_harmonies_settings(task)
-    if mode == "preset_boost_guitar":
-        return _task_boost_guitar_settings(task)
-    return None
-
-
 def _set_model_download_state(**patch: Any) -> None:
     with model_download_lock:
         model_download_state.update(patch)
@@ -4263,75 +2148,20 @@ def _selected_missing_models(selection: list[str] | None = None) -> list[str]:
 def _public_model_download_status() -> dict[str, Any]:
     with model_download_lock:
         payload = dict(model_download_state)
-    models_status = _models_status_payload()
-    missing = list(models_status["missing"])
+    missing = sorted(_selected_missing_models())
     prompt_state = str(_compat_settings_payload().get("model_prompt_state") or MODEL_PROMPT_PENDING)
     payload.update(
         {
             "missing": missing,
             "models_dir": str(MODEL_DIR),
-            "models": models_status["models"],
-            "downloaded_total_bytes": int(models_status["downloaded_total_bytes"]),
             "prompt_state": MODEL_PROMPT_COMPLETE if not missing else prompt_state,
         }
     )
     return payload
 
 
-def _models_status_payload() -> dict[str, Any]:
-    details: list[dict[str, Any]] = []
-    total_bytes = 0
-    missing: list[str] = []
-    for key in MODEL_SPECS:
-        path = _locate_model_file(MODEL_SPECS[key].filename)
-        size_bytes = 0
-        if path is not None:
-            with contextlib.suppress(OSError):
-                size_bytes = max(0, int(path.stat().st_size))
-        ready = path is not None and size_bytes >= 0
-        if not ready:
-            missing.append(key)
-        total_bytes += size_bytes
-        details.append(
-            {
-                "key": key,
-                "label": MODEL_DISPLAY_NAMES.get(key, key),
-                "ready": ready,
-                "size_bytes": size_bytes if ready else None,
-                "path": str(path) if path is not None else "",
-            }
-        )
-    return {
-        "missing": sorted(missing),
-        "models_dir": str(MODEL_DIR),
-        "models": details,
-        "downloaded_total_bytes": total_bytes,
-    }
-
-
 def _model_retry_label(retry_count: int) -> str:
     return "too many to count" if retry_count > 9999 else str(max(0, retry_count))
-
-
-MODEL_DOWNLOAD_MAX_RETRIES = 5
-
-
-def _model_download_error_message(exc: Exception) -> str:
-    if isinstance(exc, ModelDownloadError):
-        return str(exc)
-    return "download failed unexpectedly"
-
-
-def _model_download_retry_delay_seconds(retry_count: int) -> int:
-    return min(30, max(5, retry_count * 5))
-
-
-def _should_retry_model_download(exc: Exception, retry_count: int) -> bool:
-    if retry_count >= MODEL_DOWNLOAD_MAX_RETRIES:
-        return False
-    if isinstance(exc, ModelDownloadError):
-        return exc.retryable
-    return True
 
 
 def _run_model_download(selection: list[str] | None = None) -> None:
@@ -4344,7 +2174,6 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             current_model="",
             downloaded_bytes=0,
             total_bytes=0,
-            download_rate_bytes_per_sec=0.0,
             retry_count=0,
             retry_label="0",
             error="",
@@ -4359,7 +2188,6 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         current_model="",
         downloaded_bytes=0,
         total_bytes=0,
-        download_rate_bytes_per_sec=0.0,
         eta_seconds=None,
         retry_count=0,
         retry_label="0",
@@ -4371,19 +2199,17 @@ def _run_model_download(selection: list[str] | None = None) -> None:
     def _progress(update: dict[str, Any]) -> None:
         tag = str(update.get("tag") or "")
         filename = str(update.get("filename") or "")
-        pretty = MODEL_DISPLAY_NAMES.get(tag, tag.replace("_", " ")) if tag else filename
+        pretty = tag or filename
         downloaded_bytes = int(update.get("downloaded_bytes") or 0)
         total_bytes = int(update.get("total_bytes") or 0)
         with model_download_lock:
             started_at = model_download_state.get("started_at")
             retry_count = int(model_download_state.get("retry_count") or 0)
         eta_seconds: int | None = None
-        download_rate_bytes_per_sec = 0.0
         if isinstance(started_at, (int, float)) and started_at and total_bytes > 0 and downloaded_bytes > 0:
             elapsed = max(1.0, time.time() - float(started_at))
             remaining = max(0, total_bytes - downloaded_bytes)
-            download_rate_bytes_per_sec = max(downloaded_bytes / elapsed, 0.0)
-            eta_seconds = int(round(remaining / max(download_rate_bytes_per_sec, 1)))
+            eta_seconds = int(round(remaining / max(downloaded_bytes / elapsed, 1)))
         _set_model_download_state(
             status="downloading",
             pct=int(update.get("pct") or 0),
@@ -4391,7 +2217,6 @@ def _run_model_download(selection: list[str] | None = None) -> None:
             current_model=pretty,
             downloaded_bytes=downloaded_bytes,
             total_bytes=total_bytes,
-            download_rate_bytes_per_sec=download_rate_bytes_per_sec,
             eta_seconds=eta_seconds,
             retry_label=_model_retry_label(retry_count),
             error="",
@@ -4408,40 +2233,23 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         except Exception as exc:
             retry_count += 1
             retry_label = _model_retry_label(retry_count)
-            error_message = _model_download_error_message(exc)
-            if not _should_retry_model_download(exc, retry_count):
-                logger.error("model download attempt %s failed permanently", retry_label, exc_info=True)
-                _set_model_download_state(
-                    status="error",
-                    step="download failed",
-                    current_model="",
-                    download_rate_bytes_per_sec=0.0,
-                    eta_seconds=None,
-                    retry_count=retry_count,
-                    retry_label=retry_label,
-                    error=error_message,
-                )
-                return
-            retry_delay = _model_download_retry_delay_seconds(retry_count)
             logger.warning("model download attempt %s failed; retrying", retry_label, exc_info=True)
             _set_model_download_state(
                 status="retrying",
                 step="waiting to retry",
                 current_model="",
-                download_rate_bytes_per_sec=0.0,
-                eta_seconds=retry_delay,
+                eta_seconds=5,
                 retry_count=retry_count,
                 retry_label=retry_label,
-                error=f"{error_message}. retrying in {retry_delay}s... ({retry_label}/{MODEL_DOWNLOAD_MAX_RETRIES})",
+                error=f"network dropped, retrying in 5s... ({retry_label})",
             )
-            time.sleep(retry_delay)
+            time.sleep(5)
 
     _set_model_download_state(
         status="done",
         pct=100,
         step="models ready",
         current_model="",
-        download_rate_bytes_per_sec=0.0,
         eta_seconds=0,
         retry_count=retry_count,
         retry_label=_model_retry_label(retry_count),
@@ -4466,22 +2274,16 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "name": task["original_name"],
         "mode": task["mode"],
         "output_format": task["output_format"],
-        "multi_stem_export": _validate_multi_stem_export(
-            str(task.get("multi_stem_export_snapshot") or _compat_settings_payload().get("multi_stem_export") or "zip")
-        ),
         "video_handling": task["video_handling"],
         "delivery": str(task.get("delivery") or "folder"),
         "status": task["status"],
         "stage": task["stage"],
         "pct": task["pct"],
         "eta_seconds": task["eta_seconds"],
-        "eta_state": task.get("eta_state"),
         "out_dir": task["out_dir"],
         "outputs": list(task["outputs"]),
         "error": task["error"],
         "version": task["version"],
-        "preset_settings": _task_preset_settings(task),
-        "can_adjust_preset": _task_can_adjust_preset(task),
     }
 
 
@@ -4494,93 +2296,159 @@ def _require_task(task_id: str) -> dict[str, Any]:
 
 
 def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
-    _update_task_runtime_view(task, now=time.time())
-    eta_seconds = task.get("eta_seconds")
-    return int(eta_seconds) if isinstance(eta_seconds, (int, float)) else None
+    started_at = task.get("started_at")
+    if started_at is None or pct < 1 or pct >= 100:
+        return 0 if pct >= 100 else None
+    now = time.time()
+    elapsed = max(1.0, now - started_at)
+    mode = str(task.get("mode") or "")
+    stage_text = str(task.get("stage") or "").lower()
+    stage_started_at = task.get("stage_started_at")
+    stage_elapsed = max(0.0, now - float(stage_started_at or started_at))
+    audio_seconds = float(task.get("audio_seconds") or 0.0)
+    export_outputs = 2 if mode in {"both_deux", "both_separate"} else 1
+    export_budget = ETA_EXPORT_PER_OUTPUT_SECONDS * export_outputs
+    raw_estimate: float | None = None
+
+    if "exporting" in stage_text:
+        export_span = max(1, EXPORT_PROGRESS_END_PCT - EXPORT_PROGRESS_START_PCT)
+        export_progress = max(0.0, min(1.0, (pct - EXPORT_PROGRESS_START_PCT) / export_span))
+        raw_estimate = max(1.0, export_budget * (1.0 - export_progress))
+        return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
+
+    if mode == "both_separate" and audio_seconds > 0:
+        vocals_total = _predict_model_runtime_seconds("vocals", audio_seconds)
+        instrumental_total = _predict_model_runtime_seconds("instrumental", audio_seconds)
+        if vocals_total is not None or instrumental_total is not None:
+            vocals_total = float(vocals_total or 0.0)
+            instrumental_total = float(instrumental_total or 0.0)
+            if "instrumental" in stage_text and instrumental_total > 0:
+                raw_estimate = max(0.0, instrumental_total - stage_elapsed) + export_budget
+            elif "vocals" in stage_text and vocals_total > 0:
+                raw_estimate = max(0.0, vocals_total - stage_elapsed) + instrumental_total + export_budget
+            else:
+                raw_estimate = max(
+                    0.0,
+                    ETA_PREP_OVERHEAD_SECONDS + vocals_total + instrumental_total + export_budget - elapsed,
+                )
+
+    if audio_seconds > 0:
+        stage_model_key: str | None = None
+        if "running vocals model" in stage_text:
+            stage_model_key = "vocals"
+        elif "running instrumental model" in stage_text:
+            stage_model_key = "instrumental"
+        elif "running deux model" in stage_text:
+            stage_model_key = "deux"
+        if stage_model_key is not None:
+            stage_total = _predict_model_runtime_seconds(stage_model_key, audio_seconds)
+            if stage_total is not None:
+                stage_estimate = max(0.0, float(stage_total) - stage_elapsed) + export_budget
+                raw_estimate = stage_estimate if raw_estimate is None else ((raw_estimate * 0.72) + (stage_estimate * 0.28))
+
+    progress_fraction = _stage_progress_fraction(mode, stage_text, pct)
+    if progress_fraction is not None and progress_fraction >= 0.08 and stage_elapsed >= 4.0:
+        stage_progress_remaining = max(0.0, (stage_elapsed / progress_fraction) - stage_elapsed)
+        if mode == "both_separate" and "running vocals model" in stage_text:
+            next_stage_total = _predict_model_runtime_seconds("instrumental", audio_seconds) or stage_progress_remaining
+            progress_estimate = stage_progress_remaining + float(next_stage_total) + export_budget
+        else:
+            progress_estimate = stage_progress_remaining + export_budget
+        raw_estimate = progress_estimate if raw_estimate is None else ((raw_estimate * 0.7) + (progress_estimate * 0.3))
+
+    predicted_total = task.get("predicted_total_seconds")
+    if isinstance(predicted_total, (int, float)) and float(predicted_total) > 0:
+        history_estimate = max(0.0, ETA_PREP_OVERHEAD_SECONDS + float(predicted_total) + export_budget - elapsed)
+        raw_estimate = history_estimate if raw_estimate is None else ((raw_estimate * 0.78) + (history_estimate * 0.22))
+
+    if raw_estimate is None and pct >= 8 and elapsed >= 6:
+        raw_estimate = max(0.0, (elapsed / max(pct / 100.0, 0.01)) - elapsed)
+
+    return _stabilize_eta(task, raw_estimate, now=now, stage_text=stage_text)
 
 
 def _record_eta_sample(model_key: str, audio_seconds: float, elapsed_seconds: float) -> None:
-    if model_key not in ETA_HISTORY_KEYS or elapsed_seconds <= 0:
+    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0 or elapsed_seconds <= 0:
         return
-    _append_runtime_sample(
-        "stage_samples",
-        f"model:{model_key}",
-        {
-            "audio_seconds": float(audio_seconds or 0.0),
-            "elapsed_seconds": float(elapsed_seconds),
-            "recorded_at": time.time(),
-        },
-    )
+    with eta_history_lock:
+        entries = list(eta_history.get(model_key) or [])
+        entries.append(
+            {
+                "audio_seconds": float(audio_seconds),
+                "elapsed_seconds": float(elapsed_seconds),
+            }
+        )
+        eta_history[model_key] = entries[-ETA_HISTORY_LIMIT:]
+        _save_eta_history(eta_history)
+
+
+def _predict_model_runtime_seconds(model_key: str, audio_seconds: float) -> float | None:
+    if model_key not in ETA_HISTORY_KEYS or audio_seconds <= 0:
+        return None
+    with eta_history_lock:
+        entries = list(eta_history.get(model_key) or [])
+    if not entries:
+        return None
+    ranked = sorted(
+        entries,
+        key=lambda entry: abs(float(entry.get("audio_seconds") or 0.0) - audio_seconds),
+    )[: min(5, len(entries))]
+    if not ranked:
+        return None
+    weighted_total = 0.0
+    weight_sum = 0.0
+    scaled_predictions: list[float] = []
+    for entry in ranked:
+        sample_audio = max(1.0, float(entry.get("audio_seconds") or 0.0))
+        sample_elapsed = max(1.0, float(entry.get("elapsed_seconds") or 0.0))
+        distance = abs(sample_audio - audio_seconds)
+        weight = 1.0 / max(1.0, distance)
+        ratio = sample_elapsed / sample_audio
+        weighted_total += ratio * weight
+        weight_sum += weight
+        scaled_predictions.append(max(1.0, sample_elapsed * (audio_seconds / sample_audio)))
+    if weight_sum <= 0:
+        return None
+    weighted_prediction = max(1.0, audio_seconds * (weighted_total / weight_sum))
+    scaled_predictions.sort()
+    median_prediction = scaled_predictions[len(scaled_predictions) // 2]
+    return max(1.0, (median_prediction * 0.7) + (weighted_prediction * 0.3))
+
+
+def _predict_task_runtime_seconds(mode: str, audio_seconds: float) -> float | None:
+    if audio_seconds <= 0:
+        return None
+    if mode == "vocals":
+        return _predict_model_runtime_seconds("vocals", audio_seconds)
+    if mode == "instrumental":
+        return _predict_model_runtime_seconds("instrumental", audio_seconds)
+    if mode == "both_deux":
+        return _predict_model_runtime_seconds("deux", audio_seconds)
+    if mode == "both_separate":
+        vocals = _predict_model_runtime_seconds("vocals", audio_seconds)
+        instrumental = _predict_model_runtime_seconds("instrumental", audio_seconds)
+        if vocals is None and instrumental is None:
+            return None
+        return float(vocals or 0.0) + float(instrumental or 0.0)
+    return None
 
 
 def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | None:
     stage = str(stage_text or "").lower()
     clamped = max(0, min(100, int(pct)))
-    stage_model = _stage_model_key(stage)
-    if stage_model == "vocals":
-        if mode in {"both_separate", "preset_voc_instrum"}:
+    if "running vocals model" in stage:
+        if mode == "both_separate":
             span = max(1, BOTH_SEPARATE_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-        if mode == "mel_band_karaoke":
-            span = max(1, BG_VOCAL_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
-            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-        if mode == "preset_boost_harmonies":
-            span = max(1, BOOST_HARMONIES_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
-            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-        if mode == "preset_all_stems":
-            span = max(1, ALL_STEMS_VOCALS_END_PCT - MODEL_PROGRESS_START_PCT)
-            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-    if stage_model == "instrumental":
-        if mode in {"both_separate", "preset_voc_instrum"}:
+    if "running instrumental model" in stage:
+        if mode == "both_separate":
             span = max(1, BOTH_SEPARATE_INSTRUMENTAL_END_PCT - BOTH_SEPARATE_INSTRUMENTAL_START_PCT)
             return max(0.0, min(1.0, (clamped - BOTH_SEPARATE_INSTRUMENTAL_START_PCT) / span))
-        if mode == "preset_all_stems":
-            span = max(1, ALL_STEMS_INSTRUMENTAL_END_PCT - ALL_STEMS_INSTRUMENTAL_START_PCT)
-            return max(0.0, min(1.0, (clamped - ALL_STEMS_INSTRUMENTAL_START_PCT) / span))
         span = max(1, SINGLE_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-    if stage_model in {
-        "deux",
-        "guitar",
-        "mel_band_karaoke",
-        "denoise",
-        "bs_roformer_6s",
-        "htdemucs_ft_drums",
-        "htdemucs_ft_bass",
-        "htdemucs_ft_other",
-        "htdemucs_6s",
-        "drumsep_6s",
-        "drumsep_4s",
-    }:
-        if mode == "htdemucs_ft_other" and stage_model == "guitar":
-            span = max(1, OTHER_FILTER_GUITAR_END_PCT - MODEL_PROGRESS_START_PCT)
-            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-        if mode == "htdemucs_ft_other" and stage_model == "htdemucs_ft_other":
-            span = max(1, OTHER_FILTER_OTHER_END_PCT - OTHER_FILTER_OTHER_START_PCT)
-            return max(0.0, min(1.0, (clamped - OTHER_FILTER_OTHER_START_PCT) / span))
-        if mode in {"drumsep_6s", "drumsep_4s"} and stage_model == "htdemucs_ft_drums":
-            span = max(1, DRUM_SPLIT_DRUMS_END_PCT - MODEL_PROGRESS_START_PCT)
-            return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-        if mode in {"drumsep_6s", "drumsep_4s"} and stage_model in {"drumsep_6s", "drumsep_4s"}:
-            span = max(1, DRUM_SPLIT_DETAIL_END_PCT - DRUM_SPLIT_DETAIL_START_PCT)
-            return max(0.0, min(1.0, (clamped - DRUM_SPLIT_DETAIL_START_PCT) / span))
-        if mode == "preset_boost_harmonies" and stage_model == "mel_band_karaoke":
-            span = max(1, BOOST_HARMONIES_BACKGROUND_END_PCT - BOOST_HARMONIES_BACKGROUND_START_PCT)
-            return max(0.0, min(1.0, (clamped - BOOST_HARMONIES_BACKGROUND_START_PCT) / span))
-        if mode == "mel_band_karaoke" and stage_model == "mel_band_karaoke":
-            span = max(1, BG_VOCAL_BACKGROUND_END_PCT - BG_VOCAL_BACKGROUND_START_PCT)
-            return max(0.0, min(1.0, (clamped - BG_VOCAL_BACKGROUND_START_PCT) / span))
-        if mode == "preset_all_stems" and stage_model == "mel_band_karaoke":
-            span = max(1, ALL_STEMS_BACKGROUND_END_PCT - ALL_STEMS_BACKGROUND_START_PCT)
-            return max(0.0, min(1.0, (clamped - ALL_STEMS_BACKGROUND_START_PCT) / span))
-        if mode == "preset_all_stems" and stage_model in {"bs_roformer_6s", "guitar"}:
-            span = max(1, ALL_STEMS_MULTI_END_PCT - ALL_STEMS_MULTI_START_PCT)
-            return max(0.0, min(1.0, (clamped - ALL_STEMS_MULTI_START_PCT) / span))
-        if mode == "preset_all_stems" and stage_model == "drumsep_6s":
-            span = max(1, ALL_STEMS_DRUMS_END_PCT - ALL_STEMS_DRUMS_START_PCT)
-            return max(0.0, min(1.0, (clamped - ALL_STEMS_DRUMS_START_PCT) / span))
+    if "running deux model" in stage:
         span = max(1, DEUX_MODEL_PROGRESS_END_PCT - MODEL_PROGRESS_START_PCT)
         return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
     if "exporting" in stage:
@@ -4620,37 +2488,20 @@ def _stabilize_eta(task: dict[str, Any], raw_seconds: float | None, *, now: floa
 def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
     with tasks_lock:
         task = tasks[task_id]
-        if task["stop_event"].is_set():
-            raise TaskStopped()
         previous_pct = int(task.get("pct") or 0)
         previous_stage = str(task.get("stage") or "")
         now = time.time()
         if task["started_at"] is None:
             task["started_at"] = now
-        if not isinstance(task.get("runtime_plan"), dict):
-            _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         if task["status"] not in TERMINAL_STATUSES:
             task["status"] = "running"
-        next_stage_key = _runtime_stage_key_for_display(stage)
-        previous_stage_key = _runtime_stage_key_for_display(previous_stage)
-        if next_stage_key != previous_stage_key:
-            _complete_runtime_stage(task, previous_stage_key, now=now, record_sample=True)
         if stage != previous_stage or task.get("stage_started_at") is None:
             task["stage_started_at"] = now
             task["eta_finish_at"] = None
             task["eta_stage"] = None
-        if next_stage_key:
-            current_stage = _runtime_plan_stage(task, next_stage_key)
-            if current_stage is not None and current_stage.get("started_at") is None:
-                current_stage["started_at"] = now
-                current_stage["live_fraction"] = None
         task["stage"] = stage
-        live_fraction = _stage_live_fraction_from_legacy_pct(task, stage, pct)
-        if next_stage_key:
-            current_stage = _runtime_plan_stage(task, next_stage_key)
-            if current_stage is not None and live_fraction is not None:
-                current_stage["live_fraction"] = live_fraction
-        _update_task_runtime_view(task, now=now)
+        task["pct"] = max(0, min(100, int(pct)))
+        task["eta_seconds"] = _estimate_eta(task, task["pct"])
         if task["pct"] != previous_pct or stage != previous_stage:
             task["last_progress_at"] = now
             task["last_progress_pct"] = task["pct"]
@@ -4662,40 +2513,23 @@ def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
     cleanup_snapshot: dict[str, Any] | None = None
     with tasks_lock:
         task = tasks[task_id]
-        now = time.time()
-        _complete_runtime_stage(task, _runtime_stage_key_for_display(str(task.get("stage") or "")), now=now, record_sample=True)
-        audio_seconds = float(task.get("audio_seconds") or 0.0)
-        started_at = float(task.get("started_at") or now)
-        if started_at > 0:
-            _append_runtime_sample(
-                "task_samples",
-                f"task:{str(task.get('mode') or '')}",
-                {
-                    "audio_seconds": audio_seconds,
-                    "elapsed_seconds": max(0.1, now - started_at),
-                    "recorded_at": now,
-                },
-            )
         task["status"] = "done"
         task["stage"] = "Done"
         task["pct"] = 100
         task["eta_seconds"] = 0
-        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         task["out_dir"] = str(out_dir)
         task["outputs"] = list(outputs)
         task["error"] = None
         task["guard_error"] = None
-        task["finished_at"] = now
+        task["finished_at"] = time.time()
         task["version"] += 1
         if bool(task.get("cleared")):
             cleanup_snapshot = dict(task)
     if cleanup_snapshot is not None:
         _forget_task(task_id, cleanup_snapshot)
         return
-    with contextlib.suppress(Exception):
-        _archive_previous_file(task_id, out_dir, outputs)
     _prune_terminal_tasks()
 
 
@@ -4707,7 +2541,6 @@ def _mark_task_error(task_id: str, message: str) -> None:
         task["stage"] = "Error"
         task["pct"] = max(0, int(task.get("pct", 0)))
         task["eta_seconds"] = None
-        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         task["error"] = message
@@ -4736,104 +2569,8 @@ def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
     return out_path, existing_outputs
 
 
-def _archive_mode_label(mode: str) -> str:
-    return str(ARCHIVE_MODE_LABELS.get(mode) or "").strip()
-
-
 def _download_label(task: dict[str, Any]) -> str:
-    base = _safe_stem(str(task.get("original_name") or "stems"))
-    mode_label = _archive_mode_label(str(task.get("mode") or ""))
-    if mode_label:
-        return _safe_stem(f"{base} - {mode_label}")
-    return base
-
-
-def _output_subdir_for_label(mode: str, label: str) -> Path | None:
-    if mode == "preset_all_stems" and label in ALL_STEMS_DRUM_OUTPUT_LABELS:
-        return Path("drums")
-    return None
-
-
-def _relative_output_name(output_path: Path, root_dir: Path) -> str:
-    with contextlib.suppress(Exception):
-        return str(output_path.relative_to(root_dir))
-    return output_path.name
-
-
-def _unique_output_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    stem = path.stem
-    suffix = path.suffix
-    for index in range(2, 1000):
-        candidate = path.with_name(f"{stem} ({index}){suffix}")
-        if not candidate.exists():
-            return candidate
-    return path.with_name(f"{stem}-{int(time.time())}{suffix}")
-
-
-def _create_multi_stem_archive(task: dict[str, Any], output_paths: list[Path], out_dir: Path) -> Path:
-    archive_name = f"{_download_label(task)}.zip"
-    archive_path = _unique_output_path(out_dir / archive_name)
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for output_path in output_paths:
-            zf.write(output_path, arcname=_relative_output_name(output_path, out_dir))
-    return archive_path
-
-
-def _finalize_written_outputs(task_id: str, out_dir: Path, output_paths: list[Path]) -> list[Path]:
-    if len(output_paths) <= 1:
-        return list(output_paths)
-    with tasks_lock:
-        task = dict(tasks.get(task_id) or {})
-    if not task:
-        return list(output_paths)
-    if str(task.get("delivery") or "folder") != "folder":
-        return list(output_paths)
-    if _validate_multi_stem_export(
-        str(task.get("multi_stem_export_snapshot") or _compat_settings_payload().get("multi_stem_export") or "zip")
-    ) != "zip":
-        return list(output_paths)
-    archive_path = _create_multi_stem_archive(task, output_paths, out_dir)
-    for output_path in output_paths:
-        _cleanup_path(output_path)
-    return [archive_path]
-
-
-def _publish_staged_outputs(final_out_dir: Path, staging_root: Path, staged_paths: list[Path]) -> list[Path]:
-    published: list[Path] = []
-    if not final_out_dir.exists() or not final_out_dir.is_dir():
-        raise AppError(
-            ErrorCode.SEPARATION_FAILED,
-            f"Could not finalize export: output folder is no longer available: {final_out_dir}",
-        )
-    for staged_path in staged_paths:
-        relative_path = Path(staged_path.name)
-        with contextlib.suppress(Exception):
-            relative_path = staged_path.relative_to(staging_root)
-        target_path = _unique_output_path(final_out_dir / relative_path)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            moved_path = Path(shutil.move(str(staged_path), str(target_path)))
-        except Exception as exc:
-            raise AppError(ErrorCode.SEPARATION_FAILED, f"Could not finalize export: {exc}") from exc
-        published.append(moved_path)
-    return published
-
-
-def _copy_outputs_to_directory(output_paths: list[Path], destination_dir: Path) -> list[Path]:
-    copied: list[Path] = []
-    _ensure_dir(destination_dir)
-    source_root = Path(os.path.commonpath([str(path.parent) for path in output_paths])) if output_paths else destination_dir
-    for output_path in output_paths:
-        relative_name = _relative_output_name(output_path, source_root)
-        target = destination_dir / relative_name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            target = target.with_name(f"{output_path.stem} ({int(time.time())}){output_path.suffix}")
-        shutil.copy2(output_path, target)
-        copied.append(target)
-    return copied
+    return _safe_stem(str(task.get("original_name") or "stems"))
 
 
 def _path_within(path: Path, root: Path) -> bool:
@@ -4928,7 +2665,6 @@ def _mark_task_stopped(task_id: str) -> None:
             task["status"] = "error"
             task["stage"] = "Error"
             task["eta_seconds"] = None
-            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
             task["error"] = guard_error
@@ -4939,7 +2675,6 @@ def _mark_task_stopped(task_id: str) -> None:
             task["status"] = "stopped"
             task["stage"] = "Stopped"
             task["eta_seconds"] = None
-            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
             task["finished_at"] = time.time()
@@ -4952,23 +2687,9 @@ def _mark_task_stopped(task_id: str) -> None:
     _prune_terminal_tasks()
 
 
-def _pause_queue_processing() -> None:
-    queue_resume_event.clear()
-
-
-def _resume_queue_processing() -> None:
-    queue_resume_event.set()
-
-
-def _queue_processing_paused() -> bool:
-    return not queue_resume_event.is_set()
-
-
 def _request_task_stop(task_id: str) -> None:
-    _pause_queue_processing()
     should_forget = False
     should_prune = False
-    should_terminate_runtime = False
     with tasks_lock:
         task = tasks[task_id]
         task["stop_event"].set()
@@ -4976,7 +2697,6 @@ def _request_task_stop(task_id: str) -> None:
             task["status"] = "stopped"
             task["stage"] = "Stopped"
             task["eta_seconds"] = None
-            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
             task["finished_at"] = time.time()
@@ -4985,20 +2705,9 @@ def _request_task_stop(task_id: str) -> None:
         elif task["status"] == "running":
             task["stage"] = "Stopping"
             task["eta_seconds"] = None
-            task["eta_state"] = None
             task["eta_finish_at"] = None
             task["eta_stage"] = None
-            should_terminate_runtime = True
         task["version"] += 1
-        logger.info(
-            "stop requested for %s (status=%s, stage=%s, hard=%s)",
-            task_id,
-            task["status"],
-            task["stage"],
-            should_terminate_runtime,
-        )
-    if should_terminate_runtime:
-        _terminate_task_runtime(task_id)
     if should_forget:
         _forget_task(task_id)
         return
@@ -5018,7 +2727,6 @@ def _trip_task_guard(task_id: str, message: str) -> None:
         task["guard_error"] = message
         task["stop_event"].set()
         task["eta_seconds"] = None
-        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         if task["status"] == "queued":
@@ -5061,18 +2769,15 @@ def _stop_all_tasks() -> list[str]:
                 task["status"] = "stopped"
                 task["stage"] = "Stopped"
                 task["eta_seconds"] = None
-                task["eta_state"] = None
                 task["eta_finish_at"] = None
                 task["eta_stage"] = None
                 task["finished_at"] = time.time()
             elif task["status"] == "running":
                 task["stage"] = "Stopping"
                 task["eta_seconds"] = None
-                task["eta_state"] = None
                 task["eta_finish_at"] = None
                 task["eta_stage"] = None
             task["version"] += 1
-    _resume_queue_processing()
     return task_ids
 
 
@@ -5084,13 +2789,9 @@ def _restart_task_payload(
     video_handling: str | None = None,
     output_root: str | None = None,
     output_same_as_input: bool | None = None,
-    multi_stem_export: str | None = None,
     prioritize: bool = False,
 ) -> dict[str, Any]:
     old_task = _require_task(task_id)
-    old_status = str(old_task.get("status") or "")
-    if old_status in {"queued", "running"}:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
     source_path = Path(old_task["source_path"])
     if not source_path.exists():
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
@@ -5116,7 +2817,6 @@ def _restart_task_payload(
         video_handling=resolved_video_handling,
         output_root=output_root,
         output_same_as_input=output_same_as_input,
-        multi_stem_export=multi_stem_export,
     )
     _enqueue_task(payload["id"], front=prioritize)
     return payload
@@ -5129,13 +2829,9 @@ def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]
         task = tasks.get(task_id)
         if task is None:
             raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-        status = str(task.get("status") or "")
-        if status not in {"ready", "queued"}:
+        if str(task.get("status") or "") != "ready":
             raise AppError(ErrorCode.INVALID_REQUEST, "Task has already started.")
-        if status == "queued" and float(task.get("pct") or 0) > 0:
-            raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
         task["mode"] = mode
-        _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         task["version"] += 1
         return dict(task)
 
@@ -5238,68 +2934,6 @@ def _stop_check(task_id: str) -> None:
             raise TaskStopped()
 
 
-def _task_runner_snapshot(task: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in task.items() if key != "stop_event"}
-
-
-def _apply_task_runner_snapshot(task_id: str, snapshot: dict[str, Any]) -> None:
-    with tasks_lock:
-        task = tasks.get(task_id)
-        if task is None:
-            return
-        stop_event = task["stop_event"]
-        cleared = bool(task.get("cleared"))
-        for key, value in snapshot.items():
-            if key == "stop_event":
-                continue
-            task[key] = value
-        task["stop_event"] = stop_event
-        task["cleared"] = cleared
-        task["version"] = int(task.get("version") or 0) + 1
-
-
-def _register_task_runtime(task_id: str, runtime: dict[str, Any]) -> None:
-    with task_runtime_lock:
-        task_runtimes[task_id] = runtime
-
-
-def _pop_task_runtime(task_id: str) -> dict[str, Any] | None:
-    with task_runtime_lock:
-        return task_runtimes.pop(task_id, None)
-
-
-def _current_task_runtime(task_id: str) -> dict[str, Any] | None:
-    with task_runtime_lock:
-        runtime = task_runtimes.get(task_id)
-        return dict(runtime) if runtime is not None else None
-
-
-def _terminate_task_runtime(task_id: str) -> bool:
-    runtime = _current_task_runtime(task_id)
-    if runtime is None:
-        logger.info("stop terminate skipped for %s: no live runtime", task_id)
-        return False
-    process = runtime.get("process")
-    if not isinstance(process, subprocess.Popen):
-        logger.info("stop terminate skipped for %s: runtime missing process", task_id)
-        return False
-    if process.poll() is not None:
-        logger.info("stop terminate skipped for %s: process already exited", task_id)
-        return False
-    try:
-        if os.name == "nt":
-            process.kill()
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return False
-    except Exception:
-        logger.warning("failed to terminate task runtime for %s", task_id, exc_info=True)
-        return False
-    logger.info("hard stop sent to task runtime %s (pid=%s)", task_id, process.pid)
-    return True
-
-
 def _build_task_payload(
     *,
     task_id: str,
@@ -5322,14 +2956,11 @@ def _build_task_payload(
         "video_handling": video_handling,
         "output_root_snapshot": None,
         "output_same_as_input_snapshot": None,
-        "multi_stem_export_snapshot": None,
-        "preset_settings_snapshot": None,
         "delivery": delivery,
         "status": "queued" if auto_start else "ready",
         "stage": "Waiting in queue" if auto_start else "Ready",
         "pct": 0,
         "eta_seconds": None,
-        "eta_state": None,
         "out_dir": None,
         "outputs": [],
         "error": None,
@@ -5341,7 +2972,6 @@ def _build_task_payload(
         "eta_stage": None,
         "audio_seconds": None,
         "predicted_total_seconds": None,
-        "runtime_plan": {"stages": []},
         "last_progress_at": time.time(),
         "last_progress_pct": 0,
         "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
@@ -5385,16 +3015,10 @@ def _validate_video_handling(video_handling: str) -> str:
     return "audio_only"
 
 
-def _validate_multi_stem_export(multi_stem_export: str) -> str:
-    if multi_stem_export not in MULTI_STEM_EXPORT_CHOICES:
-        return "zip"
-    return multi_stem_export
-
-
 def _validate_media_type(name: str, content_type: str | None = None) -> str:
     suffix = Path(name).suffix.lower()
     kind = (content_type or "").lower()
-    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES and not (kind.startswith("audio/") or kind.startswith("video/")):
+    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES:
         raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
     if not suffix and not (kind.startswith("audio/") or kind.startswith("video/")):
         raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio or video file.")
@@ -5447,27 +3071,6 @@ def _store_local_media_file(path: Path) -> tuple[str, Path]:
     return original_name, stored_path
 
 
-def _normalize_local_path_text(raw: Any) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
-        text = text[1:-1].strip()
-    if text.lower().startswith("file://"):
-        try:
-            parsed = urlparse(text)
-            normalized = unquote(parsed.path or "")
-            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
-                normalized = f"//{parsed.netloc}{normalized}"
-            if re.match(r"^/[A-Za-z]:/", normalized):
-                normalized = normalized[1:]
-            if normalized:
-                text = normalized
-        except Exception:
-            pass
-    return text
-
-
 def _queue_task(task_id: str, *, front: bool = False) -> None:
     if not front:
         task_queue.put(task_id)
@@ -5485,20 +3088,15 @@ def _apply_task_start_settings(
     video_handling: str | None = None,
     output_root: str | None = None,
     output_same_as_input: bool | None = None,
-    multi_stem_export: str | None = None,
 ) -> None:
     next_output_format = str(output_format or task.get("output_format") or _compat_settings_payload()["output_format"])
     next_video_handling = _validate_video_handling(
         str(video_handling or task.get("video_handling") or _compat_settings_payload()["video_handling"])
     )
-    next_multi_stem_export = _validate_multi_stem_export(
-        str(multi_stem_export or task.get("multi_stem_export_snapshot") or _compat_settings_payload().get("multi_stem_export") or "zip")
-    )
     mode = str(task.get("mode") or "vocals")
     _validate_mode_and_output_format(mode, next_output_format)
     task["output_format"] = next_output_format
     task["video_handling"] = next_video_handling
-    task["multi_stem_export_snapshot"] = next_multi_stem_export
     if output_root is not None:
         task["output_root_snapshot"] = str(_ensure_dir(Path(output_root).expanduser()))
     elif not str(task.get("output_root_snapshot") or "").strip():
@@ -5507,8 +3105,6 @@ def _apply_task_start_settings(
         task["output_same_as_input_snapshot"] = bool(output_same_as_input)
     elif task.get("output_same_as_input_snapshot") is None:
         task["output_same_as_input_snapshot"] = bool(_compat_settings_payload().get("output_same_as_input"))
-    task["preset_settings_snapshot"] = _preset_settings_payload_for_mode(mode, _compat_settings_payload())
-    _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
 
 
 def _register_task(
@@ -5519,14 +3115,10 @@ def _register_task(
     mode: str,
     output_format: str,
     video_handling: str,
-    multi_stem_export: str | None = None,
-    output_same_as_input: bool | None = None,
     delivery: str = "folder",
     auto_start: bool,
     queue_front: bool = False,
 ) -> dict[str, Any]:
-    if auto_start and mode == "unselected":
-        raise AppError(ErrorCode.INVALID_REQUEST, "please select at least one stem before starting")
     task_id = str(uuid.uuid4())
     payload = _build_task_payload(
         task_id=task_id,
@@ -5538,11 +3130,6 @@ def _register_task(
         video_handling=video_handling,
         delivery=delivery,
         auto_start=auto_start,
-    )
-    _apply_task_start_settings(
-        payload,
-        multi_stem_export=multi_stem_export,
-        output_same_as_input=output_same_as_input,
     )
     with tasks_lock:
         tasks[task_id] = payload
@@ -5557,8 +3144,6 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
         task = tasks.get(task_id)
         if task is None:
             raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-        if str(task.get("mode") or "") == "unselected":
-            raise AppError(ErrorCode.INVALID_REQUEST, "please select at least one stem before starting")
         if task["status"] in {"queued", "running"}:
             return task
         if task["status"] in TERMINAL_STATUSES:
@@ -5566,14 +3151,10 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
         task["status"] = "queued"
         task["stage"] = "Waiting in queue"
         task["eta_seconds"] = None
-        task["eta_state"] = None
         task["eta_finish_at"] = None
         task["eta_stage"] = None
         task["started_at"] = None
         task["stage_started_at"] = None
-        task["audio_seconds"] = None
-        task["predicted_total_seconds"] = None
-        _refresh_runtime_plan(task, audio_seconds=0.0)
         task["last_progress_at"] = time.time()
         task["last_progress_pct"] = 0
         task["last_progress_stage"] = task["stage"]
@@ -5581,23 +3162,6 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
         task["version"] += 1
     _queue_task(task_id, front=front)
     return task
-
-
-def _remove_task(task_id: str) -> dict[str, Any]:
-    snapshot: dict[str, Any] | None = None
-    with tasks_lock:
-        task = tasks.get(task_id)
-        if task is None:
-            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-        status = str(task.get("status") or "")
-        if status == "running":
-            raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
-        task["stop_event"].set()
-        snapshot = dict(task)
-        tasks.pop(task_id, None)
-    if snapshot is not None:
-        _cleanup_task_runtime(task_id, snapshot)
-    return snapshot or {}
 
 
 def _compat_stage(task: dict[str, Any]) -> str:
@@ -5623,19 +3187,15 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "task_id": public["id"],
         "id": public["id"],
         "name": public["name"],
-        "mode": public["mode"],
         "stage": stage,
         "pct": pct,
         "eta_seconds": public["eta_seconds"],
-        "eta_state": public.get("eta_state"),
         "stems": _mode_to_stems(public["mode"]),
         "video_handling": public["video_handling"],
         "out_dir": public["out_dir"],
         "delivery": public["delivery"],
         "error": public["error"],
         "outputs": public["outputs"],
-        "preset_settings": public["preset_settings"],
-        "can_adjust_preset": public["can_adjust_preset"],
         "artwork_url": f"/api/tasks/{public['id']}/artwork",
     }
 
@@ -5764,25 +3324,17 @@ def _process_task(task_id: str) -> None:
 
         work_dir = Path(tempfile.mkdtemp(prefix=f"stemsplat_{task_id[:8]}_", dir=str(WORK_DIR)))
         _set_task_progress(task_id, "Preparing audio", 4)
-        decoded_path = _decode_audio_to_wav(
-            source_path,
-            work_dir,
-            source_info.channels,
-            stop_check=lambda: _stop_check(task_id),
-        )
+        decoded_path = _decode_audio_to_wav(source_path, work_dir, source_info.channels)
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
         mode = task["mode"]
         audio_seconds = waveform.shape[1] / 44100.0 if waveform.shape[1] > 0 else 0.0
         with tasks_lock:
             tasks[task_id]["audio_seconds"] = audio_seconds
-            _refresh_runtime_plan(tasks[task_id], audio_seconds=audio_seconds)
             tasks[task_id]["predicted_total_seconds"] = _predict_task_runtime_seconds(mode, audio_seconds)
-            _update_task_runtime_view(tasks[task_id], now=time.time())
             tasks[task_id]["version"] += 1
 
         temp_outputs: list[tuple[str, Path]] = []
-        staging_output_root = work_dir / "exports_staging"
 
         if mode == "vocals":
             vocals_model = manager.get("vocals")
@@ -5791,7 +3343,6 @@ def _process_task(task_id: str) -> None:
                 vocals_model,
                 waveform,
                 MODEL_SPECS["vocals"].segment,
-                MODEL_SPECS["vocals"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running vocals model",
@@ -5800,7 +3351,7 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
-            _append_named_output(temp_outputs, work_dir, "vocals", vocals_pred[0])
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
         elif mode == "instrumental":
             instrumental_model = manager.get("instrumental")
             instrumental_started_at = time.time()
@@ -5808,7 +3359,6 @@ def _process_task(task_id: str) -> None:
                 instrumental_model,
                 waveform,
                 MODEL_SPECS["instrumental"].segment,
-                MODEL_SPECS["instrumental"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running instrumental model",
@@ -5817,7 +3367,7 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
-            _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_pred[0])
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
         elif mode == "both_deux":
             deux_model = manager.get("deux")
             deux_started_at = time.time()
@@ -5825,7 +3375,6 @@ def _process_task(task_id: str) -> None:
                 deux_model,
                 waveform,
                 MODEL_SPECS["deux"].segment,
-                MODEL_SPECS["deux"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running deux model",
@@ -5838,11 +3387,11 @@ def _process_task(task_id: str) -> None:
             instrumental_tensor = (
                 pair_pred[1]
                 if pair_pred.shape[0] > 1
-                else _residual_output(waveform, vocals_tensor)
+                else waveform[: vocals_tensor.shape[0], : vocals_tensor.shape[1]] - vocals_tensor
             )
-            _append_named_output(temp_outputs, work_dir, "vocals", vocals_tensor)
-            _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_tensor)
-        elif mode in {"both_separate", "preset_voc_instrum"}:
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_tensor)))
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_tensor)))
+        elif mode == "both_separate":
             vocals_model = manager.get("vocals")
             instrumental_model = manager.get("instrumental")
             vocals_started_at = time.time()
@@ -5850,7 +3399,6 @@ def _process_task(task_id: str) -> None:
                 vocals_model,
                 waveform,
                 MODEL_SPECS["vocals"].segment,
-                MODEL_SPECS["vocals"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running vocals model",
@@ -5859,12 +3407,12 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
+            temp_outputs.append(("vocals", _write_temp_wave(work_dir, "vocals.wav", vocals_pred[0])))
             instrumental_started_at = time.time()
             instrumental_pred = _run_model_chunks(
                 instrumental_model,
                 waveform,
                 MODEL_SPECS["instrumental"].segment,
-                MODEL_SPECS["instrumental"].overlap,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
                     "Running instrumental model",
@@ -5873,447 +3421,7 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
-            _append_named_output(temp_outputs, work_dir, "vocals", vocals_pred[0])
-            _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_pred[0])
-        elif mode == "guitar":
-            guitar_model = manager.get("guitar")
-            guitar_started_at = time.time()
-            guitar_pred = _run_model_for_spec(
-                "guitar",
-                guitar_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running guitar model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
-            _append_named_output(temp_outputs, work_dir, "guitar", guitar_pred[0])
-        elif mode == "mel_band_karaoke":
-            vocals_model = manager.get("vocals")
-            karaoke_model = manager.get("mel_band_karaoke")
-
-            vocals_started_at = time.time()
-            vocals_pred = _run_model_chunks(
-                vocals_model,
-                waveform,
-                MODEL_SPECS["vocals"].segment,
-                MODEL_SPECS["vocals"].overlap,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running vocals model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, BG_VOCAL_VOCALS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
-            vocals_tensor = vocals_pred[0]
-
-            karaoke_started_at = time.time()
-            karaoke_pred = _run_model_for_spec(
-                "mel_band_karaoke",
-                karaoke_model,
-                vocals_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running background vocal model",
-                    _map_fraction(BG_VOCAL_BACKGROUND_START_PCT, BG_VOCAL_BACKGROUND_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - karaoke_started_at)
-            bg_vocal_tensor = (
-                karaoke_pred[1]
-                if karaoke_pred.shape[0] > 1
-                else _residual_output(vocals_tensor, karaoke_pred[0])
-            )
-            _append_named_output(temp_outputs, work_dir, "bg vocal", bg_vocal_tensor)
-        elif mode == "preset_boost_harmonies":
-            vocals_model = manager.get("vocals")
-            harmony_model = manager.get("mel_band_karaoke")
-            preset_settings = _task_boost_harmonies_settings(task)
-
-            vocals_started_at = time.time()
-            vocals_pred = _run_model_for_spec(
-                "vocals",
-                vocals_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running vocals model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, BOOST_HARMONIES_VOCALS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
-            vocals_tensor = vocals_pred[0]
-
-            harmony_started_at = time.time()
-            harmony_pred = _run_model_for_spec(
-                "mel_band_karaoke",
-                harmony_model,
-                vocals_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running harmony background model",
-                    _map_fraction(BOOST_HARMONIES_BACKGROUND_START_PCT, BOOST_HARMONIES_BACKGROUND_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - harmony_started_at)
-            background_vocals_tensor = (
-                harmony_pred[1]
-                if harmony_pred.shape[0] > 1
-                else _residual_output(vocals_tensor, harmony_pred[0])
-            )
-
-            _cache_intermediate_output(task_id, "vocals", vocals_tensor)
-            _cache_intermediate_output(task_id, "background_vocals", background_vocals_tensor)
-
-            _stop_check(task_id)
-            _set_task_progress(task_id, "Mixing boost harmonies", 95)
-            boost_mix_tensor = _boost_overlay_mix(
-                waveform,
-                background_vocals_tensor,
-                base_song_gain_db=preset_settings["base_song_gain_db"],
-                overlay_gain_db=preset_settings["overlay_gain_db"],
-            )
-            _stop_check(task_id)
-            _append_named_output(temp_outputs, work_dir, "boost harmonies", boost_mix_tensor)
-        elif mode == "preset_boost_guitar":
-            guitar_model = manager.get("guitar")
-            preset_settings = _task_boost_guitar_settings(task)
-
-            guitar_started_at = time.time()
-            guitar_pred = _run_model_for_spec(
-                "guitar",
-                guitar_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running guitar model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, BOOST_GUITAR_MODEL_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
-            guitar_tensor = guitar_pred[0]
-
-            _cache_intermediate_output(task_id, "guitar", guitar_tensor)
-
-            _stop_check(task_id)
-            _set_task_progress(task_id, "Mixing boost guitar", 95)
-            boost_mix_tensor = _boost_overlay_mix(
-                waveform,
-                guitar_tensor,
-                base_song_gain_db=preset_settings["base_song_gain_db"],
-                overlay_gain_db=preset_settings["overlay_gain_db"],
-            )
-            _stop_check(task_id)
-            _append_named_output(temp_outputs, work_dir, "boost guitar", boost_mix_tensor)
-        elif mode in {"denoise", "preset_denoise"}:
-            denoise_model = manager.get("denoise")
-            denoise_started_at = time.time()
-            denoise_pred = _run_model_for_spec(
-                "denoise",
-                denoise_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running denoise model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("denoise", audio_seconds, time.time() - denoise_started_at)
-            _append_named_output(temp_outputs, work_dir, "denoise", denoise_pred[0])
-        elif mode == "bs_roformer_6s":
-            bs_6s_model = manager.get("bs_roformer_6s")
-            bs_6s_started_at = time.time()
-            bs_6s_pred = _run_model_for_spec(
-                "bs_roformer_6s",
-                bs_6s_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running full mix model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("bs_roformer_6s", audio_seconds, time.time() - bs_6s_started_at)
-            expected_labels = MODE_OUTPUT_LABELS["bs_roformer_6s"]
-            if bs_6s_pred.shape[0] < len(expected_labels):
-                raise AppError(ErrorCode.SEPARATION_FAILED, "full mix model returned incomplete output.")
-            for label, tensor in zip(expected_labels, bs_6s_pred, strict=False):
-                _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass"}:
-            fast_model = manager.get(mode)
-            fast_started_at = time.time()
-            fast_pred = _run_model_for_spec(
-                mode,
-                fast_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    f"Running {MODEL_DISPLAY_NAMES[mode]} model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample(mode, audio_seconds, time.time() - fast_started_at)
-            _append_named_output(
-                temp_outputs,
-                work_dir,
-                MODE_OUTPUT_LABELS[mode][0],
-                _extract_target_tensor(mode, fast_model, fast_pred),
-            )
-        elif mode == "htdemucs_ft_other":
-            guitar_model = manager.get("guitar")
-            filtered_other_model = manager.get("htdemucs_ft_other")
-
-            guitar_started_at = time.time()
-            guitar_pred = _run_model_for_spec(
-                "guitar",
-                guitar_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running guitar model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, OTHER_FILTER_GUITAR_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
-            guitar_tensor = guitar_pred[0]
-            non_guitar_waveform = _residual_output(waveform, guitar_tensor)
-
-            filtered_other_started_at = time.time()
-            filtered_other_pred = _run_model_for_spec(
-                "htdemucs_ft_other",
-                filtered_other_model,
-                non_guitar_waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    f"Running {MODEL_DISPLAY_NAMES['htdemucs_ft_other']} model",
-                    _map_fraction(OTHER_FILTER_OTHER_START_PCT, OTHER_FILTER_OTHER_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("htdemucs_ft_other", audio_seconds, time.time() - filtered_other_started_at)
-            _append_named_output(
-                temp_outputs,
-                work_dir,
-                "other",
-                _extract_target_tensor("htdemucs_ft_other", filtered_other_model, filtered_other_pred),
-            )
-        elif mode == "htdemucs_6s":
-            htdemucs_6s_model = manager.get("htdemucs_6s")
-            htdemucs_6s_started_at = time.time()
-            htdemucs_6s_pred = _run_model_for_spec(
-                "htdemucs_6s",
-                htdemucs_6s_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running htdemucs4 6 stem model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("htdemucs_6s", audio_seconds, time.time() - htdemucs_6s_started_at)
-            for label, tensor in zip(MODE_OUTPUT_LABELS["htdemucs_6s"], htdemucs_6s_pred, strict=False):
-                _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode == "drumsep_6s":
-            drums_model = manager.get("htdemucs_ft_drums")
-            drumsep_6s_model = manager.get("drumsep_6s")
-            drums_started_at = time.time()
-            drums_pred = _run_model_for_spec(
-                "htdemucs_ft_drums",
-                drums_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running drums model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, DRUM_SPLIT_DRUMS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("htdemucs_ft_drums", audio_seconds, time.time() - drums_started_at)
-            drums_tensor = _extract_target_tensor("htdemucs_ft_drums", drums_model, drums_pred)
-
-            drumsep_6s_started_at = time.time()
-            drumsep_6s_pred = _run_model_for_spec(
-                "drumsep_6s",
-                drumsep_6s_model,
-                drums_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running drumsep 6 stem model",
-                    _map_fraction(DRUM_SPLIT_DETAIL_START_PCT, DRUM_SPLIT_DETAIL_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("drumsep_6s", audio_seconds, time.time() - drumsep_6s_started_at)
-            for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_6s"], drumsep_6s_pred, strict=False):
-                _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode == "drumsep_4s":
-            drums_model = manager.get("htdemucs_ft_drums")
-            drumsep_4s_model = manager.get("drumsep_4s")
-            drums_started_at = time.time()
-            drums_pred = _run_model_for_spec(
-                "htdemucs_ft_drums",
-                drums_model,
-                waveform,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running drums model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, DRUM_SPLIT_DRUMS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("htdemucs_ft_drums", audio_seconds, time.time() - drums_started_at)
-            drums_tensor = _extract_target_tensor("htdemucs_ft_drums", drums_model, drums_pred)
-
-            drumsep_4s_started_at = time.time()
-            drumsep_4s_pred = _run_model_for_spec(
-                "drumsep_4s",
-                drumsep_4s_model,
-                drums_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running drum sep 4 stem model",
-                    _map_fraction(DRUM_SPLIT_DETAIL_START_PCT, DRUM_SPLIT_DETAIL_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("drumsep_4s", audio_seconds, time.time() - drumsep_4s_started_at)
-            for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_4s"], drumsep_4s_pred, strict=False):
-                _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode == "preset_all_stems":
-            vocals_model = manager.get("vocals")
-            instrumental_model = manager.get("instrumental")
-            karaoke_model = manager.get("mel_band_karaoke")
-            bs_6s_model = manager.get("bs_roformer_6s")
-            guitar_model = manager.get("guitar")
-            drumsep_6s_model = manager.get("drumsep_6s")
-            all_stems_multi_mid_pct = ALL_STEMS_MULTI_START_PCT + max(
-                1,
-                (ALL_STEMS_MULTI_END_PCT - ALL_STEMS_MULTI_START_PCT) // 2,
-            )
-
-            vocals_started_at = time.time()
-            vocals_pred = _run_model_chunks(
-                vocals_model,
-                waveform,
-                MODEL_SPECS["vocals"].segment,
-                MODEL_SPECS["vocals"].overlap,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running vocals model",
-                    _map_fraction(MODEL_PROGRESS_START_PCT, ALL_STEMS_VOCALS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("vocals", audio_seconds, time.time() - vocals_started_at)
-            vocals_tensor = vocals_pred[0]
-
-            instrumental_started_at = time.time()
-            instrumental_pred = _run_model_chunks(
-                instrumental_model,
-                waveform,
-                MODEL_SPECS["instrumental"].segment,
-                MODEL_SPECS["instrumental"].overlap,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running instrumental model",
-                    _map_fraction(ALL_STEMS_INSTRUMENTAL_START_PCT, ALL_STEMS_INSTRUMENTAL_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
-            instrumental_tensor = instrumental_pred[0]
-
-            background_started_at = time.time()
-            background_pred = _run_model_for_spec(
-                "mel_band_karaoke",
-                karaoke_model,
-                vocals_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running harmony background model",
-                    _map_fraction(ALL_STEMS_BACKGROUND_START_PCT, ALL_STEMS_BACKGROUND_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("mel_band_karaoke", audio_seconds, time.time() - background_started_at)
-            lead_vocals_tensor = background_pred[0]
-            background_vocals_tensor = (
-                background_pred[1]
-                if background_pred.shape[0] > 1
-                else _residual_output(vocals_tensor, background_pred[0])
-            )
-            _append_named_output(temp_outputs, work_dir, "vocals", lead_vocals_tensor)
-            _append_named_output(temp_outputs, work_dir, "background vocals", background_vocals_tensor)
-
-            bs_6s_started_at = time.time()
-            bs_6s_pred = _run_model_for_spec(
-                "bs_roformer_6s",
-                bs_6s_model,
-                instrumental_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running full mix model",
-                    _map_fraction(ALL_STEMS_MULTI_START_PCT, all_stems_multi_mid_pct, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("bs_roformer_6s", audio_seconds, time.time() - bs_6s_started_at)
-            bs_outputs = {
-                label: tensor
-                for label, tensor in zip(MODE_OUTPUT_LABELS["bs_roformer_6s"], bs_6s_pred, strict=False)
-            }
-            for label in ("bass", "drums", "other", "piano"):
-                tensor = bs_outputs.get(label)
-                if tensor is not None:
-                    _append_named_output(temp_outputs, work_dir, label, tensor)
-
-            guitar_started_at = time.time()
-            guitar_pred = _run_model_for_spec(
-                "guitar",
-                guitar_model,
-                instrumental_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running guitar model",
-                    _map_fraction(all_stems_multi_mid_pct, ALL_STEMS_MULTI_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
-            _append_named_output(temp_outputs, work_dir, "guitar", guitar_pred[0])
-
-            drums_tensor = bs_outputs.get("drums")
-            if drums_tensor is None:
-                raise AppError(ErrorCode.SEPARATION_FAILED, "6-stem model did not return a drums stem.")
-
-            drumsep_6s_started_at = time.time()
-            drumsep_6s_pred = _run_model_for_spec(
-                "drumsep_6s",
-                drumsep_6s_model,
-                drums_tensor,
-                progress_cb=lambda frac: _set_task_progress(
-                    task_id,
-                    "Running drumsep 6 stem model",
-                    _map_fraction(ALL_STEMS_DRUMS_START_PCT, ALL_STEMS_DRUMS_END_PCT, frac),
-                ),
-                stop_check=lambda: _stop_check(task_id),
-            )
-            _record_eta_sample("drumsep_6s", audio_seconds, time.time() - drumsep_6s_started_at)
-            for label, tensor in zip(MODE_OUTPUT_LABELS["drumsep_6s"], drumsep_6s_pred, strict=False):
-                _append_named_output(temp_outputs, work_dir, label, tensor)
+            temp_outputs.append(("instrumental", _write_temp_wave(work_dir, "instrumental.wav", instrumental_pred[0])))
         else:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid split mode.")
 
@@ -6326,40 +3434,23 @@ def _process_task(task_id: str) -> None:
             start_pct = _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT - 1, (index - 1) / max(1, total_exports))
             _set_task_progress(task_id, f"Exporting {label}", start_pct)
             export_label = f"{label} - deux" if mode == "both_deux" else label
-            output_subdir = _output_subdir_for_label(mode, label)
-            output_parent = staging_output_root / output_subdir if output_subdir is not None else staging_output_root
             if export_video:
                 video_suffix, _audio_args = _resolve_video_output(source_info)
-                final_path = output_parent / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
-                exported = _export_video_stem(
-                    temp_path,
-                    source_path,
-                    final_path,
-                    source_info,
-                    stop_check=lambda: _stop_check(task_id),
-                )
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{video_suffix}"
+                exported = _export_video_stem(temp_path, source_path, final_path, source_info)
             else:
                 assert export_plan is not None
-                final_path = output_parent / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
-                exported = _export_stem(
-                    temp_path,
-                    source_path,
-                    final_path,
-                    export_plan,
-                    source_info.has_cover,
-                    stop_check=lambda: _stop_check(task_id),
-                )
+                final_path = output_dir / f"{_safe_stem(task['original_name'])} - {export_label}{export_plan.suffix}"
+                exported = _export_stem(temp_path, source_path, final_path, export_plan, source_info.has_cover)
             written_outputs.append(exported)
-            exported_files.append(_relative_output_name(exported, output_dir))
+            exported_files.append(exported.name)
             _set_task_progress(
                 task_id,
                 f"Exporting {label}",
                 _map_fraction(EXPORT_PROGRESS_START_PCT, EXPORT_PROGRESS_END_PCT, index / max(1, total_exports)),
             )
 
-        finalized_outputs = _finalize_written_outputs(task_id, staging_output_root, written_outputs)
-        published_outputs = _publish_staged_outputs(output_dir, staging_output_root, finalized_outputs)
-        _mark_task_done(task_id, output_dir, [_relative_output_name(output_path, output_dir) for output_path in published_outputs])
+        _mark_task_done(task_id, output_dir, exported_files)
     except TaskStopped:
         for output_path in written_outputs:
             _cleanup_path(output_path)
@@ -6381,213 +3472,17 @@ def _process_task(task_id: str) -> None:
         _safe_mps_empty_cache()
 
 
-def _emit_task_runner_event(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload) + "\n")
-    sys.stdout.flush()
-
-
-def _task_runner_main(payload_path: Path) -> None:
-    payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise SystemExit("invalid task payload")
-    task_id = str(payload.get("id") or "").strip()
-    if not task_id:
-        raise SystemExit("missing task id")
-    payload["stop_event"] = threading.Event()
-    with tasks_lock:
-        tasks.clear()
-        tasks[task_id] = payload
-
-    original_set_task_progress = _set_task_progress
-    original_mark_task_done = _mark_task_done
-    original_mark_task_error = _mark_task_error
-    original_mark_task_stopped = _mark_task_stopped
-
-    def _patched_set_task_progress(task_id: str, stage: str, pct: int) -> None:
-        original_set_task_progress(task_id, stage, pct)
-        _emit_task_runner_event({"kind": "snapshot", "task": _task_runner_snapshot(tasks[task_id])})
-
-    def _patched_mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
-        _emit_task_runner_event({"kind": "done", "out_dir": str(out_dir), "outputs": list(outputs)})
-
-    def _patched_mark_task_error(task_id: str, message: str) -> None:
-        _emit_task_runner_event({"kind": "error", "message": message})
-
-    def _patched_mark_task_stopped(task_id: str) -> None:
-        _emit_task_runner_event({"kind": "stopped"})
-
-    globals()["_set_task_progress"] = _patched_set_task_progress
-    globals()["_mark_task_done"] = _patched_mark_task_done
-    globals()["_mark_task_error"] = _patched_mark_task_error
-    globals()["_mark_task_stopped"] = _patched_mark_task_stopped
-    try:
-        _process_task(task_id)
-    finally:
-        globals()["_set_task_progress"] = original_set_task_progress
-        globals()["_mark_task_done"] = original_mark_task_done
-        globals()["_mark_task_error"] = original_mark_task_error
-        globals()["_mark_task_stopped"] = original_mark_task_stopped
-
-
-def _write_task_runner_payload(task_id: str) -> Path:
-    with tasks_lock:
-        task = tasks.get(task_id)
-        if task is None:
-            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-        payload = _task_runner_snapshot(task)
-    handle, raw_path = tempfile.mkstemp(prefix=f"taskrun_{task_id[:8]}_", suffix=".json", dir=str(WORK_DIR))
-    path = Path(raw_path)
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream)
-    except Exception:
-        _cleanup_path(path)
-        raise
-    return path
-
-
-def _drain_task_runner_stderr(task_id: str, stream: Any) -> None:
-    try:
-        for line in iter(stream.readline, ""):
-            text = str(line or "").rstrip()
-            if text:
-                logger.info("task runner %s: %s", task_id, text)
-    except Exception:
-        logger.debug("stderr drain failed for task %s", task_id, exc_info=True)
-
-
-def _run_task_in_subprocess(task_id: str) -> None:
-    with tasks_lock:
-        task = tasks.get(task_id)
-        if task is None:
-            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-        if task["stop_event"].is_set():
-            _mark_task_stopped(task_id)
-            return
-    payload_path = _write_task_runner_payload(task_id)
-    if getattr(sys, "frozen", False):
-        command = [sys.executable, "--task-runner-input", str(payload_path)]
-    else:
-        command = [sys.executable, "-u", str(Path(__file__).resolve()), "--task-runner-input", str(payload_path)]
-    env = dict(os.environ)
-    env["STEMSPLAT_DISABLE_BACKGROUND_THREADS"] = "1"
-    popen_kwargs: dict[str, Any] = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "text": True,
-        "bufsize": 1,
-        "env": env,
-    }
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
-
-    process = subprocess.Popen(command, **popen_kwargs)
-    _register_task_runtime(task_id, {"process": process, "payload_path": str(payload_path)})
-    with tasks_lock:
-        live_task = tasks.get(task_id)
-        if live_task is not None and live_task["stop_event"].is_set():
-            _terminate_task_runtime(task_id)
-
-    stderr_thread: threading.Thread | None = None
-    if process.stderr is not None:
-        stderr_thread = threading.Thread(
-            target=_drain_task_runner_stderr,
-            args=(task_id, process.stderr),
-            daemon=True,
-        )
-        stderr_thread.start()
-
-    terminal_event: tuple[str, dict[str, Any]] | None = None
-    try:
-        if process.stdout is not None:
-            for line in iter(process.stdout.readline, ""):
-                raw = str(line or "").strip()
-                if not raw:
-                    continue
-                try:
-                    message = json.loads(raw)
-                except Exception:
-                    logger.warning("task runner %s emitted invalid JSON: %s", task_id, raw)
-                    continue
-                kind = str(message.get("kind") or "")
-                if kind == "snapshot":
-                    snapshot = message.get("task")
-                    if isinstance(snapshot, dict):
-                        _apply_task_runner_snapshot(task_id, snapshot)
-                    continue
-                if kind in {"done", "error", "stopped"}:
-                    terminal_event = (kind, message)
-        return_code = process.wait()
-    finally:
-        _pop_task_runtime(task_id)
-        if process.stdout is not None:
-            with contextlib.suppress(Exception):
-                process.stdout.close()
-        if process.stderr is not None:
-            with contextlib.suppress(Exception):
-                process.stderr.close()
-        if stderr_thread is not None:
-            stderr_thread.join(timeout=1.0)
-        _cleanup_path(payload_path)
-
-    if terminal_event is not None:
-        kind, message = terminal_event
-        if kind == "done":
-            out_dir = Path(str(message.get("out_dir") or ""))
-            outputs = [str(item) for item in list(message.get("outputs") or []) if str(item).strip()]
-            _mark_task_done(task_id, out_dir, outputs)
-            return
-        if kind == "error":
-            _mark_task_error(task_id, str(message.get("message") or f"{ErrorCode.SEPARATION_FAILED}: task failed"))
-            return
-        _mark_task_stopped(task_id)
-        return
-
-    with tasks_lock:
-        task = tasks.get(task_id)
-        stop_requested = bool(task and task["stop_event"].is_set())
-    if stop_requested:
-        _mark_task_stopped(task_id)
-        return
-    _mark_task_error(
-        task_id,
-        f"{ErrorCode.SEPARATION_FAILED}: task worker exited unexpectedly ({return_code}).",
-    )
-
-
-def _next_task_id_for_worker() -> str:
-    while True:
-        queue_resume_event.wait()
-        task_id = task_queue.get()
-        if not _queue_processing_paused():
-            return task_id
-        _queue_task(task_id, front=True)
-        task_queue.task_done()
-
-
 def _task_worker() -> None:
     while True:
-        task_id = _next_task_id_for_worker()
+        task_id = task_queue.get()
         try:
-            _run_task_in_subprocess(task_id)
-        except AppError as exc:
-            _mark_task_error(task_id, f"{exc.code}: {exc.message}")
-        except Exception as exc:  # pragma: no cover - safety net for worker orchestration
-            logger.exception("task worker failed for %s", task_id)
-            _mark_task_error(task_id, f"{ErrorCode.SEPARATION_FAILED}: {exc}")
+            _process_task(task_id)
         finally:
             task_queue.task_done()
 
 
-def _background_threads_enabled() -> bool:
-    return str(os.environ.get("STEMSPLAT_DISABLE_BACKGROUND_THREADS") or "").strip() not in {"1", "true", "yes"}
-
-
-if _background_threads_enabled():
-    threading.Thread(target=_task_worker, daemon=True).start()
-    threading.Thread(target=_watchdog_loop, daemon=True).start()
+threading.Thread(target=_task_worker, daemon=True).start()
+threading.Thread(target=_watchdog_loop, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -6595,8 +3490,6 @@ async def _startup_cleanup() -> None:
     _close_installer_ui()
     _cleanup_old_runtime_entries(WORK_DIR)
     _cleanup_old_runtime_entries(UPLOAD_DIR)
-    _cleanup_old_runtime_entries(INTERMEDIATE_CACHE_DIR, INTERMEDIATE_CACHE_RETENTION_SECONDS)
-    _prune_previous_files()
     if _selected_missing_models():
         _set_model_download_state(
             status="idle",
@@ -6685,35 +3578,10 @@ def _open_path_in_finder(path: Path) -> None:
     subprocess.Popen(["xdg-open", str(target)])
 
 
-def _open_terminal_app() -> None:
-    if sys.platform == "darwin":
-        script_lines = [
-            'tell application "Terminal"',
-            "activate",
-            'do script ""',
-            "end tell",
-        ]
-        subprocess.run(
-            ["osascript", *sum((["-e", line] for line in script_lines), [])],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return
-    if os.name == "nt":
-        subprocess.Popen(["cmd.exe"])
-        return
-    terminal = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("konsole")
-    if terminal:
-        subprocess.Popen([terminal])
-        return
-    raise AppError(ErrorCode.INVALID_REQUEST, "Could not open a terminal on this system.")
-
-
 @app.get("/api/models_status")
 async def models_status() -> dict[str, Any]:
-    return _models_status_payload()
+    missing = sorted({item for mode in MODE_CHOICES for item in _find_missing_models_for_mode(mode)})
+    return {"missing": missing, "models_dir": str(MODEL_DIR)}
 
 
 @app.post("/api/open_models_folder")
@@ -6728,8 +3596,8 @@ async def open_models_folder(request: Request) -> dict[str, str]:
 
 
 @app.get("/api/release_status")
-async def release_status(refresh: bool = False) -> dict[str, Any]:
-    return _release_status_payload(refresh=refresh)
+async def release_status() -> dict[str, Any]:
+    return _release_status_payload()
 
 
 @app.get("/api/runtime_status")
@@ -6789,17 +3657,6 @@ async def ack_release_status(request: Request) -> dict[str, Any]:
     if latest:
         _set_compat_settings({"update_last_notified_version": latest})
     return _release_status_payload()
-
-
-@app.post("/api/release_download")
-async def download_latest_release(request: Request) -> dict[str, Any]:
-    _require_local_request(request, "LAN clients cannot download files onto the host machine.")
-    return _start_release_download()
-
-
-@app.get("/api/release_download_status")
-async def release_download_status() -> dict[str, Any]:
-    return _public_release_download_status()
 
 
 @app.post("/api/release_status/skip")
@@ -6862,60 +3719,36 @@ async def open_output_root(request: Request) -> dict[str, str]:
     return {"status": "opened", "path": str(path)}
 
 
-@app.post("/api/open_terminal")
-async def open_terminal(request: Request) -> dict[str, str]:
-    _require_local_request(request, "LAN clients cannot control the host machine.")
-    try:
-        _open_terminal_app()
-    except AppError as exc:
-        raise exc.to_http(500) from exc
-    except Exception as exc:
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not open terminal: {exc}").to_http(500) from exc
-    return {"status": "opened"}
-
-
 @app.post("/api/import_paths")
 async def import_paths(request: Request) -> dict[str, Any]:
-    _require_local_request(request, "LAN clients cannot import host file paths.")
     body = await request.json()
     if not isinstance(body, dict):
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid import payload.").to_http()
     raw_paths = body.get("paths")
     raw_stems = body.get("stems")
     output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
-    output_same_as_input = bool(body.get("output_same_as_input")) if "output_same_as_input" in body else None
-    multi_stem_export = _validate_multi_stem_export(
-        str(body.get("multi_stem_export") or _compat_settings_payload().get("multi_stem_export") or "zip")
-    )
     video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
     if not isinstance(raw_paths, list) or not raw_paths:
         raise AppError(ErrorCode.INVALID_REQUEST, "No files selected.").to_http()
     if not isinstance(raw_stems, str):
         raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
-    raw_source_dirs = body.get("source_dirs")
-    source_dirs = raw_source_dirs if isinstance(raw_source_dirs, list) else []
     mode = _stems_to_mode(raw_stems)
     _validate_mode_and_output_format(mode, output_format)
-    delivery = "folder"
+    delivery = "browser_download" if _is_remote_client(request) else "folder"
     created: list[dict[str, Any]] = []
-    for index, item in enumerate(raw_paths):
-        path_text = _normalize_local_path_text(item)
+    for item in raw_paths:
+        path_text = str(item or "").strip()
         if not path_text:
             continue
         source_original = Path(path_text).expanduser()
         original_name, source_path = _store_local_media_file(source_original)
-        source_dir_text = _normalize_local_path_text(source_dirs[index] if index < len(source_dirs) else "")
-        if not source_dir_text:
-            source_dir_text = str(source_original.parent)
         payload = _register_task(
             original_name=original_name,
             source_path=source_path,
-            source_dir=source_dir_text,
+            source_dir=str(source_original.parent),
             mode=mode,
             output_format=output_format,
             video_handling=video_handling,
-            multi_stem_export=multi_stem_export,
-            output_same_as_input=output_same_as_input,
             delivery=delivery,
             auto_start=False,
         )
@@ -6929,13 +3762,11 @@ async def create_task(
     file: UploadFile = File(...),
     mode: str = Form("vocals"),
     output_format: str = Form("same_as_input"),
-    multi_stem_export: str = Form("zip"),
     video_handling: str = Form("audio_only"),
     source_dir: str | None = Form(None),
 ):
     try:
         _validate_mode_and_output_format(mode, output_format)
-        multi_stem_export = _validate_multi_stem_export(multi_stem_export)
         video_handling = _validate_video_handling(video_handling)
         original_name, source_path = await _store_uploaded_file(file)
         payload = _register_task(
@@ -6945,7 +3776,6 @@ async def create_task(
             mode=mode,
             output_format=output_format,
             video_handling=video_handling,
-            multi_stem_export=multi_stem_export,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=True,
         )
@@ -7024,10 +3854,9 @@ async def retry_task(task_id: str, request: Request):
         body = {}
     stems_raw = body.get("stems")
     output_format = body.get("output_format")
-    multi_stem_export = body.get("multi_stem_export")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
-    prioritize = True if "prioritize" not in body else bool(body.get("prioritize"))
+    prioritize = bool(body.get("prioritize"))
     output_same_as_input = body.get("output_same_as_input")
     try:
         payload = _restart_task_payload(
@@ -7037,14 +3866,10 @@ async def retry_task(task_id: str, request: Request):
             video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
             output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
             output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
-            multi_stem_export=_validate_multi_stem_export(str(multi_stem_export))
-            if isinstance(multi_stem_export, str) and multi_stem_export.strip()
-            else None,
             prioritize=prioritize,
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
-    _resume_queue_processing()
     return _public_task(payload)
 
 
@@ -7065,43 +3890,6 @@ async def update_task_selection(task_id: str, request: Request):
         status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
         raise exc.to_http(status)
     return _public_task(task)
-
-
-@app.post("/api/tasks/{task_id}/preset_mix")
-async def export_task_preset_mix(task_id: str, request: Request):
-    _require_local_request(request, "LAN clients cannot adjust completed presets.")
-    task = _require_task(task_id)
-    mode = str(task.get("mode") or "")
-    if mode not in {"preset_boost_harmonies", "preset_boost_guitar"}:
-        raise AppError(ErrorCode.INVALID_REQUEST, "This task does not support preset gain adjustments.").to_http()
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
-    current_settings = _task_preset_settings(task) or {
-        "overlay_gain_db": PRESET_DEFAULT_OVERLAY_GAIN_DB,
-        "base_song_gain_db": PRESET_DEFAULT_BASE_GAIN_DB,
-    }
-    preset_settings = {
-        "overlay_gain_db": _coerce_gain_db(
-            body.get(
-                "overlay_gain_db",
-                body.get("background_vocals_gain_db", body.get("guitar_gain_db")),
-            ),
-            current_settings["overlay_gain_db"],
-        ),
-        "base_song_gain_db": _coerce_gain_db(
-            body.get("base_song_gain_db"),
-            current_settings["base_song_gain_db"],
-        ),
-    }
-    try:
-        return _export_cached_boost_harmonies_mix(task_id, preset_settings)
-    except AppError as exc:
-        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
-        raise exc.to_http(status)
 
 
 @app.post("/api/tasks/{task_id}/reveal")
@@ -7153,150 +3941,12 @@ async def download_output(task_id: str):
     archive_path = archive_dir / f"{task_id}_{archive_name}"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for output in existing_outputs:
-            zf.write(output, arcname=_relative_output_name(output, _out_path))
+            zf.write(output, arcname=output.name)
     return FileResponse(
         archive_path,
         filename=archive_name,
         background=BackgroundTask(lambda: _cleanup_path(archive_path)),
     )
-
-
-@app.get("/api/history")
-async def list_previous_files() -> dict[str, Any]:
-    entries = _prune_previous_files()
-    entries.sort(key=lambda entry: float(entry.get("finished_at") or 0.0), reverse=True)
-    return {
-        "items": [_public_previous_file(entry) for entry in entries],
-        "storage": _history_storage_payload(entries),
-    }
-
-
-@app.get("/api/history/{entry_id}/artwork")
-async def previous_file_artwork(entry_id: str):
-    entry = _require_previous_file(entry_id)
-    artwork_path = Path(str(entry.get("artwork_path") or "")).expanduser()
-    if not artwork_path.exists() or not artwork_path.is_file():
-        raise HTTPException(status_code=404, detail="artwork not found")
-    media_type = "image/png" if artwork_path.suffix.lower() == ".png" else "image/jpeg"
-    return FileResponse(
-        artwork_path,
-        media_type=media_type,
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
-
-
-@app.post("/api/history/{entry_id}/reveal")
-async def reveal_previous_file(entry_id: str, request: Request):
-    _require_local_request(request, "LAN clients cannot control the host machine.")
-    entry = _require_previous_file(entry_id)
-    try:
-        out_path, existing_outputs = _previous_file_output_paths(entry)
-    except AppError as exc:
-        status = 404 if exc.message == "file doesn't exist" else 409
-        raise exc.to_http(status) from exc
-    single_output = existing_outputs[0] if len(existing_outputs) == 1 else None
-    try:
-        if sys.platform.startswith("darwin"):
-            if single_output is not None:
-                subprocess.Popen(["open", "-R", str(single_output)])
-            else:
-                subprocess.Popen(["open", str(out_path)])
-        elif sys.platform.startswith("win"):
-            if single_output is not None:
-                subprocess.Popen(["explorer", "/select,", str(single_output)])
-            else:
-                os.startfile(str(out_path))  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", str(single_output.parent if single_output is not None else out_path)])
-    except Exception as exc:
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not reveal output: {exc}").to_http(500) from exc
-    return {"status": "opened", "path": str(single_output or out_path)}
-
-
-@app.get("/api/history/{entry_id}/download")
-async def download_previous_file(entry_id: str):
-    entry = _require_previous_file(entry_id)
-    try:
-        _out_path, existing_outputs = _previous_file_output_paths(entry)
-    except AppError as exc:
-        status = 404 if exc.message == "file doesn't exist" else 409
-        raise exc.to_http(status) from exc
-    if not existing_outputs:
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
-    if len(existing_outputs) == 1:
-        output = existing_outputs[0]
-        return FileResponse(output, filename=output.name)
-    archive_dir = _ensure_dir(RUNTIME_DIR / "downloads")
-    archive_name = f"{_download_label(entry)}.zip"
-    archive_path = archive_dir / f"history_{entry_id}_{archive_name}"
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for output in existing_outputs:
-            zf.write(output, arcname=_relative_output_name(output, _out_path))
-    return FileResponse(
-        archive_path,
-        filename=archive_name,
-        background=BackgroundTask(lambda: _cleanup_path(archive_path)),
-    )
-
-
-@app.post("/api/history/{entry_id}/copy")
-async def copy_previous_file(entry_id: str, request: Request) -> dict[str, Any]:
-    _require_local_request(request, "LAN clients cannot save files from the host machine.")
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid copy payload.").to_http()
-    destination = str(body.get("output_root") or "").strip()
-    if not destination:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Missing destination folder.").to_http()
-    destination_dir = _ensure_dir(Path(destination).expanduser())
-    entry = _require_previous_file(entry_id)
-    try:
-        _out_path, existing_outputs = _previous_file_output_paths(entry)
-    except AppError as exc:
-        status = 404 if exc.message == "file doesn't exist" else 409
-        raise exc.to_http(status) from exc
-    try:
-        copied = _copy_outputs_to_directory(existing_outputs, destination_dir)
-    except Exception as exc:
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save files: {exc}").to_http(500) from exc
-    return {
-        "status": "saved",
-        "output_root": str(destination_dir),
-        "outputs": [_relative_output_name(path, destination_dir) for path in copied],
-    }
-
-
-@app.post("/api/history/{entry_id}/reuse")
-async def reuse_previous_file(entry_id: str, request: Request) -> dict[str, Any]:
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid reuse payload.").to_http()
-    stems_raw = body.get("stems")
-    if not isinstance(stems_raw, str) or not stems_raw.strip():
-        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid stem selection.").to_http()
-    output_format = str(body.get("output_format") or _compat_settings_payload()["output_format"])
-    multi_stem_export = _validate_multi_stem_export(
-        str(body.get("multi_stem_export") or _compat_settings_payload().get("multi_stem_export") or "zip")
-    )
-    video_handling = _validate_video_handling(str(body.get("video_handling") or _compat_settings_payload()["video_handling"]))
-    mode = _stems_to_mode(stems_raw)
-    _validate_mode_and_output_format(mode, output_format)
-    entry = _require_previous_file(entry_id)
-    source_path = Path(str(entry.get("source_path") or "")).expanduser()
-    if not source_path.exists() or not source_path.is_file():
-        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist").to_http(404)
-    payload = _register_task(
-        original_name=str(entry.get("original_name") or source_path.name),
-        source_path=source_path,
-        source_dir=None,
-        mode=mode,
-        output_format=output_format,
-        video_handling=video_handling,
-        multi_stem_export=multi_stem_export,
-        delivery="browser_download" if _is_remote_client(request) else "folder",
-        auto_start=False,
-    )
-    return _compat_public_task(payload)
 
 
 @app.get("/settings")
@@ -7316,8 +3966,6 @@ async def update_settings(request: Request) -> dict[str, Any]:
         if output_format not in OUTPUT_FORMAT_CHOICES:
             raise AppError(ErrorCode.INVALID_REQUEST, "Invalid output format.").to_http()
         patch["output_format"] = output_format
-    if "multi_stem_export" in body:
-        patch["multi_stem_export"] = _validate_multi_stem_export(str(body.get("multi_stem_export") or "zip"))
     output_root = body.get("output_root")
     if isinstance(output_root, str):
         try:
@@ -7327,47 +3975,8 @@ async def update_settings(request: Request) -> dict[str, Any]:
         patch["output_root"] = str(resolved)
     if "output_same_as_input" in body:
         patch["output_same_as_input"] = bool(body.get("output_same_as_input"))
-    if "previous_files_retention" in body:
-        retention_value = str(body.get("previous_files_retention") or "")
-        if retention_value not in PREVIOUS_FILES_RETENTION_CHOICES:
-            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid previous files retention.").to_http()
-        patch["previous_files_retention"] = retention_value
-    if "previous_files_limit_gb" in body:
-        patch["previous_files_limit_gb"] = _coerce_storage_gb(
-            body.get("previous_files_limit_gb"),
-            PREVIOUS_FILES_LIMIT_GB_DEFAULT,
-            minimum=PREVIOUS_FILES_LIMIT_GB_MIN,
-            maximum=PREVIOUS_FILES_LIMIT_GB_MAX,
-        )
-    if "previous_files_warn_gb" in body:
-        patch["previous_files_warn_gb"] = _coerce_storage_gb(
-            body.get("previous_files_warn_gb"),
-            PREVIOUS_FILES_WARN_GB_DEFAULT,
-            minimum=PREVIOUS_FILES_WARN_GB_MIN,
-            maximum=PREVIOUS_FILES_WARN_GB_MAX,
-        )
     if "video_handling" in body:
         patch["video_handling"] = _validate_video_handling(str(body.get("video_handling") or "audio_only"))
-    if "boost_harmonies_background_vocals_gain_db" in body:
-        patch["boost_harmonies_background_vocals_gain_db"] = _coerce_gain_db(
-            body.get("boost_harmonies_background_vocals_gain_db"),
-            BOOST_HARMONIES_DEFAULT_BACKGROUND_GAIN_DB,
-        )
-    if "boost_harmonies_base_song_gain_db" in body:
-        patch["boost_harmonies_base_song_gain_db"] = _coerce_gain_db(
-            body.get("boost_harmonies_base_song_gain_db"),
-            BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
-        )
-    if "boost_guitar_guitar_gain_db" in body:
-        patch["boost_guitar_guitar_gain_db"] = _coerce_gain_db(
-            body.get("boost_guitar_guitar_gain_db"),
-            BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
-        )
-    if "boost_guitar_base_song_gain_db" in body:
-        patch["boost_guitar_base_song_gain_db"] = _coerce_gain_db(
-            body.get("boost_guitar_base_song_gain_db"),
-            BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
-        )
     if not _is_remote_client(request):
         if "lan_passcode_enabled" in body:
             patch["lan_passcode_enabled"] = bool(body.get("lan_passcode_enabled"))
@@ -7379,8 +3988,6 @@ async def update_settings(request: Request) -> dict[str, Any]:
                 raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN passcode ttl.").to_http()
             patch["lan_passcode_ttl"] = ttl_value
     _set_compat_settings(patch)
-    if {"previous_files_retention", "previous_files_limit_gb", "previous_files_warn_gb"} & set(patch):
-        _prune_previous_files()
     return _settings_response_payload(request)
 
 
@@ -7390,16 +3997,12 @@ async def compat_upload(
     file: UploadFile = File(...),
     stems: str = Form("vocals"),
     output_format: str | None = Form(None),
-    multi_stem_export: str | None = Form(None),
     video_handling: str | None = Form(None),
     source_dir: str | None = Form(None),
 ):
     try:
         mode = _stems_to_mode(stems)
         resolved_output_format = output_format or _compat_settings_payload()["output_format"]
-        resolved_multi_stem_export = _validate_multi_stem_export(
-            str(multi_stem_export or _compat_settings_payload().get("multi_stem_export") or "zip")
-        )
         resolved_video_handling = _validate_video_handling(video_handling or _compat_settings_payload()["video_handling"])
         _validate_mode_and_output_format(mode, resolved_output_format)
         original_name, source_path = await _store_uploaded_file(file)
@@ -7410,12 +4013,10 @@ async def compat_upload(
             mode=mode,
             output_format=resolved_output_format,
             video_handling=resolved_video_handling,
-            multi_stem_export=resolved_multi_stem_export,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=False,
         )
-        public = _compat_public_task(payload)
-        return public
+        return {"task_id": payload["id"], "stems": _mode_to_stems(mode), "delivery": payload["delivery"]}
     except AppError as exc:
         raise exc.to_http()
 
@@ -7429,28 +4030,14 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         body = {}
     output_format = body.get("output_format")
-    multi_stem_export = body.get("multi_stem_export")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
     output_same_as_input = body.get("output_same_as_input")
-    remote_client = _is_remote_client(request)
-    request_host = _request_client_host(request)
-    running_on_other_device = False
     try:
         with tasks_lock:
             task = tasks.get(task_id)
             if task is None:
                 raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
-            if remote_client:
-                for other_id, other in tasks.items():
-                    if other_id == task_id:
-                        continue
-                    if str(other.get("status") or "") != "running":
-                        continue
-                    other_host = str(other.get("queued_by_host") or "").strip()
-                    if not other_host or other_host != request_host:
-                        running_on_other_device = True
-                        break
             if str(task.get("status") or "") == "ready":
                 _apply_task_start_settings(
                     task,
@@ -7458,18 +4045,9 @@ async def compat_start(task_id: str, request: Request) -> dict[str, Any]:
                     video_handling=str(video_handling) if isinstance(video_handling, str) and video_handling.strip() else None,
                     output_root=str(output_root) if isinstance(output_root, str) and output_root.strip() else None,
                     output_same_as_input=bool(output_same_as_input) if "output_same_as_input" in body else None,
-                    multi_stem_export=_validate_multi_stem_export(str(multi_stem_export))
-                    if isinstance(multi_stem_export, str) and multi_stem_export.strip()
-                    else None,
                 )
-            if request_host:
-                task["queued_by_host"] = request_host
         task = _enqueue_task(task_id)
-        _resume_queue_processing()
-        payload = _compat_public_task(task)
-        if running_on_other_device:
-            payload["message"] = "another device is currently processing. this song was added to the queue."
-        return payload
+        return _compat_public_task(task)
     except AppError as exc:
         raise exc.to_http(404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400)
 
@@ -7490,8 +4068,7 @@ async def compat_progress(task_id: str):
                     break
                 snapshot = _compat_public_task(task)
                 if task["status"] == "running" and 0 < int(task.get("pct") or 0) < 100:
-                    _update_task_runtime_view(task, now=now)
-                    snapshot = _compat_public_task(task)
+                    snapshot["eta_seconds"] = _estimate_eta(task, int(task.get("pct") or 0))
             if snapshot["pct"] != -1 and snapshot["stage"] == "error":
                 snapshot["pct"] = -1
             should_emit = task["version"] != last_version
@@ -7519,24 +4096,8 @@ async def compat_progress(task_id: str):
 @app.post("/stop/{task_id}")
 async def compat_stop(task_id: str) -> dict[str, Any]:
     _require_task(task_id)
-    logger.info("received /stop request for %s", task_id)
     _request_task_stop(task_id)
     return _compat_public_task(_require_task(task_id))
-
-
-@app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str):
-    try:
-        removed = _remove_task(task_id)
-    except AppError as exc:
-        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
-        raise exc.to_http(status)
-    return {"status": "removed", "id": task_id, "name": str(removed.get("original_name") or "")}
-
-
-@app.post("/remove/{task_id}")
-async def compat_remove(task_id: str):
-    return await delete_task(task_id)
 
 
 @app.post("/rerun/{task_id}")
@@ -7551,7 +4112,7 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
     output_format = body.get("output_format")
     video_handling = body.get("video_handling")
     output_root = body.get("output_root")
-    prioritize = True if "prioritize" not in body else bool(body.get("prioritize"))
+    prioritize = bool(body.get("prioritize"))
     output_same_as_input = body.get("output_same_as_input")
     try:
         payload = _restart_task_payload(
@@ -7565,8 +4126,7 @@ async def compat_rerun(task_id: str, request: Request) -> dict[str, Any]:
         )
     except AppError as exc:
         raise exc.to_http(404 if exc.message == "file doesn't exist" else 400)
-    _resume_queue_processing()
-    return _compat_public_task(payload)
+    return {"task_id": payload["id"], "stems": _mode_to_stems(payload["mode"]), "delivery": payload["delivery"]}
 
 
 @app.post("/reveal/{task_id}")
@@ -7651,13 +4211,8 @@ async def shutdown(request: Request):
 def cli_main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Run the stemsplat server.")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT)
-    parser.add_argument("--task-runner-input", default="")
+    parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
-
-    if args.task_runner_input:
-        _task_runner_main(Path(args.task_runner_input).expanduser())
-        return
 
     import uvicorn
 
@@ -8440,34 +4995,6 @@ INDEX_HTML = """<!DOCTYPE html>
                 <strong>both (separate)</strong>
               </div>
             </label>
-            <label class="mode-card" data-mode="guitar">
-              <input type="radio" name="split-mode" value="guitar">
-              <div class="checkbox"></div>
-              <div>
-                <strong>mel-band guitar</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="mel_band_karaoke">
-              <input type="radio" name="split-mode" value="mel_band_karaoke">
-              <div class="checkbox"></div>
-              <div>
-                <strong>bg vocal</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="bs_roformer_6s">
-              <input type="radio" name="split-mode" value="bs_roformer_6s">
-              <div class="checkbox"></div>
-              <div>
-                <strong>full mix</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="preset_denoise">
-              <input type="radio" name="split-mode" value="preset_denoise">
-              <div class="checkbox"></div>
-              <div>
-                <strong>denoise</strong>
-              </div>
-            </label>
           </div>
 
         </section>
@@ -8514,10 +5041,6 @@ INDEX_HTML = """<!DOCTYPE html>
       instrumental: 'instrumental',
       both_deux: 'both (deux)',
       both_separate: 'both (separate)',
-      guitar: 'mel-band guitar',
-      mel_band_karaoke: 'bg vocal',
-      bs_roformer_6s: 'full mix',
-      preset_denoise: 'denoise',
     };
 
     const OUTPUT_LABELS = {
@@ -8564,12 +5087,6 @@ INDEX_HTML = """<!DOCTYPE html>
       if (mode === 'both_separate') {
         return ['vocals', 'instrumental'].filter((name) => missingModels.includes(name));
       }
-      if (mode === 'guitar') return missingModels.includes('guitar') ? ['guitar'] : [];
-      if (mode === 'mel_band_karaoke') {
-        return ['vocals', 'mel_band_karaoke'].filter((name) => missingModels.includes(name));
-      }
-      if (mode === 'bs_roformer_6s') return missingModels.includes('bs_roformer_6s') ? ['bs_roformer_6s'] : [];
-      if (mode === 'preset_denoise') return missingModels.includes('denoise') ? ['denoise'] : [];
       return [];
     }
 
@@ -8693,8 +5210,7 @@ INDEX_HTML = """<!DOCTYPE html>
           ? ''
           : (OUTPUT_LABELS[task.output_format] || task.output_format);
         const queueMeta = outputLabel ? `${modeLabel} • ${outputLabel}` : modeLabel;
-        // Keep ETA calculation in place, but suppress it from the visible UI.
-        const progressSide = `${pct}%`;
+        const progressSide = `${pct}%${eta ? ` • ${eta}` : ''}`;
         const badgeText = statusLabel(task.status);
         const showStatusBadge = ['error', 'stopped'].includes(task.status)
           || (task.status === 'done' && stageText.trim().toLowerCase() !== badgeText);
