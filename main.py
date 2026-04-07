@@ -1026,6 +1026,7 @@ COMPAT_SETTINGS_DEFAULTS = {
     "boost_harmonies_base_song_gain_db": BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
     "boost_guitar_guitar_gain_db": BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
     "boost_guitar_base_song_gain_db": BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
+    "editor_snap_distance_ms": 180,
 }
 
 MODEL_SPECS: dict[str, ModelSpec] = {
@@ -1437,6 +1438,10 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     boost_guitar_settings = _boost_guitar_settings_payload(normalized)
     normalized["boost_guitar_guitar_gain_db"] = boost_guitar_settings["overlay_gain_db"]
     normalized["boost_guitar_base_song_gain_db"] = boost_guitar_settings["base_song_gain_db"]
+    normalized["editor_snap_distance_ms"] = max(
+        0,
+        min(2_000, int(_coerce_optional_ms(normalized.get("editor_snap_distance_ms"), default=180) or 180)),
+    )
     normalized["structure_mode"] = "flat"
     return normalized
 

@@ -1077,13 +1077,10 @@
       display: none !important;
     }
     .task-editor-btn {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 12;
-      width: 36px;
-      height: 36px;
-      border-radius: 12px;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      border-radius: 14px;
       border: 1px solid rgba(255,255,255,.12);
       background: rgba(255,255,255,.07);
       display: inline-flex;
@@ -1101,87 +1098,198 @@
     .task-editor-btn[hidden] {
       display: none !important;
     }
+    .editor-title {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      font-size: 1.2rem;
+      line-height: 1.15;
+      min-width: 0;
+    }
+    .editor-title strong {
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: .01em;
+      text-transform: lowercase;
+      flex: 0 0 auto;
+    }
+    .editor-title span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      opacity: .88;
+      font-weight: 500;
+    }
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 2px 0 6px;
+    }
+    .editor-toolbar-spacer {
+      width: 10px;
+      flex: 0 0 auto;
+    }
+    .editor-tool-btn {
+      min-width: 42px;
+      height: 42px;
+      padding: 0 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.1);
+      background: rgba(255,255,255,.07);
+      color: rgba(245,251,255,.94);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+    }
+    .editor-tool-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(255,255,255,.2);
+      background: rgba(255,255,255,.12);
+      box-shadow: 0 10px 22px rgba(0,0,0,.18);
+    }
+    .editor-tool-btn.is-active {
+      background: rgba(142,216,255,.18);
+      border-color: rgba(142,216,255,.4);
+      color: #fff;
+    }
+    .editor-tool-btn svg {
+      width: 17px;
+      height: 17px;
+      flex: 0 0 auto;
+    }
+    .editor-tool-btn[data-compact="true"] {
+      padding: 0;
+      width: 42px;
+    }
+    .editor-tracks {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .editor-track {
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,.09);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      padding: 14px;
+      transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+    }
+    .editor-track.is-active {
+      border-color: rgba(255,255,255,.18);
+      box-shadow: 0 18px 28px rgba(0,0,0,.2);
+    }
+    .editor-track-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .editor-track-title {
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      opacity: .74;
+    }
+    .editor-track.is-active .editor-track-title {
+      opacity: .94;
+    }
     .editor-wave-shell {
       position: relative;
-      border-radius: 18px;
-      border: 1px solid rgba(255,255,255,.1);
-      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
-      padding: 14px 14px 18px;
+      border-radius: 16px;
+      background: rgba(10,17,20,.42);
+      padding: 10px 12px 12px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
     }
     .editor-wave-canvas {
       width: 100%;
-      height: 120px;
+      height: 124px;
       display: block;
       border-radius: 12px;
-      background: rgba(10,17,20,.42);
+      background: rgba(9,18,23,.82);
     }
     .editor-wave-overlay {
       position: absolute;
-      left: 14px;
-      right: 14px;
-      top: 14px;
-      height: 120px;
-      pointer-events: none;
+      left: 12px;
+      right: 12px;
+      top: 10px;
+      height: 124px;
+      pointer-events: auto;
     }
     .editor-wave-selection {
       position: absolute;
       top: 0;
       bottom: 0;
       border-radius: 12px;
-      background: rgba(142,216,255,.14);
-      border: 1px solid rgba(142,216,255,.28);
+      background: rgba(142,216,255,.12);
+      border: 1px solid rgba(142,216,255,.24);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
+      pointer-events: none;
     }
-    .editor-wave-head {
+    .editor-marker {
+      position: absolute;
+      top: -2px;
+      bottom: -2px;
+      width: 0;
+      transform: translateX(-1px);
+      pointer-events: none;
+    }
+    .editor-marker-line {
       position: absolute;
       top: 0;
       bottom: 0;
-      width: 2px;
-      background: rgba(255,255,255,.92);
-      box-shadow: 0 0 0 1px rgba(0,0,0,.12);
-    }
-    .editor-range-stack {
-      position: relative;
-      margin-top: 14px;
-      height: 28px;
-    }
-    .editor-range {
-      position: absolute;
       left: 0;
-      right: 0;
-      top: 0;
-      width: 100%;
-      background: transparent;
-      pointer-events: none;
-      -webkit-appearance: none;
-      appearance: none;
+      width: 2px;
+      background: rgba(255,255,255,.96);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.18);
     }
-    .editor-range::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width: 16px;
-      height: 16px;
-      border-radius: 999px;
-      background: #fff;
-      border: 0;
-      box-shadow: 0 4px 12px rgba(0,0,0,.28);
+    .editor-marker-cap {
+      position: absolute;
+      top: -10px;
+      width: 0;
+      height: 0;
+      border-left: 8px solid transparent;
+      border-right: 8px solid transparent;
+      border-top: 0;
+      border-bottom: 10px solid rgba(255,255,255,.96);
+      transform: translateX(-7px);
+      filter: drop-shadow(0 3px 8px rgba(0,0,0,.24));
+    }
+    .editor-marker-handle {
+      position: absolute;
+      inset: -16px -10px -8px -10px;
+      cursor: ew-resize;
       pointer-events: auto;
-      cursor: pointer;
-    }
-    .editor-range::-moz-range-thumb {
-      width: 16px;
-      height: 16px;
-      border-radius: 999px;
-      background: #fff;
-      border: 0;
-      box-shadow: 0 4px 12px rgba(0,0,0,.28);
-      pointer-events: auto;
-      cursor: pointer;
-    }
-    .editor-range::-webkit-slider-runnable-track,
-    .editor-range::-moz-range-track {
       background: transparent;
-      height: 4px;
+    }
+    .editor-marker-playhead .editor-marker-handle {
+      cursor: grab;
+    }
+    .editor-marker-playhead.is-dragging .editor-marker-handle {
+      cursor: grabbing;
+    }
+    .editor-marker-in .editor-marker-cap {
+      left: 0;
+      transform: translateX(1px);
+    }
+    .editor-marker-out .editor-marker-cap {
+      left: 0;
+      transform: translateX(-15px) scaleX(-1);
+    }
+    .editor-track-meta {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
     }
     .editor-meta-grid {
       display: grid;
@@ -1198,9 +1306,38 @@
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      justify-content: center;
     }
     .editor-transport .btn {
       min-width: 0;
+    }
+    .editor-wave-context {
+      position: fixed;
+      z-index: 90;
+      min-width: 164px;
+      padding: 8px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.1);
+      background: rgba(14,24,30,.96);
+      box-shadow: 0 18px 32px rgba(0,0,0,.24);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .editor-wave-context button {
+      width: 100%;
+      border: 0;
+      background: rgba(255,255,255,.04);
+      color: var(--txt-main);
+      padding: 10px 12px;
+      border-radius: 12px;
+      text-align: left;
+      font-size: 12px;
+      transition: background .16s ease, transform .16s ease;
+    }
+    .editor-wave-context button:hover {
+      background: rgba(255,255,255,.1);
+      transform: translateX(1px);
     }
     .preset-choice {
       width: 100%;
@@ -1801,13 +1938,16 @@
   <!-- templates & scripts -->
   <template id="item-template">
     <div class="item-row flex items-center gap-3">
+      <button class="task-editor-btn self-center" type="button" title="edit clip" data-tooltip="edit song">
+        <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 5v14"></path>
+          <path d="M19 5v14"></path>
+          <path d="M8 12h8"></path>
+          <path d="M10.5 9.5 8 12l2.5 2.5"></path>
+          <path d="M13.5 9.5 16 12l-2.5 2.5"></path>
+        </svg>
+      </button>
       <div class="glass card rounded-xl px-4 py-4 flex-1">
-        <button class="task-editor-btn" type="button" title="edit clip" data-tooltip="edit song">
-          <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 20h9"></path>
-            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-          </svg>
-        </button>
         <button class="task-preset-btn" type="button" title="adjust preset" data-tooltip="adjust mix" hidden>
           <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="4" y1="21" x2="4" y2="14"></line>
@@ -1896,6 +2036,7 @@
     let previousFilesRetentionLabel = null;
     let previousFilesLimitInput = null;
     let previousFilesWarnInput = null;
+    let editorSnapDistanceInput = null;
     let outputFolderInput = null;
     let outputSameAsInput = null;
     let outputFolderChoose = null;
@@ -2159,6 +2300,9 @@
     const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
     const RELEASE_SESSION_DISMISS_KEY = 'releaseUpdateDismissedThisSession';
     const RELEASE_SNOOZE_STORAGE_KEY = 'releaseUpdateSnooze';
+    const EDITOR_TRIM_CLIPBOARD_KEY = 'stemsplat.editorTrimClipboard';
+    const EDITOR_SNAP_ENABLED_KEY = 'stemsplat.editorSnapEnabled';
+    const EDITOR_TRACK_DRAFTS_KEY = 'stemsplat.editorTrackDrafts';
     const isLanClient = !['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
 
     let startPressed = false;
@@ -2183,6 +2327,7 @@
       lan_passcode_enabled: false,
       lan_passcode: '',
       lan_passcode_ttl: '1d',
+      editor_snap_distance_ms: 180,
       runtime: null,
     };
     let presetSettingsSaveTimer = null;
@@ -2688,6 +2833,9 @@
       }
       if(previousFilesWarnInput){
         previousFilesWarnInput.value = formatStorageSettingValue(settingsState.previous_files_warn_gb, 8);
+      }
+      if(editorSnapDistanceInput){
+        editorSnapDistanceInput.value = String(Math.max(0, Math.min(2000, Number(settingsState.editor_snap_distance_ms) || 180)));
       }
       if(videoAudioOnly){
         videoAudioOnly.checked = true;
@@ -3888,6 +4036,15 @@
       };
     }
 
+    function cloneClipState(clip){
+      const source = clip && typeof clip === 'object' ? clip : {};
+      return {
+        startMs: Math.max(0, Math.round(Number(source.startMs) || 0)),
+        endMs: Number.isFinite(Number(source.endMs)) && Number(source.endMs) > 0 ? Math.round(Number(source.endMs)) : null,
+        enabled: !!source.enabled,
+      };
+    }
+
     function applyClipState(task, clip){
       if(!task || !clip) return;
       task.clip_start_ms = Math.max(0, Math.round(Number(clip.startMs) || 0));
@@ -3916,6 +4073,92 @@
       return `${minutes}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(2, '0')}`;
     }
 
+    function editorTaskStorageKey(task){
+      return String((task && (task.id || task.tempKey || task.name)) || 'editor-task');
+    }
+
+    function editorReadStorageJson(key, fallback){
+      try{
+        const raw = localStorage.getItem(key);
+        if(!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : fallback;
+      }catch(_){
+        return fallback;
+      }
+    }
+
+    function editorReadTrackDraftStore(){
+      return editorReadStorageJson(EDITOR_TRACK_DRAFTS_KEY, {});
+    }
+
+    function editorWriteTrackDraftStore(store){
+      try{
+        localStorage.setItem(EDITOR_TRACK_DRAFTS_KEY, JSON.stringify(store || {}));
+      }catch(_){}
+    }
+
+    function editorLoadTrackDrafts(task){
+      const prefix = `${editorTaskStorageKey(task)}::`;
+      const store = editorReadTrackDraftStore();
+      const drafts = {};
+      Object.entries(store).forEach(([key, value]) => {
+        if(!key.startsWith(prefix) || !value || typeof value !== 'object') return;
+        drafts[key.slice(prefix.length)] = cloneClipState(value);
+      });
+      return drafts;
+    }
+
+    function editorPersistTrackDrafts(task, tracks){
+      const prefix = `${editorTaskStorageKey(task)}::`;
+      const store = editorReadTrackDraftStore();
+      Object.keys(store).forEach((key) => {
+        if(key.startsWith(prefix)){
+          delete store[key];
+        }
+      });
+      (Array.isArray(tracks) ? tracks : []).forEach((track) => {
+        if(!track || track.key === 'source') return;
+        store[`${prefix}${track.key}`] = cloneClipState(track.clip);
+      });
+      editorWriteTrackDraftStore(store);
+    }
+
+    function editorRestoreTrackDrafts(task, snapshot){
+      const prefix = `${editorTaskStorageKey(task)}::`;
+      const store = editorReadTrackDraftStore();
+      Object.keys(store).forEach((key) => {
+        if(key.startsWith(prefix)){
+          delete store[key];
+        }
+      });
+      Object.entries(snapshot || {}).forEach(([trackKey, clip]) => {
+        store[`${prefix}${trackKey}`] = cloneClipState(clip);
+      });
+      editorWriteTrackDraftStore(store);
+    }
+
+    function editorReadClipboard(){
+      const clip = editorReadStorageJson(EDITOR_TRIM_CLIPBOARD_KEY, null);
+      return clip ? cloneClipState(clip) : null;
+    }
+
+    function editorWriteClipboard(clip){
+      try{
+        localStorage.setItem(EDITOR_TRIM_CLIPBOARD_KEY, JSON.stringify(cloneClipState(clip)));
+      }catch(_){}
+    }
+
+    function editorSnapEnabled(){
+      return localStorage.getItem(EDITOR_SNAP_ENABLED_KEY) !== 'false';
+    }
+
+    function editorSetSnapEnabled(enabled){
+      try{
+        localStorage.setItem(EDITOR_SNAP_ENABLED_KEY, enabled ? 'true' : 'false');
+      }catch(_){}
+    }
+
     function bindTaskEditorButton(btn, task){
       if(!btn) return;
       bindDelayedTooltip(btn);
@@ -3933,44 +4176,81 @@
     async function openTaskEditor(task){
       if(!task) return;
       const pending = taskPendingEntry(task);
-      const { overlay, card } = createOverlayCard(task.name || 'editor');
-      card.style.maxWidth = '760px';
+      const { overlay, card } = createOverlayCard('editor');
+      card.style.maxWidth = '980px';
+      const titleEl = card.querySelector('h3');
+      titleEl.className = 'editor-title';
+      titleEl.textContent = '';
+      const titleStrong = document.createElement('strong');
+      titleStrong.textContent = 'editor';
+      const titleName = document.createElement('span');
+      titleName.textContent = String(task.name || 'untitled');
+      titleEl.append(titleStrong, titleName);
 
-      const description = document.createElement('div');
-      description.className = 'text-sm opacity-75';
-      description.textContent = String(task.stage || '').toLowerCase() === 'done'
-        ? 'preview the original or finished outputs, and update trim points for future reruns'
-        : 'set in and out points before splitting this song';
-      card.appendChild(description);
+      const sourceOriginalClip = cloneClipState(taskClipState(task));
+      const originalTrackDrafts = editorLoadTrackDrafts(task);
+      const snapDistanceMs = () => Math.max(0, Math.min(2000, Number(settingsState.editor_snap_distance_ms) || 0));
+      let snapEnabled = editorSnapEnabled();
+      let playheadMs = sourceOriginalClip.startMs || 0;
+      let activeObjectUrl = '';
+      let activeTrackKey = 'source';
+      let closingEditor = false;
+      let dragState = null;
+      let clickLockUntil = 0;
+      let contextMenuEl = null;
 
-      const sourceWrap = document.createElement('div');
-      sourceWrap.className = 'space-y-2';
-      let sourceSelect = null;
-      if(task.id && Array.isArray(task.outputs) && task.outputs.length){
-        const label = document.createElement('label');
-        label.className = 'text-xs uppercase tracking-[0.18em] opacity-60';
-        label.textContent = 'preview source';
-        sourceSelect = document.createElement('select');
-        sourceSelect.className = 'w-full rounded-xl border border-white/10 bg-[#132129] px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none';
-        sourceSelect.innerHTML = `<option value="source">original</option>${task.outputs.map((output) => `<option value="${String(output).replace(/"/g, '&quot;')}">${output}</option>`).join('')}`;
-        sourceWrap.append(label, sourceSelect);
-        card.appendChild(sourceWrap);
-      }
+      const toolbar = document.createElement('div');
+      toolbar.className = 'editor-toolbar';
+      card.appendChild(toolbar);
 
-      const waveShell = document.createElement('div');
-      waveShell.className = 'editor-wave-shell';
-      waveShell.innerHTML = `
-        <canvas class="editor-wave-canvas" width="1200" height="240"></canvas>
-        <div class="editor-wave-overlay">
-          <div class="editor-wave-selection"></div>
-          <div class="editor-wave-head"></div>
-        </div>
-        <div class="editor-range-stack">
-          <input class="editor-range editor-range-start" type="range" min="0" max="1000" value="0" step="1">
-          <input class="editor-range editor-range-end" type="range" min="0" max="1000" value="1000" step="1">
-        </div>
-      `;
-      card.appendChild(waveShell);
+      const svgIcon = (kind) => {
+        if(kind === 'magnet') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6a6 6 0 0 0 12 0V3"></path><path d="M6 3h4"></path><path d="M14 3h4"></path></svg>';
+        if(kind === 'start') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14"></path><path d="M18 6l-8 6 8 6V6Z"></path></svg>';
+        if(kind === 'jump-in') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5v14"></path><path d="m17 18-8-6 8-6"></path></svg>';
+        if(kind === 'play') return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.69l9.2-6.2a.8.8 0 0 0 0-1.38l-9.2-6.2A.8.8 0 0 0 8 5.8Z"/></svg>';
+        if(kind === 'pause') return '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="4" height="14" rx="1.2"></rect><rect x="13" y="5" width="4" height="14" rx="1.2"></rect></svg>';
+        if(kind === 'jump-out') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 5v14"></path><path d="m7 18 8-6-8-6"></path></svg>';
+        if(kind === 'end') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14"></path><path d="M6 6l8 6-8 6V6Z"></path></svg>';
+        return '';
+      };
+
+      const makeToolButton = ({ icon = '', label = '', compact = false, primary = false, active = false, title = '' } = {}) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `editor-tool-btn ${primary ? 'bg-white text-black' : ''} ${active ? 'is-active' : ''}`.trim();
+        if(compact) btn.dataset.compact = 'true';
+        if(title) btn.title = title;
+        if(icon){
+          btn.innerHTML = icon;
+        }
+        if(label){
+          const text = document.createElement('span');
+          text.textContent = label;
+          btn.appendChild(text);
+        }
+        return btn;
+      };
+
+      const buttons = {
+        magnet: makeToolButton({ icon: svgIcon('magnet'), compact: true, active: snapEnabled, title: snapEnabled ? 'snapping on' : 'snapping off' }),
+        start: makeToolButton({ icon: svgIcon('start'), compact: true, title: 'skip to beginning' }),
+        jumpIn: makeToolButton({ icon: svgIcon('jump-in'), compact: true, title: 'skip to in point' }),
+        play: makeToolButton({ icon: svgIcon('play'), compact: true, primary: true, title: 'play' }),
+        jumpOut: makeToolButton({ icon: svgIcon('jump-out'), compact: true, title: 'skip to out point' }),
+        end: makeToolButton({ icon: svgIcon('end'), compact: true, title: 'skip to end' }),
+        setIn: makeToolButton({ label: 'set in', title: 'set in point' }),
+        setOut: makeToolButton({ label: 'set out', title: 'set out point' }),
+        clear: makeToolButton({ label: 'clear trim', title: 'clear trim' }),
+      };
+      toolbar.append(buttons.magnet);
+      const spacer = document.createElement('div');
+      spacer.className = 'editor-toolbar-spacer';
+      toolbar.appendChild(spacer);
+      [buttons.start, buttons.jumpIn, buttons.play, buttons.jumpOut, buttons.end, buttons.setIn, buttons.setOut, buttons.clear].forEach((button) => toolbar.appendChild(button));
+
+      const tracksShell = document.createElement('div');
+      tracksShell.className = 'editor-tracks';
+      card.appendChild(tracksShell);
 
       const meta = document.createElement('div');
       meta.className = 'editor-meta-grid';
@@ -3981,21 +4261,6 @@
       `;
       card.appendChild(meta);
 
-      const transport = document.createElement('div');
-      transport.className = 'editor-transport';
-      const buttons = {
-        start: makeActionButton('|<', 'bg-white/10 text-white'),
-        jumpIn: makeActionButton('to in', 'bg-white/10 text-white'),
-        play: makeActionButton('play', 'bg-white text-black'),
-        jumpOut: makeActionButton('to out', 'bg-white/10 text-white'),
-        end: makeActionButton('>|', 'bg-white/10 text-white'),
-        setIn: makeActionButton('set in', 'bg-white/10 text-white'),
-        setOut: makeActionButton('set out', 'bg-white/10 text-white'),
-        clear: makeActionButton('clear trim', 'bg-white/10 text-white'),
-      };
-      Object.values(buttons).forEach((button) => transport.appendChild(button));
-      card.appendChild(transport);
-
       const actions = document.createElement('div');
       actions.className = 'flex gap-2 justify-end';
       const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
@@ -4003,56 +4268,114 @@
       actions.append(cancelBtn, saveBtn);
       card.appendChild(actions);
 
-      const canvas = waveShell.querySelector('.editor-wave-canvas');
-      const ctx = canvas.getContext('2d');
-      const selectionEl = waveShell.querySelector('.editor-wave-selection');
-      const headEl = waveShell.querySelector('.editor-wave-head');
-      const startRange = waveShell.querySelector('.editor-range-start');
-      const endRange = waveShell.querySelector('.editor-range-end');
       const inLabel = meta.querySelector('[data-role="in-label"]');
       const outLabel = meta.querySelector('[data-role="out-label"]');
       const cursorLabel = meta.querySelector('[data-role="cursor-label"]');
       const audio = document.createElement('audio');
       audio.preload = 'metadata';
-      let durationMs = 0;
-      let peaks = [];
-      let activeObjectUrl = '';
 
-      overlay.__cleanupFns = overlay.__cleanupFns || [];
-      overlay.__cleanupFns.push(() => {
-        try { audio.pause(); } catch(_) {}
-        if(activeObjectUrl){ URL.revokeObjectURL(activeObjectUrl); activeObjectUrl = ''; }
+      const clipEqual = (left, right) => JSON.stringify(cloneClipState(left)) === JSON.stringify(cloneClipState(right));
+
+      const baseTracks = [{ key: 'source', label: 'source', output: null }];
+      if(task.id && Array.isArray(task.outputs) && task.outputs.length){
+        task.outputs.forEach((output, index) => {
+          baseTracks.push({
+            key: `output:${index}`,
+            label: String(output || `output ${index + 1}`).replace(/\.[^.]+$/, ''),
+            output: String(output),
+          });
+        });
+      }
+      const tracks = baseTracks.map((baseTrack) => {
+        const draft = originalTrackDrafts[baseTrack.key];
+        return {
+          ...baseTrack,
+          clip: cloneClipState(baseTrack.key === 'source' ? sourceOriginalClip : (draft || sourceOriginalClip)),
+          durationMs: 0,
+          points: [],
+          dom: null,
+          waveformLoaded: false,
+          previewLoaded: false,
+        };
       });
 
-      const clip = taskClipState(task);
+      const activeTrack = () => tracks.find((trackItem) => trackItem.key === activeTrackKey) || tracks[0];
 
-      const clampClip = () => {
-        const safeDuration = Math.max(0, durationMs);
-        clip.startMs = Math.max(0, Math.min(safeDuration, Math.round(Number(clip.startMs) || 0)));
-        const fallbackEnd = safeDuration > 0 ? safeDuration : null;
-        clip.endMs = Number.isFinite(Number(clip.endMs)) ? Math.round(Number(clip.endMs)) : fallbackEnd;
-        if(Number.isFinite(Number(clip.endMs))){
-          clip.endMs = Math.max(clip.startMs, Math.min(safeDuration, Number(clip.endMs)));
+      const closeContextMenu = () => {
+        if(contextMenuEl && contextMenuEl.parentNode){
+          contextMenuEl.parentNode.removeChild(contextMenuEl);
         }
-        clip.enabled = !!clip.enabled && safeDuration > 0 && (clip.startMs > 0 || (clip.endMs !== null && clip.endMs < safeDuration));
-        if(!clip.enabled){
-          clip.startMs = 0;
-          clip.endMs = fallbackEnd;
+        contextMenuEl = null;
+      };
+
+      const normalizeTrackClip = (trackItem) => {
+        if(!trackItem) return;
+        const safeDuration = Math.max(0, Math.round(Number(trackItem.durationMs) || 0));
+        trackItem.clip.startMs = Math.max(0, Math.min(safeDuration, Math.round(Number(trackItem.clip.startMs) || 0)));
+        const fallbackEnd = safeDuration > 0 ? safeDuration : null;
+        trackItem.clip.endMs = Number.isFinite(Number(trackItem.clip.endMs)) ? Math.round(Number(trackItem.clip.endMs)) : fallbackEnd;
+        if(Number.isFinite(Number(trackItem.clip.endMs))){
+          trackItem.clip.endMs = Math.max(trackItem.clip.startMs, Math.min(safeDuration, Number(trackItem.clip.endMs)));
+        }
+        trackItem.clip.enabled = !!trackItem.clip.enabled && safeDuration > 0 && (
+          trackItem.clip.startMs > 0 || (trackItem.clip.endMs !== null && Number(trackItem.clip.endMs) < safeDuration)
+        );
+        if(!trackItem.clip.enabled){
+          trackItem.clip.startMs = 0;
+          trackItem.clip.endMs = fallbackEnd;
         }
       };
 
-      const drawWaveform = () => {
-        if(!ctx) return;
+      const nearestSnapValue = (rawMs, movingTrackKey, movingEdge) => {
+        if(!snapEnabled) return rawMs;
+        const threshold = snapDistanceMs();
+        if(threshold <= 0) return rawMs;
+        let best = null;
+        tracks.forEach((trackItem) => {
+          normalizeTrackClip(trackItem);
+          const endValue = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs;
+          [
+            ['in', trackItem.clip.startMs],
+            ['out', endValue],
+          ].forEach(([edge, value]) => {
+            if(trackItem.key === movingTrackKey && edge === movingEdge) return;
+            const diff = Math.abs(Number(value) - Number(rawMs));
+            if(diff > threshold) return;
+            if(!best || diff < best.diff){
+              best = { value: Number(value), diff };
+            }
+          });
+        });
+        return best ? best.value : rawMs;
+      };
+
+      const msFromClientX = (trackItem, clientX) => {
+        if(!trackItem || !trackItem.dom || !trackItem.dom.overlay) return 0;
+        const rect = trackItem.dom.overlay.getBoundingClientRect();
+        if(!rect.width) return 0;
+        const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        return Math.round(pct * Math.max(0, trackItem.durationMs || 0));
+      };
+
+      const syncPlayButton = () => {
+        const paused = audio.paused;
+        buttons.play.innerHTML = paused ? svgIcon('play') : svgIcon('pause');
+        buttons.play.title = paused ? 'play' : 'pause';
+      };
+
+      const drawTrackWaveform = (trackItem) => {
+        if(!trackItem || !trackItem.dom || !trackItem.dom.ctx) return;
+        const { canvas, ctx } = trackItem.dom;
         const width = canvas.width;
         const height = canvas.height;
         ctx.clearRect(0, 0, width, height);
-        ctx.fillStyle = 'rgba(13, 24, 30, 0.82)';
+        ctx.fillStyle = 'rgba(12, 24, 31, 0.96)';
         ctx.fillRect(0, 0, width, height);
-        const values = Array.isArray(peaks) && peaks.length ? peaks : new Array(240).fill(0.12);
+        const values = Array.isArray(trackItem.points) && trackItem.points.length ? trackItem.points : new Array(220).fill(0.12);
         const step = width / values.length;
         ctx.fillStyle = 'rgba(142, 216, 255, 0.78)';
         values.forEach((value, index) => {
-          const amp = Math.max(0.04, Math.min(1, Number(value) || 0));
+          const amp = Math.max(0.035, Math.min(1, Number(value) || 0));
           const barHeight = amp * (height * 0.86);
           const x = index * step;
           const y = (height - barHeight) / 2;
@@ -4060,82 +4383,369 @@
         });
       };
 
-      const syncUi = () => {
-        clampClip();
-        const safeDuration = Math.max(1, durationMs || 1);
-        startRange.max = String(safeDuration);
-        endRange.max = String(safeDuration);
-        startRange.value = String(Math.max(0, Math.min(safeDuration, clip.startMs)));
-        endRange.value = String(Math.max(0, Math.min(safeDuration, clip.endMs == null ? safeDuration : clip.endMs)));
-        const startPct = (Number(startRange.value) / safeDuration) * 100;
-        const endPct = (Number(endRange.value) / safeDuration) * 100;
-        selectionEl.style.left = `${startPct}%`;
-        selectionEl.style.width = `${Math.max(0, endPct - startPct)}%`;
-        const currentMs = Math.max(0, Math.round((Number(audio.currentTime) || 0) * 1000));
-        const headPct = Math.max(0, Math.min(100, (currentMs / safeDuration) * 100));
-        headEl.style.left = `${headPct}%`;
-        inLabel.textContent = editorTimeLabel(clip.startMs);
-        outLabel.textContent = editorTimeLabel(clip.endMs == null ? safeDuration : clip.endMs);
-        cursorLabel.textContent = editorTimeLabel(currentMs);
-        buttons.play.textContent = audio.paused ? 'play' : 'pause';
+      const syncTrackUi = (trackItem) => {
+        if(!trackItem || !trackItem.dom) return;
+        normalizeTrackClip(trackItem);
+        drawTrackWaveform(trackItem);
+        const safeDuration = Math.max(1, trackItem.durationMs || 1);
+        const currentPlayhead = Math.max(0, Math.min(trackItem.durationMs || 0, playheadMs));
+        const endValue = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : safeDuration;
+        const startPct = (trackItem.clip.startMs / safeDuration) * 100;
+        const endPct = (endValue / safeDuration) * 100;
+        const headPct = (currentPlayhead / safeDuration) * 100;
+        trackItem.dom.selection.style.left = `${startPct}%`;
+        trackItem.dom.selection.style.width = `${Math.max(0, endPct - startPct)}%`;
+        trackItem.dom.inMarker.style.left = `${startPct}%`;
+        trackItem.dom.outMarker.style.left = `${endPct}%`;
+        trackItem.dom.playhead.style.left = `${headPct}%`;
+        trackItem.dom.track.classList.toggle('is-active', trackItem.key === activeTrackKey);
       };
 
-      const activePreviewSelection = () => sourceSelect ? sourceSelect.value : 'source';
+      const syncMetaUi = () => {
+        const trackItem = activeTrack();
+        normalizeTrackClip(trackItem);
+        const safeDuration = Math.max(0, trackItem ? trackItem.durationMs : 0);
+        inLabel.textContent = editorTimeLabel(trackItem ? trackItem.clip.startMs : 0);
+        outLabel.textContent = editorTimeLabel(trackItem ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : safeDuration) : 0);
+        cursorLabel.textContent = editorTimeLabel(playheadMs);
+      };
 
-      const loadPreview = async () => {
-        const selected = activePreviewSelection();
+      const syncUi = () => {
+        tracks.forEach(syncTrackUi);
+        syncMetaUi();
+        buttons.magnet.classList.toggle('is-active', snapEnabled);
+        buttons.magnet.title = snapEnabled ? 'snapping on' : 'snapping off';
+        syncPlayButton();
+      };
+
+      const loadPreviewForTrack = async (trackItem, { preservePlayhead = true } = {}) => {
+        if(!trackItem) return;
         if(activeObjectUrl){
           URL.revokeObjectURL(activeObjectUrl);
           activeObjectUrl = '';
         }
-        peaks = [];
-        drawWaveform();
+        audio.pause();
         if(task.id){
-          const previewUrl = selected === 'source'
-            ? `/api/tasks/${task.id}/preview_audio`
-            : `/api/tasks/${task.id}/preview_audio?output=${encodeURIComponent(selected)}`;
+          const previewUrl = trackItem.output
+            ? `/api/tasks/${task.id}/preview_audio?output=${encodeURIComponent(trackItem.output)}`
+            : `/api/tasks/${task.id}/preview_audio`;
           audio.src = previewUrl;
-          try{
-            const waveformUrl = selected === 'source'
-              ? `/api/tasks/${task.id}/waveform`
-              : `/api/tasks/${task.id}/waveform?output=${encodeURIComponent(selected)}`;
-            const response = await fetch(waveformUrl, { cache: 'no-store' });
-            if(response.ok){
-              const payload = await response.json();
-              peaks = Array.isArray(payload.points) ? payload.points : [];
-              if(Number.isFinite(Number(payload.duration_ms)) && Number(payload.duration_ms) > 0){
-                durationMs = Math.round(Number(payload.duration_ms));
-              }
-              if(selected === 'source' && Number.isFinite(Number(payload.clip_start_ms))){
-                clip.startMs = Math.round(Number(payload.clip_start_ms));
-                clip.endMs = Number.isFinite(Number(payload.clip_end_ms)) ? Math.round(Number(payload.clip_end_ms)) : clip.endMs;
-                clip.enabled = !!payload.clip_enabled;
-              }
-            }
-          }catch(_){}
         }else if(pending && pending.file){
           activeObjectUrl = URL.createObjectURL(pending.file);
           audio.src = activeObjectUrl;
         }
         audio.load();
-        drawWaveform();
+        trackItem.previewLoaded = true;
+        if(preservePlayhead){
+          const targetMs = Math.max(0, Math.min(trackItem.durationMs || 0, playheadMs));
+          if(targetMs > 0){
+            const seek = () => {
+              try { audio.currentTime = targetMs / 1000; } catch(_) {}
+              audio.removeEventListener('loadedmetadata', seek);
+            };
+            audio.addEventListener('loadedmetadata', seek);
+          }
+        }
+      };
+
+      const loadWaveformForTrack = async (trackItem) => {
+        if(!trackItem || trackItem.waveformLoaded) return;
+        if(task.id){
+          try{
+            const waveformUrl = trackItem.output
+              ? `/api/tasks/${task.id}/waveform?output=${encodeURIComponent(trackItem.output)}`
+              : `/api/tasks/${task.id}/waveform`;
+            const response = await fetch(waveformUrl, { cache: 'no-store' });
+            if(response.ok){
+              const payload = await response.json();
+              trackItem.points = Array.isArray(payload.points) ? payload.points : [];
+              trackItem.durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
+              if(trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){
+                trackItem.clip = {
+                  startMs: Math.max(0, Math.round(Number(payload.clip_start_ms) || 0)),
+                  endMs: Number.isFinite(Number(payload.clip_end_ms)) ? Math.round(Number(payload.clip_end_ms)) : null,
+                  enabled: !!payload.clip_enabled,
+                };
+              }
+            }
+          }catch(_){}
+        }
+        trackItem.waveformLoaded = true;
+        normalizeTrackClip(trackItem);
         syncUi();
       };
 
-      audio.addEventListener('loadedmetadata', () => {
-        if(Number.isFinite(audio.duration) && audio.duration > 0){
-          durationMs = Math.round(audio.duration * 1000);
+      const setActiveTrack = async (trackKey, { preservePlayhead = true } = {}) => {
+        activeTrackKey = trackKey;
+        syncUi();
+        await loadPreviewForTrack(activeTrack(), { preservePlayhead });
+      };
+
+      const openContextMenuForTrack = (trackItem, clientX, clientY) => {
+        closeContextMenu();
+        const menu = document.createElement('div');
+        menu.className = 'editor-wave-context';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.textContent = 'copy in/out';
+        const pasteBtn = document.createElement('button');
+        pasteBtn.type = 'button';
+        pasteBtn.textContent = 'paste in/out';
+        const clipboard = editorReadClipboard();
+        pasteBtn.disabled = !clipboard;
+        pasteBtn.style.opacity = clipboard ? '1' : '.4';
+        guardClick(copyBtn, (event) => {
+          event.preventDefault();
+          editorWriteClipboard(trackItem.clip);
+          showPopup('copied in/out');
+          closeContextMenu();
+        }, 150);
+        guardClick(pasteBtn, (event) => {
+          event.preventDefault();
+          const nextClip = editorReadClipboard();
+          if(!nextClip) return;
+          trackItem.clip = cloneClipState(nextClip);
+          normalizeTrackClip(trackItem);
+          syncUi();
+          closeContextMenu();
+        }, 150);
+        menu.append(copyBtn, pasteBtn);
+        document.body.appendChild(menu);
+        const bounds = menu.getBoundingClientRect();
+        menu.style.left = `${Math.max(12, Math.min(window.innerWidth - bounds.width - 12, clientX))}px`;
+        menu.style.top = `${Math.max(12, Math.min(window.innerHeight - bounds.height - 12, clientY))}px`;
+        contextMenuEl = menu;
+      };
+
+      const createTrackUi = (trackItem) => {
+        const trackEl = document.createElement('div');
+        trackEl.className = 'editor-track';
+        const head = document.createElement('div');
+        head.className = 'editor-track-head';
+        const title = document.createElement('div');
+        title.className = 'editor-track-title';
+        title.textContent = trackItem.label;
+        head.appendChild(title);
+        trackEl.appendChild(head);
+
+        const waveShell = document.createElement('div');
+        waveShell.className = 'editor-wave-shell';
+        waveShell.innerHTML = `
+          <canvas class="editor-wave-canvas" width="1600" height="260"></canvas>
+          <div class="editor-wave-overlay">
+            <div class="editor-wave-selection"></div>
+            <div class="editor-marker editor-marker-in">
+              <div class="editor-marker-cap"></div>
+              <div class="editor-marker-line"></div>
+              <div class="editor-marker-handle" data-role="in"></div>
+            </div>
+            <div class="editor-marker editor-marker-playhead">
+              <div class="editor-marker-cap"></div>
+              <div class="editor-marker-line"></div>
+              <div class="editor-marker-handle" data-role="playhead"></div>
+            </div>
+            <div class="editor-marker editor-marker-out">
+              <div class="editor-marker-cap"></div>
+              <div class="editor-marker-line"></div>
+              <div class="editor-marker-handle" data-role="out"></div>
+            </div>
+          </div>
+        `;
+        trackEl.appendChild(waveShell);
+
+        const canvas = waveShell.querySelector('.editor-wave-canvas');
+        const ctx = canvas.getContext('2d');
+        const overlayEl = waveShell.querySelector('.editor-wave-overlay');
+        const selectionEl = waveShell.querySelector('.editor-wave-selection');
+        const inMarker = waveShell.querySelector('.editor-marker-in');
+        const playheadMarker = waveShell.querySelector('.editor-marker-playhead');
+        const outMarker = waveShell.querySelector('.editor-marker-out');
+
+        trackItem.dom = {
+          track: trackEl,
+          canvas,
+          ctx,
+          overlay: overlayEl,
+          selection: selectionEl,
+          inMarker,
+          playhead: playheadMarker,
+          outMarker,
+        };
+
+        overlayEl.querySelectorAll('.editor-marker-handle').forEach((handle) => {
+          handle.addEventListener('pointerdown', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeContextMenu();
+            const role = handle.dataset.role || 'playhead';
+            dragState = {
+              kind: role,
+              trackKey: trackItem.key,
+              moved: false,
+            };
+            await setActiveTrack(trackItem.key);
+            if(role === 'playhead'){
+              playheadMarker.classList.add('is-dragging');
+            }
+          });
+        });
+
+        waveShell.addEventListener('click', async (event) => {
+          if(Date.now() < clickLockUntil) return;
+          if(event.target.closest('.editor-marker-handle')) return;
+          closeContextMenu();
+          await setActiveTrack(trackItem.key);
+          const nextMs = nearestSnapValue(msFromClientX(trackItem, event.clientX), trackItem.key, 'playhead');
+          playheadMs = nextMs;
+          try { audio.currentTime = playheadMs / 1000; } catch(_) {}
+          syncUi();
+        });
+
+        waveShell.addEventListener('contextmenu', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await setActiveTrack(trackItem.key);
+          openContextMenuForTrack(trackItem, event.clientX, event.clientY);
+        });
+
+        tracksShell.appendChild(trackEl);
+      };
+
+      tracks.forEach(createTrackUi);
+
+      const saveEditorChanges = async (reason) => {
+        if(reason === 'cancel'){
+          editorRestoreTrackDrafts(task, originalTrackDrafts);
+          return true;
         }
-        if(clip.endMs == null || clip.endMs <= 0){
-          clip.endMs = durationMs;
+        editorPersistTrackDrafts(task, tracks);
+        const sourceTrack = tracks.find((trackItem) => trackItem.key === 'source');
+        normalizeTrackClip(sourceTrack);
+        const payload = cloneClipState(sourceTrack.clip);
+        if(task.id){
+          const res = await fetch(`/api/tasks/${task.id}/edit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              clip_start_ms: payload.startMs,
+              clip_end_ms: payload.endMs,
+              clip_enabled: payload.enabled,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if(!res.ok){
+            throw new Error((data && data.detail && data.detail.message) || 'could not save editor changes');
+          }
+          applyClipState(task, {
+            startMs: data.clip_start_ms,
+            endMs: data.clip_end_ms,
+            enabled: data.clip_enabled,
+          });
+        }else{
+          applyClipState(task, payload);
+          syncPendingClipState(task, payload);
+        }
+        saveTasks();
+        updateUI();
+        if(reason === 'save'){
+          showPopup('editor changes saved');
+        }
+        return true;
+      };
+
+      overlay.__cleanupFns = overlay.__cleanupFns || [];
+      const handleDocumentPointerMove = (event) => {
+        if(!dragState) return;
+        const trackItem = tracks.find((entry) => entry.key === dragState.trackKey);
+        if(!trackItem) return;
+        dragState.moved = true;
+        const rawMs = msFromClientX(trackItem, event.clientX);
+        if(dragState.kind === 'playhead'){
+          playheadMs = nearestSnapValue(rawMs, trackItem.key, 'playhead');
+          try { audio.currentTime = playheadMs / 1000; } catch(_) {}
+        }else if(dragState.kind === 'in'){
+          const endValue = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs;
+          trackItem.clip.startMs = Math.min(nearestSnapValue(rawMs, trackItem.key, 'in'), endValue);
+          trackItem.clip.enabled = true;
+        }else if(dragState.kind === 'out'){
+          trackItem.clip.endMs = Math.max(nearestSnapValue(rawMs, trackItem.key, 'out'), trackItem.clip.startMs);
+          trackItem.clip.enabled = true;
+        }
+        syncUi();
+      };
+      const handleDocumentPointerUp = () => {
+        if(!dragState) return;
+        const trackItem = tracks.find((entry) => entry.key === dragState.trackKey);
+        if(trackItem && trackItem.dom){
+          trackItem.dom.playhead.classList.remove('is-dragging');
+        }
+        if(dragState.moved){
+          clickLockUntil = Date.now() + 140;
+        }
+        dragState = null;
+        syncUi();
+      };
+      const handleDocumentPointerDown = (event) => {
+        if(contextMenuEl && !contextMenuEl.contains(event.target)){
+          closeContextMenu();
+        }
+      };
+      document.addEventListener('pointermove', handleDocumentPointerMove);
+      document.addEventListener('pointerup', handleDocumentPointerUp);
+      document.addEventListener('pointerdown', handleDocumentPointerDown);
+      overlay.__cleanupFns.push(() => {
+        document.removeEventListener('pointermove', handleDocumentPointerMove);
+        document.removeEventListener('pointerup', handleDocumentPointerUp);
+        document.removeEventListener('pointerdown', handleDocumentPointerDown);
+        closeContextMenu();
+        try { audio.pause(); } catch(_) {}
+        if(activeObjectUrl){ URL.revokeObjectURL(activeObjectUrl); activeObjectUrl = ''; }
+      });
+
+      overlay.__requestClose = async (reason = 'dismiss') => {
+        if(closingEditor) return;
+        closingEditor = true;
+        const saveText = saveBtn.textContent;
+        if(reason === 'save'){
+          saveBtn.dataset.busy = '1';
+          saveBtn.textContent = 'saving...';
+        }
+        try{
+          await saveEditorChanges(reason);
+          closeOverlay(overlay);
+        }catch(err){
+          showPopup((err && err.message) || 'could not save editor changes');
+          if(reason === 'save'){
+            saveBtn.dataset.busy = '';
+            saveBtn.textContent = saveText || 'save';
+          }
+          closingEditor = false;
+        }
+      };
+
+      audio.addEventListener('loadedmetadata', () => {
+        const trackItem = activeTrack();
+        if(Number.isFinite(audio.duration) && audio.duration > 0){
+          trackItem.durationMs = Math.max(trackItem.durationMs, Math.round(audio.duration * 1000));
+        }
+        normalizeTrackClip(trackItem);
+        if(playheadMs > 0){
+          try { audio.currentTime = Math.min(trackItem.durationMs || 0, playheadMs) / 1000; } catch(_) {}
         }
         syncUi();
       });
       audio.addEventListener('timeupdate', () => {
-        const currentMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        if(clip.enabled && Number.isFinite(Number(clip.endMs)) && currentMs >= Number(clip.endMs)){
-          audio.pause();
-          audio.currentTime = Number(clip.endMs) / 1000;
+        playheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        const trackItem = activeTrack();
+        if(trackItem){
+          const outMs = trackItem.clip.enabled
+            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
+            : trackItem.durationMs;
+          if(outMs > 0 && playheadMs >= outMs){
+            audio.pause();
+            playheadMs = outMs;
+            try { audio.currentTime = outMs / 1000; } catch(_) {}
+          }
         }
         syncUi();
       });
@@ -4143,120 +4753,96 @@
       audio.addEventListener('play', syncUi);
       audio.addEventListener('ended', syncUi);
 
-      startRange.addEventListener('input', () => {
-        clip.startMs = Math.min(Number(startRange.value) || 0, Number(endRange.value) || durationMs || 0);
-        clip.enabled = true;
+      guardClick(buttons.magnet, (event) => {
+        event.preventDefault();
+        snapEnabled = !snapEnabled;
+        editorSetSnapEnabled(snapEnabled);
         syncUi();
-      });
-      endRange.addEventListener('input', () => {
-        clip.endMs = Math.max(Number(endRange.value) || 0, Number(startRange.value) || 0);
-        clip.enabled = true;
-        syncUi();
-      });
-
+      }, 120);
       guardClick(buttons.start, (event) => {
         event.preventDefault();
         audio.pause();
-        audio.currentTime = 0;
+        playheadMs = 0;
+        try { audio.currentTime = 0; } catch(_) {}
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.jumpIn, (event) => {
         event.preventDefault();
-        audio.currentTime = Math.max(0, clip.startMs) / 1000;
+        const trackItem = activeTrack();
+        playheadMs = Math.max(0, trackItem.clip.startMs);
+        try { audio.currentTime = playheadMs / 1000; } catch(_) {}
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.play, async (event) => {
         event.preventDefault();
+        const trackItem = activeTrack();
+        await loadPreviewForTrack(trackItem);
         if(audio.paused){
-          if(clip.enabled && Math.round((Number(audio.currentTime) || 0) * 1000) >= Number(clip.endMs || durationMs)){
-            audio.currentTime = clip.startMs / 1000;
+          const outMs = trackItem.clip.enabled
+            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
+            : trackItem.durationMs;
+          if(outMs > 0 && playheadMs >= outMs){
+            playheadMs = trackItem.clip.startMs;
           }
+          try { audio.currentTime = playheadMs / 1000; } catch(_) {}
           try { await audio.play(); } catch(_) {}
         }else{
           audio.pause();
         }
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.jumpOut, (event) => {
         event.preventDefault();
-        const outMs = Number.isFinite(Number(clip.endMs)) ? Number(clip.endMs) : durationMs;
-        audio.currentTime = Math.max(0, outMs) / 1000;
+        const trackItem = activeTrack();
+        playheadMs = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs;
+        try { audio.currentTime = playheadMs / 1000; } catch(_) {}
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.end, (event) => {
         event.preventDefault();
+        const trackItem = activeTrack();
         audio.pause();
-        audio.currentTime = Math.max(0, durationMs - 50) / 1000;
+        playheadMs = Math.max(0, trackItem.durationMs || 0);
+        try { audio.currentTime = playheadMs / 1000; } catch(_) {}
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.setIn, (event) => {
         event.preventDefault();
-        clip.startMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        clip.enabled = true;
+        const trackItem = activeTrack();
+        trackItem.clip.startMs = nearestSnapValue(playheadMs, trackItem.key, 'in');
+        trackItem.clip.enabled = true;
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.setOut, (event) => {
         event.preventDefault();
-        clip.endMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        clip.enabled = true;
+        const trackItem = activeTrack();
+        trackItem.clip.endMs = nearestSnapValue(playheadMs, trackItem.key, 'out');
+        trackItem.clip.enabled = true;
         syncUi();
-      });
+      }, 120);
       guardClick(buttons.clear, (event) => {
         event.preventDefault();
-        clip.startMs = 0;
-        clip.endMs = durationMs || null;
-        clip.enabled = false;
+        const trackItem = activeTrack();
+        trackItem.clip.startMs = 0;
+        trackItem.clip.endMs = trackItem.durationMs || null;
+        trackItem.clip.enabled = false;
         syncUi();
-      });
-      if(sourceSelect){
-        sourceSelect.addEventListener('change', () => {
-          audio.pause();
-          loadPreview();
-        });
-      }
-      guardClick(cancelBtn, (event) => {
+      }, 120);
+
+      guardClick(cancelBtn, async (event) => {
         event.preventDefault();
-        closeOverlay(overlay);
+        await requestOverlayClose(overlay, 'cancel');
       });
       guardClick(saveBtn, async (event) => {
         event.preventDefault();
-        clampClip();
         if(saveBtn.dataset.busy === '1') return;
-        saveBtn.dataset.busy = '1';
-        saveBtn.textContent = 'saving...';
-        const payload = {
-          clip_start_ms: clip.startMs,
-          clip_end_ms: clip.endMs,
-          clip_enabled: clip.enabled,
-        };
-        try{
-          if(task.id){
-            const res = await fetch(`/api/tasks/${task.id}/edit`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            });
-            const data = await res.json().catch(() => ({}));
-            if(!res.ok){
-              throw new Error((data && data.detail && data.detail.message) || 'could not save editor changes');
-            }
-            applyClipState(task, data);
-          }else{
-            applyClipState(task, payload);
-            syncPendingClipState(task, payload);
-          }
-          saveTasks();
-          updateUI();
-          closeOverlay(overlay);
-          showPopup('editor changes saved');
-        }catch(err){
-          showPopup((err && err.message) || 'could not save editor changes');
-          saveBtn.dataset.busy = '';
-          saveBtn.textContent = 'save';
-        }
+        await requestOverlayClose(overlay, 'save');
       });
 
-      await loadPreview();
+      await Promise.all(tracks.map((trackItem) => loadWaveformForTrack(trackItem)));
+      await setActiveTrack('source', { preservePlayhead: false });
+      playheadMs = sourceOriginalClip.startMs || 0;
+      syncUi();
     }
 
     function formatEta(seconds){
@@ -5007,9 +5593,10 @@
       previousFilesRetentionButton = document.getElementById('previous-files-retention-button');
       previousFilesRetentionMenu = document.getElementById('previous-files-retention-menu');
       previousFilesRetentionLabel = document.getElementById('previous-files-retention-label');
-      previousFilesLimitInput = document.getElementById('previous-files-limit-gb');
-      previousFilesWarnInput = document.getElementById('previous-files-warn-gb');
-      outputFormatButton = document.getElementById('output-format-button');
+	      previousFilesLimitInput = document.getElementById('previous-files-limit-gb');
+	      previousFilesWarnInput = document.getElementById('previous-files-warn-gb');
+	      editorSnapDistanceInput = document.getElementById('editor-snap-distance-ms');
+	      outputFormatButton = document.getElementById('output-format-button');
       outputFormatMenu = document.getElementById('output-format-menu');
       outputFormatLabel = document.getElementById('output-format-label');
       multiStemExportButton = document.getElementById('multi-stem-export-button');
@@ -5186,11 +5773,21 @@
         applySettingsUI();
         persistSettings({ previous_files_limit_gb: limitGb, previous_files_warn_gb: warnGb }, { showMissingPopup:false });
       };
-      [previousFilesLimitInput, previousFilesWarnInput].forEach((input) => {
-        if(!input) return;
-        input.addEventListener('change', persistPreviousFilesStorageSettings);
-        input.addEventListener('blur', persistPreviousFilesStorageSettings);
-      });
+	      [previousFilesLimitInput, previousFilesWarnInput].forEach((input) => {
+	        if(!input) return;
+	        input.addEventListener('change', persistPreviousFilesStorageSettings);
+	        input.addEventListener('blur', persistPreviousFilesStorageSettings);
+	      });
+	      if(editorSnapDistanceInput){
+	        const persistEditorSnapDistance = () => {
+	          const parsed = Math.max(0, Math.min(2000, Math.round(Number(editorSnapDistanceInput.value) || 0)));
+	          settingsState = { ...settingsState, editor_snap_distance_ms: parsed };
+	          applySettingsUI();
+	          persistSettings({ editor_snap_distance_ms: parsed }, { showMissingPopup:false });
+	        };
+	        editorSnapDistanceInput.addEventListener('change', persistEditorSnapDistance);
+	        editorSnapDistanceInput.addEventListener('blur', persistEditorSnapDistance);
+	      }
       document.addEventListener('click', (event) => {
         if(outputFormatButton && outputFormatMenu){
           if(!(outputFormatButton.contains(event.target) || outputFormatMenu.contains(event.target))){
@@ -5718,6 +6315,14 @@
       copyResetTimers.set(btn, timer);
     }
 
+    function requestOverlayClose(overlay, reason = 'dismiss'){
+      if(!overlay) return;
+      if(typeof overlay.__requestClose === 'function'){
+        return overlay.__requestClose(reason);
+      }
+      closeOverlay(overlay);
+    }
+
     function createOverlayCard(titleText){
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 z-[80] grid place-items-center px-4';
@@ -5733,7 +6338,7 @@
       document.body.appendChild(overlay);
       overlay.addEventListener('click', (e) => {
         if(e.target === overlay || e.target === bg){
-          closeOverlay(overlay);
+          requestOverlayClose(overlay, 'dismiss');
           if(activeReleaseOverlay === overlay){
             dismissReleaseUntilNextOpen(activeReleaseVersion);
             activeReleaseOverlay = null;
@@ -5748,7 +6353,7 @@
       });
       overlay.addEventListener('keydown', (e) => {
         if(e.key === 'Escape'){
-          closeOverlay(overlay);
+          requestOverlayClose(overlay, 'dismiss');
           if(activeReleaseOverlay === overlay){
             dismissReleaseUntilNextOpen(activeReleaseVersion);
             activeReleaseOverlay = null;
@@ -8865,8 +9470,12 @@
           </button>
           <div id="nerd-stuff-wrap" class="nerd-stuff-wrap">
             <div class="nerd-stuff-panel">
-              <div class="space-y-2">
-                <div id="lan-access-heading" class="text-sm opacity-80">lan access - connect from other devices on the local network</div>
+	              <div class="space-y-2">
+	                <div class="space-y-2">
+	                  <label for="editor-snap-distance-ms" class="text-sm opacity-80 block">editor snap distance (ms)</label>
+	                  <input id="editor-snap-distance-ms" type="number" min="0" max="2000" step="10" class="w-full rounded-xl border border-white/10 bg-[#132129] px-3 py-2 text-sm text-[var(--txt-main)] focus:outline-none focus:ring-2 focus:ring-white/20" />
+	                </div>
+	                <div id="lan-access-heading" class="text-sm opacity-80">lan access - connect from other devices on the local network</div>
                 <div class="space-y-2">
                   <div class="settings-row">
                     <button id="lan-copy-local-btn" class="copy-button" type="button" title="copy .local address" aria-label="copy .local address"></button>
