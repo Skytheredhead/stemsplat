@@ -1367,27 +1367,27 @@
     }
     .editor-marker {
       position: absolute;
-      top: -3px;
-      bottom: -2px;
+      top: 0;
+      bottom: 0;
       width: 0;
-      transform: translateX(-1px);
+      transform: translateX(-50%);
       pointer-events: none;
     }
     .editor-marker-line {
       position: absolute;
-      top: 0;
+      top: -12px;
       bottom: 0;
-      left: 0;
+      left: -1px;
       width: 2px;
       background: rgba(255,255,255,.96);
-      box-shadow: 0 0 0 1px rgba(0,0,0,.18);
+      box-shadow: none;
     }
     .editor-marker-cap {
       position: absolute;
-      top: -16px;
-      left: 0;
+      top: -12px;
+      left: 50%;
       background: rgba(255,255,255,.98);
-      filter: drop-shadow(0 4px 10px rgba(0,0,0,.28));
+      filter: none;
     }
     .editor-marker-handle {
       position: absolute;
@@ -1403,39 +1403,41 @@
       cursor: grabbing;
     }
     .editor-marker-playhead .editor-marker-line {
-      width: 2px;
-      box-shadow: 0 0 0 1px rgba(0,0,0,.18), 0 0 18px rgba(255,255,255,.12);
+      top: -14px;
+      left: -1.5px;
+      width: 3px;
+      box-shadow: none;
     }
     .editor-marker-playhead .editor-marker-cap {
       width: 18px;
-      height: 18px;
-      transform: translateX(-8px);
-      clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%);
-      border-radius: 4px 4px 6px 6px;
+      height: 14px;
+      transform: translateX(-50%);
+      clip-path: polygon(0 0, 100% 0, 100% 58%, 58% 58%, 50% 100%, 42% 58%, 0 58%);
+      border-radius: 4px 4px 0 0;
     }
     .editor-marker-in .editor-marker-cap,
     .editor-marker-out .editor-marker-cap {
       width: 18px;
       height: 14px;
-      border-radius: 3px 3px 4px 4px;
+      border-radius: 3px 3px 0 0;
     }
     .editor-marker-in .editor-marker-cap {
-      transform: translateX(1px);
-      clip-path: polygon(0 0, 100% 0, 100% 100%, 38% 100%, 0 58%);
+      transform: translateX(-50%);
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 56% 100%, 0 58%);
     }
     .editor-marker-out .editor-marker-cap {
-      transform: translateX(-17px);
-      clip-path: polygon(0 0, 100% 0, 100% 58%, 62% 100%, 0 100%);
+      transform: translateX(-50%);
+      clip-path: polygon(0 0, 100% 0, 100% 58%, 44% 100%, 0 100%);
     }
     .editor-track:not(.is-active) .editor-marker-cap {
       transform: scale(0.82);
       top: -12px;
     }
     .editor-track:not(.is-active) .editor-marker-in .editor-marker-cap {
-      transform: translateX(1px) scale(0.82);
+      transform: translateX(-50%) scale(0.82);
     }
     .editor-track:not(.is-active) .editor-marker-out .editor-marker-cap {
-      transform: translateX(-17px) scale(0.82);
+      transform: translateX(-50%) scale(0.82);
     }
     .editor-track:not(.is-active) .editor-marker-handle {
       inset: -12px -8px -6px -8px;
@@ -1536,6 +1538,7 @@
       --editor-button-active-shadow: 0 12px 26px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.12);
       --editor-button-text: rgba(245,251,255,.94);
       --editor-kicker: rgba(231,236,239,.68);
+      --editor-track-inline-pad: 8px;
       --editor-wave-radius: 16px;
     }
     .editor-panel-surface {
@@ -1707,9 +1710,17 @@
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
     }
+    .editor-card:focus,
+    .editor-card:focus-visible,
+    .editor-shell:focus,
+    .editor-shell:focus-visible,
+    .overlay-root:focus,
+    .overlay-root:focus-visible {
+      outline: none !important;
+    }
     .editor-shell {
       width: 100%;
-      min-height: min(620px, calc(100vh - 56px));
+      min-height: 0;
       display: flex;
       flex-direction: column;
       gap: 0;
@@ -1717,7 +1728,7 @@
     .editor-workspace {
       display: flex;
       flex-direction: column;
-      min-height: inherit;
+      min-height: 0;
       background:
         linear-gradient(180deg, rgba(15, 25, 31, 0.92), rgba(8, 14, 19, 0.96)),
         linear-gradient(90deg, rgba(142,216,255,.03), rgba(0,0,0,0));
@@ -1830,10 +1841,10 @@
     .editor-workspace-main {
       flex: 1;
       min-height: 0;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 188px;
+      display: flex;
     }
     .editor-workspace-center {
+      flex: 1;
       min-width: 0;
       min-height: 0;
       display: flex;
@@ -1843,7 +1854,7 @@
     .editor-transportbar {
       display: flex;
       align-items: center;
-      justify-content: flex-start;
+      justify-content: center;
       flex-wrap: wrap;
       gap: 8px;
       padding: 7px 10px;
@@ -1874,8 +1885,31 @@
       margin-left: auto;
       gap: 10px;
     }
+    .editor-statusbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 16px;
+      padding: 10px 14px 12px;
+      border-top: 1px solid rgba(255,255,255,.06);
+      background: rgba(9, 15, 19, 0.88);
+    }
+    .editor-statusbar .editor-transport-readouts {
+      margin-left: 0;
+      gap: 12px;
+      order: 2;
+      flex: 0 0 auto;
+    }
+    .editor-statusbar .editor-meta-grid {
+      width: auto !important;
+      grid-template-columns: repeat(3, minmax(92px, auto));
+      gap: 12px;
+    }
+    .editor-statusbar .editor-meta-chip {
+      padding: 0;
+    }
     .editor-timeline-shell {
-      flex: 1;
+      flex: 0 0 auto;
       min-height: 0;
       display: flex;
       flex-direction: column;
@@ -1902,10 +1936,12 @@
       color: rgba(182,202,212,.56);
     }
     .editor-ruler-scroll {
-      overflow-x: auto;
+      overflow: hidden;
       overflow-y: hidden;
       scrollbar-width: none;
       -ms-overflow-style: none;
+      position: relative;
+      padding: 0 var(--editor-track-inline-pad, 8px);
     }
     .editor-ruler-scroll::-webkit-scrollbar {
       display: none;
@@ -1914,16 +1950,19 @@
       position: relative;
       min-width: 100%;
       height: 32px;
+      will-change: transform;
     }
     .editor-ruler-canvas {
-      width: 100%;
+      width: auto;
       height: 32px;
       display: block;
+      position: absolute;
+      inset: 0 auto 0 0;
     }
     .editor-lane-host {
-      flex: 1;
+      flex: 0 0 auto;
       min-height: 0;
-      overflow-y: auto;
+      overflow-y: hidden;
       overflow-x: hidden;
       scrollbar-width: thin;
     }
@@ -1957,7 +1996,7 @@
       padding: 0;
     }
     .editor-track--source {
-      flex: 1;
+      flex: 0 0 auto;
       min-height: 0;
     }
     .editor-track--placeholder .editor-track-gutter,
@@ -2005,7 +2044,7 @@
     .editor-track-body,
     .editor-marker-body {
       min-width: 0;
-      padding: 3px 8px;
+      padding: 3px var(--editor-track-inline-pad, 8px);
       display: flex;
       align-items: center;
     }
@@ -2042,8 +2081,8 @@
       will-change: auto;
     }
     .editor-track--source .editor-wave-shell {
-      min-height: 264px;
-      height: 100%;
+      min-height: var(--editor-source-wave-height, 528px);
+      height: var(--editor-source-wave-height, 528px);
       overflow: hidden;
     }
     .editor-wave-shell--placeholder {
@@ -2075,18 +2114,26 @@
       height: 42px;
     }
     .editor-track--source .editor-wave-canvas {
-      height: 100%;
-      min-height: 264px;
+      height: var(--editor-source-wave-height, 528px);
+      min-height: var(--editor-source-wave-height, 528px);
     }
     .editor-track--source.is-active .editor-wave-canvas {
-      height: 100%;
-      min-height: 280px;
+      height: var(--editor-source-wave-height, 528px);
+      min-height: var(--editor-source-wave-height, 528px);
     }
     .editor-wave-overlay {
       position: absolute;
       inset: 0;
       pointer-events: auto;
       z-index: 1;
+    }
+    /* Keep the source-lane overlay aligned with the full waveform height. */
+    .editor-track.editor-track--source .editor-wave-overlay {
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      height: auto;
     }
     .editor-wave-dim {
       position: absolute;
@@ -2115,23 +2162,29 @@
       box-shadow: none;
     }
     .editor-marker {
-      top: -1px;
-      bottom: -1px;
+      top: 0;
+      bottom: 0;
+      z-index: 4;
     }
     .editor-marker-line {
+      top: -12px;
+      bottom: 0;
+      left: -1px;
       width: 1px;
       background: rgba(240,248,252,.88);
       box-shadow: none;
     }
     .editor-marker-cap {
-      top: -10px;
+      top: -12px;
       filter: none;
       background: rgba(240,248,252,.94);
     }
     .editor-marker-playhead .editor-marker-line {
-      width: 2px;
+      top: -14px;
+      left: -1.5px;
+      width: 3px;
       background: rgba(134, 236, 255, 1);
-      box-shadow: 0 0 0 1px rgba(0,0,0,.32), 0 0 12px rgba(134,236,255,.22);
+      box-shadow: none;
     }
     .editor-marker-playhead .editor-marker-cap {
       background: rgba(134, 236, 255, 1);
@@ -5529,8 +5582,36 @@
       return `${String(taskId || '')}::${String(output || 'source')}::${Math.max(0, Math.round(Number(points) || 0))}`;
     }
 
+    function cachedEditorWaveformPayload(taskId, output = '', points = 1280){
+      return editorWaveformPayloadCache.get(editorWaveformCacheKey(taskId, output, points)) || null;
+    }
+
+    const EDITOR_WAVEFORM_POINT_LEVELS = [
+      640, 704, 768, 832, 896, 960, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048,
+      2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096, 4608, 5120, 5632, 6144, 6656, 7168,
+      7680, 8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384, 18432, 20480,
+      22528, 24576, 26624, 28672, 30720, 32768, 36864, 40960, 45056, 49152, 53248, 57344,
+      61440, 65536, 73728, 81920, 90112, 98304, 106496, 114688, 122880, 131072,
+    ];
+
+    function bestCachedEditorWaveformPayload(taskId, output = '', targetPoints = 1280){
+      const desired = Math.max(640, Math.min(131072, Math.round(Number(targetPoints) || 1280)));
+      const preferred = EDITOR_WAVEFORM_POINT_LEVELS
+        .filter((value) => value <= desired)
+        .sort((a, b) => b - a);
+      for(const points of preferred){
+        const payload = cachedEditorWaveformPayload(taskId, output, points);
+        if(payload) return payload;
+      }
+      for(const points of EDITOR_WAVEFORM_POINT_LEVELS){
+        const payload = cachedEditorWaveformPayload(taskId, output, points);
+        if(payload) return payload;
+      }
+      return null;
+    }
+
     async function ensureEditorWaveformPayload(taskId, output = '', points = 1280){
-      const normalizedPoints = Math.max(640, Math.min(16384, Math.round(Number(points) || 1280)));
+      const normalizedPoints = Math.max(640, Math.min(131072, Math.round(Number(points) || 1280)));
       const cacheKey = editorWaveformCacheKey(taskId, output, normalizedPoints);
       if(editorWaveformPayloadCache.has(cacheKey)){
         return editorWaveformPayloadCache.get(cacheKey);
@@ -5560,11 +5641,15 @@
 
     function primeTaskEditorAssets(task){
       if(!task || !task.id) return;
-      void ensureEditorWaveformPayload(task.id, '', 1280);
+      [640, 768, 896, 1024, 1152, 1280, 1536, 1792, 2048].forEach((points) => {
+        void ensureEditorWaveformPayload(task.id, '', points);
+      });
       if(String(task.stage || '').toLowerCase() === 'done' && Array.isArray(task.outputs)){
         task.outputs.forEach((output) => {
           if(!output) return;
-          void ensureEditorWaveformPayload(task.id, String(output), 1280);
+          [640, 768, 896, 1024, 1280, 1536].forEach((points) => {
+            void ensureEditorWaveformPayload(task.id, String(output), points);
+          });
         });
       }
     }
@@ -5596,7 +5681,7 @@
       card.classList.add('editor-card', 'editor-nle-card');
       card.style.maxWidth = '1560px';
       card.style.width = 'min(1560px, calc(100vw - 48px))';
-      card.style.minHeight = 'min(760px, calc(100vh - 56px))';
+      card.style.minHeight = '0';
       card.style.padding = '0';
       card.style.borderRadius = '16px';
 
@@ -6024,12 +6109,12 @@
       currentVariant = editorVariants[0];
       const HISTORY_LIMIT = 20;
       const WAVE_ZOOM_MIN = 1;
-      const WAVE_ZOOM_MAX = 24;
+      const WAVE_ZOOM_MAX = 128;
       const TIMELINE_BASE_WIDTH = 1600;
       const RULER_HEIGHT = 32;
-      const EDITOR_WAVEFORM_POINTS_MIN = 1280;
-      const EDITOR_WAVEFORM_POINTS_MAX = 16384;
-      const EDITOR_WAVEFORM_POINT_STEPS = [1280, 2560, 4096, 6144, 8192, 12288, 16384];
+      const EDITOR_WAVEFORM_POINTS_MIN = 640;
+      const EDITOR_WAVEFORM_POINTS_MAX = 131072;
+      const EDITOR_WAVEFORM_POINT_STEPS = EDITOR_WAVEFORM_POINT_LEVELS.slice();
 
       const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
       const timelineRenderWidth = (zoomValue = waveZoom) => {
@@ -6037,7 +6122,23 @@
         return Math.max(TIMELINE_BASE_WIDTH, Math.round(TIMELINE_BASE_WIDTH * numericZoom));
       };
       const waveformPointTarget = (zoomValue = waveZoom) => {
-        const widthTarget = Math.round(timelineRenderWidth(zoomValue) * 1.35);
+        const numericZoom = Number.isFinite(Number(zoomValue)) ? Number(zoomValue) : 1;
+        if(numericZoom <= 1.02) return 640;
+        if(numericZoom <= 1.08) return 704;
+        if(numericZoom <= 1.16) return 768;
+        if(numericZoom <= 1.24) return 832;
+        if(numericZoom <= 1.34) return 896;
+        if(numericZoom <= 1.46) return 960;
+        if(numericZoom <= 1.6) return 1024;
+        if(numericZoom <= 1.76) return 1152;
+        if(numericZoom <= 1.96) return 1280;
+        if(numericZoom <= 2.18) return 1408;
+        if(numericZoom <= 2.42) return 1536;
+        if(numericZoom <= 2.7) return 1664;
+        if(numericZoom <= 3.0) return 1792;
+        if(numericZoom <= 3.35) return 1920;
+        if(numericZoom <= 3.7) return 2048;
+        const widthTarget = Math.round(timelineRenderWidth(numericZoom) * 0.76);
         return EDITOR_WAVEFORM_POINT_STEPS.find((value) => value >= widthTarget) || EDITOR_WAVEFORM_POINTS_MAX;
       };
       const resizeHiDPICanvas = (canvas, cssWidth, cssHeight) => {
@@ -6221,7 +6322,7 @@
       };
 
       const meta = document.createElement('div');
-      meta.className = 'editor-meta-grid w-full';
+      meta.className = 'editor-meta-grid editor-meta-grid--readout w-full';
       meta.style.minWidth = '0';
       meta.innerHTML = `
         <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">in</div><div class="text-sm font-mono tabular-nums" data-role="in-label">0:00.00</div></div>
@@ -6358,6 +6459,36 @@
         clip: cloneClipState(trackItem.clip),
       }));
 
+      const applyTrackWaveformPayload = (trackItem, payload, { preserveClip = false } = {}) => {
+        if(!trackItem || !payload || typeof payload !== 'object') return false;
+        const nextPointCount = Math.max(
+          Array.isArray(payload.points) ? payload.points.length : 0,
+          Array.isArray(payload.mins) ? payload.mins.length : 0,
+          Array.isArray(payload.maxs) ? payload.maxs.length : 0,
+          Math.round(Number(payload.point_count) || 0),
+        );
+        const currentPointCount = Math.max(0, Number(trackItem.pointCount) || 0);
+        const durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
+        const changed = (
+          nextPointCount !== currentPointCount ||
+          durationMs !== Math.max(0, Math.round(Number(trackItem.durationMs) || 0))
+        );
+        trackItem.points = Array.isArray(payload.points) ? payload.points : [];
+        trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
+        trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
+        trackItem.pointCount = nextPointCount;
+        trackItem.durationMs = durationMs;
+        if(!preserveClip && trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){
+          trackItem.clip = {
+            startMs: Math.max(0, Math.round(Number(payload.clip_start_ms) || 0)),
+            endMs: Number.isFinite(Number(payload.clip_end_ms)) ? Math.round(Number(payload.clip_end_ms)) : null,
+            enabled: !!payload.clip_enabled,
+          };
+        }
+        trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
+        return changed;
+      };
+
       const snapshotEditorState = () => ({
         clips: snapshotClips(),
         markers: markerState.items.map((marker) => ({ ...marker })),
@@ -6454,16 +6585,34 @@
         }
       };
 
+      const applyRulerViewportOffset = () => {
+        if(!layoutRefs || !layoutRefs.rulerScale) return;
+        const scrollLeft = Math.max(0, Math.round(Number(layoutRefs.timelineScrollLeft) || 0));
+        layoutRefs.rulerScale.style.transform = `translate3d(${-scrollLeft}px, 0, 0)`;
+      };
+
+      const scheduleRulerRender = () => {
+        if(!layoutRefs || layoutRefs.rulerRenderScheduled) return;
+        layoutRefs.rulerRenderScheduled = true;
+        requestAnimationFrame(() => {
+          if(layoutRefs){
+            layoutRefs.rulerRenderScheduled = false;
+          }
+          drawRuler();
+        });
+      };
+
       const syncTimelineScroll = (scrollLeft, source = null) => {
         if(layoutRefs.syncingScroll) return;
         layoutRefs.syncingScroll = true;
         const nextScrollLeft = Math.max(0, Math.round(Number(scrollLeft) || 0));
-        if(layoutRefs.rulerWrap && layoutRefs.rulerWrap !== source){
-          layoutRefs.rulerWrap.scrollLeft = nextScrollLeft;
-        }
+        layoutRefs.timelineScrollLeft = nextScrollLeft;
+        applyRulerViewportOffset();
+        scheduleRulerRender();
         timelineTracks.forEach((trackItem) => {
           if(trackItem.dom && trackItem.dom.zoomWrap && trackItem.dom.zoomWrap !== source){
             trackItem.dom.zoomWrap.scrollLeft = nextScrollLeft;
+            scheduleViewportRender(trackItem);
           }
         });
         layoutRefs.syncingScroll = false;
@@ -6473,43 +6622,66 @@
         if(!layoutRefs.rulerCanvas) return;
         const durationMs = Math.max(1000, ...tracks.map((trackItem) => Math.max(0, Number(trackItem.durationMs) || 0)));
         const canvas = layoutRefs.rulerCanvas;
-        const width = timelineRenderWidth();
+        const renderWidth = timelineRenderWidth();
+        const viewportWidth = Math.max(1, Math.round(layoutRefs.rulerWrap && layoutRefs.rulerWrap.clientWidth ? layoutRefs.rulerWrap.clientWidth : renderWidth));
+        const scrollLeft = Math.max(0, Math.round(Number(layoutRefs.timelineScrollLeft) || 0));
         const height = RULER_HEIGHT;
         if(layoutRefs.rulerScale){
-          layoutRefs.rulerScale.style.width = `${width}px`;
+          layoutRefs.rulerScale.style.width = `${renderWidth}px`;
         }
         if(layoutRefs.markerScale){
-          layoutRefs.markerScale.style.width = `${width}px`;
+          layoutRefs.markerScale.style.width = `${renderWidth}px`;
         }
-        const drawKey = `${durationMs}:${width}`;
+        applyRulerViewportOffset();
+        const overscanPx = Math.min(Math.max(180, Math.round(viewportWidth * 0.4)), 880);
+        const bufferWidth = Math.min(renderWidth, viewportWidth + (overscanPx * 2));
+        const maxStart = Math.max(0, renderWidth - bufferWidth);
+        const currentStart = Math.max(0, Math.round(Number(layoutRefs.rulerRenderedStart) || 0));
+        const currentEnd = Math.max(currentStart, Math.round(Number(layoutRefs.rulerRenderedEnd) || 0));
+        const withinRenderedWindow = scrollLeft >= currentStart && (scrollLeft + viewportWidth) <= currentEnd;
+        const safeLead = overscanPx * 0.45;
+        const safeTrail = overscanPx * 0.45;
+        const needsRebuffer = !withinRenderedWindow || scrollLeft < (currentStart + safeLead) || (scrollLeft + viewportWidth) > (currentEnd - safeTrail);
+        const desiredStart = Math.max(0, Math.min(maxStart, Math.round(scrollLeft - ((bufferWidth - viewportWidth) / 2))));
+        const renderStart = needsRebuffer ? desiredStart : currentStart;
+        const renderEnd = Math.min(renderWidth, renderStart + bufferWidth);
+        const canvasWidth = Math.max(1, renderEnd - renderStart);
+        const drawKey = `${durationMs}:${renderWidth}:${viewportWidth}:${renderStart}:${renderEnd}`;
+        canvas.style.left = `${renderStart}px`;
         if(layoutRefs.rulerDrawKey === drawKey) return;
         layoutRefs.rulerDrawKey = drawKey;
-        const ctx = resizeHiDPICanvas(canvas, width, height);
+        layoutRefs.rulerRenderedStart = renderStart;
+        layoutRefs.rulerRenderedEnd = renderEnd;
+        const ctx = resizeHiDPICanvas(canvas, canvasWidth, height);
         if(!ctx) return;
-        ctx.clearRect(0, 0, width, height);
+        ctx.clearRect(0, 0, canvasWidth, height);
         ctx.fillStyle = 'rgba(11, 18, 23, 0.96)';
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(0, 0, canvasWidth, height);
         ctx.strokeStyle = 'rgba(255,255,255,.11)';
         ctx.beginPath();
         ctx.moveTo(0, height - 0.5);
-        ctx.lineTo(width, height - 0.5);
+        ctx.lineTo(canvasWidth, height - 0.5);
         ctx.stroke();
         const candidates = [250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
-        const majorMs = candidates.find((value) => ((value / durationMs) * width) >= 96) || candidates[candidates.length - 1];
+        const pixelsPerMs = renderWidth / Math.max(1, durationMs);
+        const majorMs = candidates.find((value) => (value * pixelsPerMs) >= 96) || candidates[candidates.length - 1];
         const minorMs = Math.max(100, Math.round(majorMs / 5));
         ctx.font = '11px "Nunito Sans", sans-serif';
         ctx.textBaseline = 'top';
-        for(let ms = 0; ms <= durationMs; ms += minorMs){
-          const x = (ms / durationMs) * width;
+        const startMs = Math.max(0, Math.floor((renderStart / Math.max(1, renderWidth)) * durationMs));
+        const endMs = Math.min(durationMs, Math.ceil((renderEnd / Math.max(1, renderWidth)) * durationMs));
+        const firstMinorMs = Math.max(0, Math.floor(startMs / minorMs) * minorMs);
+        for(let ms = firstMinorMs; ms <= endMs + minorMs; ms += minorMs){
+          const x = ((ms / durationMs) * renderWidth) - renderStart;
           const isMajor = ms % majorMs === 0;
           ctx.strokeStyle = isMajor ? 'rgba(236,247,252,.38)' : 'rgba(255,255,255,.05)';
           ctx.beginPath();
           ctx.moveTo(Math.round(x) + 0.5, height - (isMajor ? 20 : 9));
           ctx.lineTo(Math.round(x) + 0.5, height);
           ctx.stroke();
-          if(isMajor){
+          if(isMajor && x >= -52 && x <= canvasWidth){
             ctx.fillStyle = 'rgba(228,241,247,.9)';
-            ctx.fillText(editorRulerLabel(ms), Math.min(width - 52, x + 6), 4);
+            ctx.fillText(editorRulerLabel(ms), Math.min(canvasWidth - 52, x + 6), 4);
           }
         }
       };
@@ -6587,7 +6759,7 @@
         ]);
         const transportReadouts = makeElement('div', 'editor-transport-readouts');
         transportReadouts.append(transportPlayhead, transportSelection, transportZoom);
-        transport.append(transportGroup, zoomGroup, transportReadouts);
+        transport.append(transportGroup, zoomGroup);
 
         const timelineShell = makeElement('div', 'editor-timeline-shell');
         const ruler = makeElement('div', 'editor-ruler');
@@ -6608,33 +6780,26 @@
         const tracksHost = makeElement('div', 'editor-timeline-tracks');
         laneHost.append(tracksHost);
         timelineShell.append(ruler, laneHost);
-        center.append(transport, timelineShell);
+        const statusbar = makeElement('div', 'editor-statusbar');
+        statusbar.append(meta);
+        center.append(transport, timelineShell, statusbar);
 
-        const inspector = makeElement('aside', 'editor-inspector');
-        const inspectorHead = makeElement('div', 'editor-inspector-head');
-        inspectorHead.innerHTML = `<span>trim readout</span><span class="editor-inspector-head-meta">${songDisplayTitle(task.name || 'untitled')}</span>`;
-        const inspectorSummary = makeElement('div', 'editor-inspector-summary');
-        inspectorSummary.appendChild(meta);
-        inspector.append(inspectorHead, inspectorSummary);
-
-        main.append(center, inspector);
+        main.append(center);
         root.append(topbar, main);
 
-        const onSharedScroll = (event) => {
-          syncTimelineScroll(event.currentTarget.scrollLeft, event.currentTarget);
-        };
-        rulerWrap.addEventListener('scroll', onSharedScroll);
         rulerWrap.addEventListener('wheel', (event) => {
           if(!event.altKey) return;
           event.preventDefault();
           const step = Math.exp(-event.deltaY * 0.0025);
-          updateWaveZoom(waveZoom * step, { anchorClientX: event.clientX, sourceWrap: event.currentTarget });
+          const sourceWrap = (timelineTracks[0] && timelineTracks[0].dom && timelineTracks[0].dom.zoomWrap) ? timelineTracks[0].dom.zoomWrap : event.currentTarget;
+          updateWaveZoom(waveZoom * step, { anchorClientX: event.clientX, sourceWrap });
         }, { passive: false });
 
         return {
           root,
           tracksHost,
           inspectorTracks: null,
+          statusbar,
           rulerCanvas,
           rulerPlayhead,
           rulerWrap,
@@ -6643,6 +6808,7 @@
           transportPlayhead,
           transportSelection,
           transportZoom,
+          timelineScrollLeft: 0,
           syncingScroll: false,
         };
       };
@@ -6705,24 +6871,40 @@
         if(!trackItem || !trackItem.dom || !trackItem.dom.ctx) return;
         const { canvas, zoomWrap } = trackItem.dom;
         if(!zoomWrap) return;
-        const cssHeight = Math.max(34, Math.round(canvas.getBoundingClientRect().height || (trackItem.key === 'source' ? 194 : 34)));
-        const width = Math.max(1, Math.round(zoomWrap.clientWidth || 0));
+        const shellHeight = Math.round(trackItem.dom.waveShell && trackItem.dom.waveShell.getBoundingClientRect ? trackItem.dom.waveShell.getBoundingClientRect().height : 0);
+        const cssHeight = Math.max(34, Math.round(shellHeight || canvas.getBoundingClientRect().height || (trackItem.key === 'source' ? 528 : 34)));
+        const viewportWidth = Math.max(1, Math.round(zoomWrap.clientWidth || 0));
         const height = cssHeight;
         const renderWidth = timelineRenderWidth();
         const scrollLeft = Math.max(0, Math.round(zoomWrap.scrollLeft || 0));
-        canvas.style.transform = `translateX(${scrollLeft}px)`;
-        const drawKey = `${width}:${height}:${scrollLeft}:${renderWidth}:${trackItem.key === activeTrackKey ? 1 : 0}:${trackItem.waveformRevision || 0}`;
+        const overscanPx = Math.min(Math.max(180, Math.round(viewportWidth * 0.35)), 720);
+        const bufferWidth = Math.min(renderWidth, viewportWidth + (overscanPx * 2));
+        const maxStart = Math.max(0, renderWidth - bufferWidth);
+        const currentStart = Math.max(0, Math.round(Number(trackItem.dom.renderedStart) || 0));
+        const currentEnd = Math.max(currentStart, Math.round(Number(trackItem.dom.renderedEnd) || 0));
+        const withinRenderedWindow = scrollLeft >= currentStart && (scrollLeft + viewportWidth) <= currentEnd;
+        const safeLead = overscanPx * 0.45;
+        const safeTrail = overscanPx * 0.45;
+        const active = trackItem.key === activeTrackKey;
+        const needsRebuffer = !withinRenderedWindow || scrollLeft < (currentStart + safeLead) || (scrollLeft + viewportWidth) > (currentEnd - safeTrail);
+        const desiredStart = Math.max(0, Math.min(maxStart, Math.round(scrollLeft - ((bufferWidth - viewportWidth) / 2))));
+        const renderStart = needsRebuffer ? desiredStart : currentStart;
+        const renderEnd = Math.min(renderWidth, renderStart + bufferWidth);
+        const canvasWidth = Math.max(1, renderEnd - renderStart);
+        const drawKey = `${viewportWidth}:${canvasWidth}:${height}:${renderStart}:${renderEnd}:${renderWidth}:${active ? 1 : 0}:${trackItem.waveformRevision || 0}`;
+        canvas.style.left = `${renderStart}px`;
         if(trackItem.dom.waveformDrawKey === drawKey) return;
         trackItem.dom.waveformDrawKey = drawKey;
-        const ctx = resizeHiDPICanvas(canvas, width, height);
+        trackItem.dom.renderedStart = renderStart;
+        trackItem.dom.renderedEnd = renderEnd;
+        const ctx = resizeHiDPICanvas(canvas, canvasWidth, height);
         if(!ctx) return;
-        ctx.clearRect(0, 0, width, height);
+        ctx.clearRect(0, 0, canvasWidth, height);
         ctx.fillStyle = currentVariant ? currentVariant.waveBg : 'rgba(12, 24, 31, 0.96)';
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(0, 0, canvasWidth, height);
         const values = Array.isArray(trackItem.points) && trackItem.points.length ? trackItem.points : new Array(220).fill(0.12);
         const mins = Array.isArray(trackItem.mins) && trackItem.mins.length ? trackItem.mins : values.map((value) => -(Number(value) || 0));
         const maxs = Array.isArray(trackItem.maxs) && trackItem.maxs.length ? trackItem.maxs : values.map((value) => Number(value) || 0);
-        const active = trackItem.key === activeTrackKey;
         const centerY = height / 2;
         const strokeColor = active
           ? (currentVariant ? currentVariant.waveFill : 'rgba(214, 240, 252, 0.96)')
@@ -6731,36 +6913,45 @@
           ? 'rgba(197, 229, 244, 0.96)'
           : 'rgba(173, 209, 224, 0.82)';
         const centerLineColor = active ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.10)';
-        const verticalPadding = trackItem.key === 'source' ? 12 : 8;
+        const verticalPadding = trackItem.key === 'source' ? 4 : 8;
         const amplitudeScale = Math.max(12, (height / 2) - verticalPadding);
         const sampleCount = Math.max(1, Math.min(mins.length, maxs.length));
-        const overscanPx = Math.min(width * 0.2, 320);
-        const renderStart = Math.max(0, scrollLeft - overscanPx);
-        const renderEnd = Math.min(renderWidth, scrollLeft + width + overscanPx);
         const visibleStartIndex = clampNumber(Math.floor((renderStart / Math.max(1, renderWidth)) * sampleCount) - 1, 0, sampleCount - 1);
         const visibleEndIndex = clampNumber(Math.ceil((renderEnd / Math.max(1, renderWidth)) * sampleCount) + 1, visibleStartIndex + 1, sampleCount);
         const visibleCount = Math.max(1, visibleEndIndex - visibleStartIndex);
-        const projectedUpper = new Array(visibleCount);
-        const projectedLower = new Array(visibleCount);
-        for(let offset = 0; offset < visibleCount; offset += 1){
-          const index = visibleStartIndex + offset;
-          const minValue = Math.max(-1, Math.min(0, Number(mins[index] ?? 0)));
-          const maxValue = Math.max(0, Math.min(1, Number(maxs[index] ?? 0)));
-          projectedUpper[offset] = centerY - (maxValue * amplitudeScale);
-          projectedLower[offset] = centerY - (minValue * amplitudeScale);
+        const columnTarget = Math.max(1, Math.min(
+          visibleCount,
+          Math.ceil(canvasWidth * (trackItem.key === 'source' ? 1.15 : 1)),
+          2400,
+        ));
+        const projectedUpper = new Array(columnTarget);
+        const projectedLower = new Array(columnTarget);
+        const projectedX = new Array(columnTarget);
+        for(let column = 0; column < columnTarget; column += 1){
+          const sliceStart = Math.floor((column / columnTarget) * visibleCount);
+          const sliceEnd = Math.max(sliceStart + 1, Math.min(visibleCount, Math.ceil(((column + 1) / columnTarget) * visibleCount)));
+          let minValue = 1;
+          let maxValue = -1;
+          for(let offset = sliceStart; offset < sliceEnd; offset += 1){
+            const index = visibleStartIndex + offset;
+            const sampleMin = Math.max(-1, Math.min(0, Number(mins[index] ?? 0)));
+            const sampleMax = Math.max(0, Math.min(1, Number(maxs[index] ?? 0)));
+            if(sampleMin < minValue) minValue = sampleMin;
+            if(sampleMax > maxValue) maxValue = sampleMax;
+          }
+          if(maxValue < 0) maxValue = 0;
+          if(minValue > 0) minValue = 0;
+          projectedUpper[column] = centerY - (maxValue * amplitudeScale);
+          projectedLower[column] = centerY - (minValue * amplitudeScale);
+          projectedX[column] = columnTarget <= 1 ? 0 : (column / (columnTarget - 1)) * Math.max(1, canvasWidth - 1);
         }
-        const projectX = (offset) => {
-          const index = visibleStartIndex + offset;
-          const pct = sampleCount <= 1 ? 0 : (index / (sampleCount - 1));
-          return (pct * renderWidth) - scrollLeft;
-        };
         ctx.beginPath();
-        ctx.moveTo(projectX(0), projectedUpper[0] ?? centerY);
-        for(let offset = 1; offset < visibleCount; offset += 1){
-          ctx.lineTo(projectX(offset), projectedUpper[offset] ?? centerY);
+        ctx.moveTo(projectedX[0] ?? 0, projectedUpper[0] ?? centerY);
+        for(let offset = 1; offset < columnTarget; offset += 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedUpper[offset] ?? centerY);
         }
-        for(let offset = visibleCount - 1; offset >= 0; offset -= 1){
-          ctx.lineTo(projectX(offset), projectedLower[offset] ?? centerY);
+        for(let offset = columnTarget - 1; offset >= 0; offset -= 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedLower[offset] ?? centerY);
         }
         ctx.closePath();
         ctx.fillStyle = fillColor;
@@ -6769,20 +6960,20 @@
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, centerY + 0.5);
-        ctx.lineTo(width, centerY + 0.5);
+        ctx.lineTo(canvasWidth, centerY + 0.5);
         ctx.strokeStyle = centerLineColor;
         ctx.stroke();
         ctx.strokeStyle = strokeColor;
         ctx.beginPath();
-        ctx.moveTo(projectX(0), projectedUpper[0] ?? centerY);
-        for(let offset = 1; offset < visibleCount; offset += 1){
-          ctx.lineTo(projectX(offset), projectedUpper[offset] ?? centerY);
+        ctx.moveTo(projectedX[0] ?? 0, projectedUpper[0] ?? centerY);
+        for(let offset = 1; offset < columnTarget; offset += 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedUpper[offset] ?? centerY);
         }
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(projectX(0), projectedLower[0] ?? centerY);
-        for(let offset = 1; offset < visibleCount; offset += 1){
-          ctx.lineTo(projectX(offset), projectedLower[offset] ?? centerY);
+        ctx.moveTo(projectedX[0] ?? 0, projectedLower[0] ?? centerY);
+        for(let offset = 1; offset < columnTarget; offset += 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedLower[offset] ?? centerY);
         }
         ctx.stroke();
       };
@@ -6794,7 +6985,7 @@
           if(trackItem.dom){
             trackItem.dom.waveformRenderScheduled = false;
           }
-          drawTrackWaveform(trackItem);
+          syncTrackUi(trackItem);
         });
       };
 
@@ -6854,9 +7045,10 @@
           layoutRefs.transportZoom.textContent = `${waveZoom.toFixed(2)}x`;
         }
         const maxDuration = Math.max(1, ...tracks.map((entry) => Math.max(0, Number(entry.durationMs) || 0)));
-        const playheadPct = `${(Math.max(0, Math.min(maxDuration, playheadMs)) / maxDuration) * 100}%`;
+        const renderWidth = timelineRenderWidth();
+        const playheadX = (Math.max(0, Math.min(maxDuration, playheadMs)) / maxDuration) * renderWidth;
         if(layoutRefs.rulerPlayhead){
-          layoutRefs.rulerPlayhead.style.left = playheadPct;
+          layoutRefs.rulerPlayhead.style.left = `${playheadX}px`;
         }
       };
 
@@ -6871,11 +7063,12 @@
           }
         });
         if(layoutRefs.rulerWrap){
-          layoutRefs.rulerWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
-          if(waveZoom <= 1){
-            layoutRefs.rulerWrap.scrollLeft = 0;
-          }
+          layoutRefs.rulerWrap.style.overflowX = 'hidden';
         }
+        if(waveZoom <= 1){
+          layoutRefs.timelineScrollLeft = 0;
+        }
+        applyRulerViewportOffset();
       };
 
       const updateWaveZoom = (nextZoom, { anchorClientX = null, sourceWrap = null } = {}) => {
@@ -6891,8 +7084,8 @@
           progress = priorWidth > 0 ? (wrap.scrollLeft + offsetX) / priorWidth : 0;
         }
         waveZoom = clampedZoom;
-        syncUi();
         const requestedPointTarget = waveformPointTarget(clampedZoom);
+        syncUi();
         if(task.id){
           timelineTracks.forEach((trackItem) => {
             if((trackItem.pointCount || 0) >= requestedPointTarget) return;
@@ -6903,24 +7096,28 @@
               trackItem.detailFetchTimer = null;
               ensureEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget)
                 .then((payload) => {
-                  if(!payload || !overlay.isConnected) return;
-                  const nextPointCount = Math.max(
-                    Array.isArray(payload.points) ? payload.points.length : 0,
-                    Array.isArray(payload.mins) ? payload.mins.length : 0,
-                    Array.isArray(payload.maxs) ? payload.maxs.length : 0,
-                    Math.round(Number(payload.point_count) || 0),
-                  );
-                  if(nextPointCount <= (trackItem.pointCount || 0)) return;
-                  trackItem.points = Array.isArray(payload.points) ? payload.points : [];
-                  trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
-                  trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
-                  trackItem.pointCount = nextPointCount;
-                  trackItem.durationMs = Math.max(trackItem.durationMs || 0, Math.round(Number(payload.duration_ms) || 0));
-                  trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
-                  syncUi();
-                })
-                .catch(() => {});
-            }, 120);
+                if(!payload || !overlay.isConnected) return;
+                const nextPointCount = Math.max(
+                  Array.isArray(payload.points) ? payload.points.length : 0,
+                  Array.isArray(payload.mins) ? payload.mins.length : 0,
+                  Array.isArray(payload.maxs) ? payload.maxs.length : 0,
+                  Math.round(Number(payload.point_count) || 0),
+                );
+                if(nextPointCount <= (trackItem.pointCount || 0)) return;
+                applyTrackWaveformPayload(trackItem, payload, { preserveClip: true });
+                const stepIndex = EDITOR_WAVEFORM_POINT_STEPS.indexOf(requestedPointTarget);
+                const warmSteps = stepIndex >= 0
+                  ? EDITOR_WAVEFORM_POINT_STEPS.slice(stepIndex + 1, stepIndex + 2)
+                  : [];
+                for(const nextStep of warmSteps){
+                  if(nextStep && nextStep <= EDITOR_WAVEFORM_POINTS_MAX){
+                    void ensureEditorWaveformPayload(task.id, trackItem.output || '', nextStep);
+                  }
+                }
+                syncUi();
+              })
+              .catch(() => {});
+            }, 140);
           });
         }
         if(wrap && Number.isFinite(Number(anchorClientX))){
@@ -6996,24 +7193,7 @@
           try{
             const payload = await ensureEditorWaveformPayload(task.id, trackItem.output || '', waveformPointTarget());
             if(payload){
-              trackItem.points = Array.isArray(payload.points) ? payload.points : [];
-              trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
-              trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
-              trackItem.pointCount = Math.max(
-                Array.isArray(trackItem.points) ? trackItem.points.length : 0,
-                Array.isArray(trackItem.mins) ? trackItem.mins.length : 0,
-                Array.isArray(trackItem.maxs) ? trackItem.maxs.length : 0,
-                Math.round(Number(payload.point_count) || 0),
-              );
-              trackItem.durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
-              trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
-              if(trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){
-                trackItem.clip = {
-                  startMs: Math.max(0, Math.round(Number(payload.clip_start_ms) || 0)),
-                  endMs: Number.isFinite(Number(payload.clip_end_ms)) ? Math.round(Number(payload.clip_end_ms)) : null,
-                  enabled: !!payload.clip_enabled,
-                };
-              }
+              applyTrackWaveformPayload(trackItem, payload);
             }
           }catch(_){}
         }
@@ -7060,7 +7240,6 @@
         if(audio.paused){
           try { audio.currentTime = playheadMs / 1000; } catch(_) {}
           try { await audio.play(); } catch(_) {}
-          startPlaybackLoop();
         }else{
           audio.pause();
           stopPlaybackLoop();
@@ -7497,7 +7676,8 @@
         syncUi();
       });
       audio.addEventListener('pause', () => { stopPlaybackLoop(); syncUi(); });
-      audio.addEventListener('play', () => { startPlaybackLoop(); syncUi(); });
+      audio.addEventListener('play', () => { syncUi(); });
+      audio.addEventListener('playing', () => { startPlaybackLoop(); syncUi(); });
       audio.addEventListener('ended', () => { stopPlaybackLoop(); syncUi(); });
 
       [buttons.select, buttons.range, buttons.razor, buttons.slip].forEach((button) => {
