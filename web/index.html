@@ -1458,6 +1458,212 @@
       background: rgba(255,255,255,.1);
       transform: translateX(1px);
     }
+    .editor-card {
+      background: var(--editor-shell-bg, linear-gradient(180deg, rgba(17, 30, 36, 0.94), rgba(11, 20, 25, 0.96))) !important;
+      border-color: var(--editor-shell-border, rgba(255,255,255,.12)) !important;
+      box-shadow: var(--editor-shell-shadow, 0 26px 70px rgba(0,0,0,.34)) !important;
+      backdrop-filter: blur(20px) saturate(116%);
+      -webkit-backdrop-filter: blur(20px) saturate(116%);
+    }
+    .editor-card .editor-title strong {
+      color: var(--editor-title-strong, #fff);
+    }
+    .editor-card .editor-title span {
+      color: var(--editor-title-muted, rgba(245,251,255,.84));
+    }
+    .editor-shell {
+      --editor-accent: #8ED8FF;
+      --editor-accent-strong: #F4FCFF;
+      --editor-accent-soft: rgba(142,216,255,.18);
+      --editor-accent-soft-strong: rgba(142,216,255,.28);
+      --editor-panel-bg: linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      --editor-panel-border: rgba(255,255,255,.10);
+      --editor-panel-shadow: 0 18px 40px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.08);
+      --editor-track-bg: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      --editor-track-border: rgba(255,255,255,.09);
+      --editor-track-shadow: 0 18px 28px rgba(0,0,0,.2);
+      --editor-wave-bg: rgba(8,18,23,.88);
+      --editor-wave-fill: rgba(142,216,255,.82);
+      --editor-wave-fill-dim: rgba(142,216,255,.54);
+      --editor-selection-bg: rgba(142,216,255,.12);
+      --editor-selection-border: rgba(142,216,255,.26);
+      --editor-marker: rgba(248,252,255,.98);
+      --editor-chip-bg: rgba(255,255,255,.05);
+      --editor-chip-border: rgba(255,255,255,.09);
+      --editor-button-bg: rgba(255,255,255,.07);
+      --editor-button-border: rgba(255,255,255,.1);
+      --editor-button-hover-bg: rgba(255,255,255,.12);
+      --editor-button-hover-border: rgba(255,255,255,.2);
+      --editor-button-hover-shadow: 0 10px 22px rgba(0,0,0,.18);
+      --editor-button-active-bg: rgba(142,216,255,.18);
+      --editor-button-active-border: rgba(142,216,255,.4);
+      --editor-button-active-shadow: 0 12px 26px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.12);
+      --editor-button-text: rgba(245,251,255,.94);
+      --editor-kicker: rgba(231,236,239,.68);
+      --editor-wave-radius: 16px;
+    }
+    .editor-panel-surface {
+      border-radius: 24px;
+      border: 1px solid var(--editor-panel-border);
+      background: var(--editor-panel-bg);
+      box-shadow: var(--editor-panel-shadow);
+      backdrop-filter: blur(14px) saturate(112%);
+      -webkit-backdrop-filter: blur(14px) saturate(112%);
+    }
+    .editor-panel-surface[data-tight="true"] {
+      border-radius: 18px;
+    }
+    .editor-panel-surface[data-ghost="true"] {
+      background: transparent;
+      box-shadow: none;
+      border-color: rgba(255,255,255,.06);
+    }
+    .editor-section-kicker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--editor-kicker);
+    }
+    .editor-section-kicker svg {
+      width: 15px;
+      height: 15px;
+      color: var(--editor-accent-strong);
+      opacity: .9;
+      flex: 0 0 auto;
+    }
+    .editor-secondary-host {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+      min-height: 0;
+    }
+    .editor-secondary-host.is-horizontal {
+      flex-direction: row;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 2px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .editor-secondary-host.is-horizontal .editor-track {
+      min-width: min(320px, 74vw);
+      flex: 0 0 min(320px, 74vw);
+    }
+    .editor-secondary-host.is-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .editor-shell .editor-panel-label {
+      color: var(--editor-kicker);
+      margin: 0;
+    }
+    .editor-shell .editor-panel-label svg {
+      color: var(--editor-accent-strong);
+    }
+    .editor-shell .editor-tool-btn {
+      border-color: var(--editor-button-border);
+      background: var(--editor-button-bg);
+      color: var(--editor-button-text);
+    }
+    .editor-shell .editor-tool-btn:hover {
+      border-color: var(--editor-button-hover-border);
+      background: var(--editor-button-hover-bg);
+      box-shadow: var(--editor-button-hover-shadow);
+    }
+    .editor-shell .editor-tool-btn.is-active {
+      background: var(--editor-button-active-bg);
+      border-color: var(--editor-button-active-border);
+      box-shadow: var(--editor-button-active-shadow);
+      color: var(--editor-accent-strong);
+    }
+    .editor-shell .editor-meta-chip {
+      border-color: var(--editor-chip-border);
+      background: var(--editor-chip-bg);
+    }
+    .editor-shell .editor-track {
+      border-color: var(--editor-track-border);
+      background: var(--editor-track-bg);
+    }
+    .editor-shell .editor-track.is-active {
+      box-shadow: var(--editor-track-shadow);
+    }
+    .editor-shell .editor-track-title,
+    .editor-shell .editor-panel-label,
+    .editor-shell .editor-section-kicker {
+      color: var(--editor-kicker);
+    }
+    .editor-shell .editor-track.is-active .editor-track-title {
+      color: var(--editor-accent-strong);
+    }
+    .editor-shell .editor-wave-shell,
+    .editor-shell .editor-wave-canvas {
+      background: var(--editor-wave-bg);
+      border-radius: var(--editor-wave-radius);
+    }
+    .editor-shell .editor-wave-selection {
+      background: var(--editor-selection-bg);
+      border-color: var(--editor-selection-border);
+    }
+    .editor-shell .editor-marker-line,
+    .editor-shell .editor-marker-cap {
+      background: var(--editor-marker);
+    }
+    .editor-shell[data-button-shape="pill"] .editor-tool-btn {
+      border-radius: 999px;
+      min-width: 46px;
+    }
+    .editor-shell[data-button-shape="pill"] .editor-tool-btn[data-compact="true"] {
+      width: 46px;
+    }
+    .editor-shell[data-button-shape="round"] .editor-tool-btn {
+      border-radius: 18px;
+      min-width: 46px;
+    }
+    .editor-shell[data-button-shape="round"] .editor-tool-btn[data-compact="true"] {
+      width: 46px;
+    }
+    .editor-shell[data-button-shape="rail"] .editor-tool-btn {
+      border-radius: 10px;
+      min-width: 44px;
+    }
+    .editor-shell[data-button-shape="rail"] .editor-tool-btn[data-compact="true"] {
+      width: 44px;
+    }
+    .editor-shell[data-track-style="slab"] .editor-track {
+      border-radius: 28px;
+      padding: 16px;
+    }
+    .editor-shell[data-track-style="tape"] .editor-track {
+      border-radius: 22px;
+      border-style: dashed;
+      border-width: 1px;
+    }
+    .editor-shell[data-track-style="tape"] .editor-wave-shell,
+    .editor-shell[data-track-style="tape"] .editor-wave-canvas {
+      border-radius: 12px;
+    }
+    .editor-shell[data-track-style="console"] .editor-track {
+      border-radius: 16px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.03), 0 12px 24px rgba(0,0,0,.18);
+    }
+    .editor-shell[data-track-style="minimal"] .editor-track {
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border-radius: 18px;
+    }
+    .editor-shell[data-track-style="minimal"] .editor-track:not(.is-active) {
+      opacity: .84;
+    }
+    @media (max-width: 980px) {
+      .editor-secondary-host.is-horizontal .editor-track {
+        min-width: min(280px, 84vw);
+        flex-basis: min(280px, 84vw);
+      }
+    }
     .queue-group-shell {
       display: flex;
       flex-direction: column;
@@ -2539,6 +2745,7 @@
     const EDITOR_TRIM_CLIPBOARD_KEY = 'stemsplat.editorTrimClipboard';
     const EDITOR_SNAP_ENABLED_KEY = 'stemsplat.editorSnapEnabled';
     const EDITOR_TRACK_DRAFTS_KEY = 'stemsplat.editorTrackDrafts';
+    const EDITOR_LAYOUT_VARIANT_KEY = 'stemsplat.editorLayoutVariant';
     const isLanClient = !['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
 
     let startPressed = false;
@@ -4507,6 +4714,23 @@
       }catch(_){}
     }
 
+    function editorReadLayoutVariant(){
+      try{
+        const raw = Number.parseInt(localStorage.getItem(EDITOR_LAYOUT_VARIANT_KEY) || '1', 10);
+        if(Number.isFinite(raw) && raw >= 1 && raw <= 10){
+          return raw;
+        }
+      }catch(_){}
+      return 1;
+    }
+
+    function editorSetLayoutVariant(index){
+      const safeIndex = Math.max(1, Math.min(10, Number.parseInt(String(index || '1'), 10) || 1));
+      try{
+        localStorage.setItem(EDITOR_LAYOUT_VARIANT_KEY, String(safeIndex));
+      }catch(_){}
+    }
+
     function editorWaveformCacheKey(taskId, output){
       return `${String(taskId || '')}::${String(output || 'source')}`;
     }
@@ -4574,8 +4798,9 @@
       if(!task) return;
       const pending = taskPendingEntry(task);
       const { overlay, card } = createOverlayCard('editor');
-      card.classList.add('editor-nle-card');
-      card.style.maxWidth = '1100px';
+      card.classList.add('editor-card', 'editor-nle-card');
+      card.style.maxWidth = '1240px';
+
       const titleEl = card.querySelector('h3');
       titleEl.className = 'editor-title';
       titleEl.textContent = '';
@@ -4585,9 +4810,27 @@
       titleName.textContent = String(task.name || 'untitled');
       titleEl.append(titleStrong, titleName);
 
+      const editorShell = document.createElement('div');
+      editorShell.className = 'editor-shell flex flex-col gap-4 min-h-0 w-full';
+      card.appendChild(editorShell);
+
+      const actions = document.createElement('div');
+      actions.className = 'flex gap-2 justify-end';
+      const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
+      const saveBtn = makeActionButton('save', 'bg-white text-black');
+      actions.append(cancelBtn, saveBtn);
+      card.appendChild(actions);
+
       const sourceOriginalClip = cloneClipState(taskClipState(task));
       const originalTrackDrafts = editorLoadTrackDrafts(task);
       const snapDistanceMs = () => Math.max(0, Math.min(2000, Number(settingsState.editor_snap_distance_ms) || 0));
+      const variantShortcutMap = {
+        Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5,
+        Digit6: 6, Digit7: 7, Digit8: 8, Digit9: 9, Digit0: 10,
+        Numpad1: 1, Numpad2: 2, Numpad3: 3, Numpad4: 4, Numpad5: 5,
+        Numpad6: 6, Numpad7: 7, Numpad8: 8, Numpad9: 9, Numpad0: 10,
+      };
+
       let snapEnabled = editorSnapEnabled();
       let playheadMs = sourceOriginalClip.startMs || 0;
       let activeObjectUrl = '';
@@ -4601,36 +4844,510 @@
       let dismissLockUntil = 0;
       let editorToolMode = 'select';
       let waveZoom = 1;
+      let currentVariant = null;
+      let layoutRefs = { primaryHost: null, secondaryHost: null, secondaryPanels: [] };
 
-      const svgIcon = (kind) => {
-        const g = '<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">';
-        const svgEnd = '</g></svg>';
-        const svgOpen = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">';
-        if(kind === 'magnet') return `${svgOpen}${g}<path d="M9 3.5h3.5V7H9z"/><path d="M11.5 7v2.5a2.5 2.5 0 1 0 5 0V7"/><path d="M14.5 3.5H18V7h-3.5"/><path d="M8.5 11.5V18a3.5 3.5 0 1 0 7 0v-6.5"/>${svgEnd}`;
-        if(kind === 'select') return `${svgOpen}${g}<path d="M5.5 4.5 10 9l-2.5.5.5 2.5L13 19l2-2-7-7 2.5-.5L5.5 4.5z"/><path d="m13 17 3 3"/>${svgEnd}`;
-        if(kind === 'razor') return `${svgOpen}${g}<path d="M5 19 19 5"/><path d="M8 5h3l2.5 3.5"/><path d="M14 16h3l-2.5-3.5"/><circle cx="7" cy="7" r="1.6"/><circle cx="17" cy="17" r="1.6"/>${svgEnd}`;
-        if(kind === 'slip') return `${svgOpen}${g}<path d="M7 7v10"/><path d="M17 7v10"/><path d="M9.5 9.5h-4"/><path d="M9.5 14.5h-4"/><path d="M14.5 9.5h4"/><path d="M14.5 14.5h4"/>${svgEnd}`;
-        if(kind === 'slide') return `${svgOpen}${g}<path d="M5 9h4v6H5z"/><path d="M15 9h4v6h-4z"/><path d="M9 12h6"/>${svgEnd}`;
-        if(kind === 'timeline') return `${svgOpen}${g}<rect x="4" y="5" width="8" height="3.5" rx="1.75"/><rect x="9" y="10.25" width="11" height="3.5" rx="1.75"/><rect x="4" y="15.5" width="7" height="3.5" rx="1.75"/>${svgEnd}`;
-        if(kind === 'monitor') return `${svgOpen}${g}<rect x="5" y="6" width="14" height="12" rx="2.5"/><path d="M9 21h6"/>${svgEnd}`;
-        if(kind === 'in') return `${svgOpen}${g}<path d="M10 5H7v14h3"/>${svgEnd}`;
-        if(kind === 'out') return `${svgOpen}${g}<path d="M14 5h3v14h-3"/>${svgEnd}`;
-        if(kind === 'clear') return `${svgOpen}${g}<path d="M7 7h10v10H7z" stroke-dasharray="2.5 2"/><path d="m8.5 8.5 7 7"/><path d="m15.5 8.5-7 7"/>${svgEnd}`;
-        if(kind === 'zoom-in') return `${svgOpen}${g}<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15 20 20"/><path d="M10.5 8v5"/><path d="M8 10.5h5"/>${svgEnd}`;
-        if(kind === 'zoom-out') return `${svgOpen}${g}<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15 20 20"/><path d="M8 10.5h5"/>${svgEnd}`;
-        if(kind === 'start') return `${svgOpen}${g}<path d="M6 5v14"/><path d="M18 6l-8 6 8 6V6Z"/>${svgEnd}`;
-        if(kind === 'jump-in') return `${svgOpen}${g}<path d="M7 5v14"/><path d="m17 18-8-6 8-6"/>${svgEnd}`;
-        if(kind === 'play') return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M8 5.8v12.4a.8.8 0 0 0 1.2.69l9.2-6.2a.8.8 0 0 0 0-1.38l-9.2-6.2A.8.8 0 0 0 8 5.8Z"/></svg>';
-        if(kind === 'pause') return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="7" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="13" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg>';
-        if(kind === 'jump-out') return `${svgOpen}${g}<path d="M17 5v14"/><path d="m7 18 8-6-8-6"/>${svgEnd}`;
-        if(kind === 'end') return `${svgOpen}${g}<path d="M18 5v14"/><path d="M6 6l8 6-8 6V6Z"/>${svgEnd}`;
+      const editorVariants = [
+        {
+          number: 1,
+          name: 'precision cut',
+          pack: 'wire',
+          layout: 'stacked',
+          buttonShape: 'tile',
+          trackStyle: 'glass',
+          maxWidth: '1240px',
+          waveBg: 'rgba(8, 18, 23, 0.88)',
+          waveFill: 'rgba(142, 216, 255, 0.82)',
+          waveFillDim: 'rgba(142, 216, 255, 0.56)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(16, 31, 38, 0.94), rgba(10, 21, 27, 0.98))',
+            '--editor-shell-border': 'rgba(194,229,245,.16)',
+            '--editor-shell-shadow': '0 30px 84px rgba(0,0,0,.38)',
+            '--editor-title-strong': '#f8fcff',
+            '--editor-title-muted': 'rgba(237,247,252,.82)',
+            '--editor-accent': '#8ED8FF',
+            '--editor-accent-strong': '#F5FCFF',
+            '--editor-accent-soft': 'rgba(142,216,255,.18)',
+            '--editor-accent-soft-strong': 'rgba(142,216,255,.28)',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.04))',
+            '--editor-panel-border': 'rgba(255,255,255,.10)',
+            '--editor-panel-shadow': '0 18px 36px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.08)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03))',
+            '--editor-track-border': 'rgba(255,255,255,.10)',
+            '--editor-track-shadow': '0 18px 28px rgba(0,0,0,.20)',
+            '--editor-selection-bg': 'rgba(142,216,255,.12)',
+            '--editor-selection-border': 'rgba(142,216,255,.26)',
+            '--editor-marker': 'rgba(247,252,255,.98)',
+            '--editor-chip-bg': 'rgba(255,255,255,.05)',
+            '--editor-chip-border': 'rgba(255,255,255,.08)',
+            '--editor-button-bg': 'rgba(255,255,255,.07)',
+            '--editor-button-border': 'rgba(255,255,255,.10)',
+            '--editor-button-hover-bg': 'rgba(255,255,255,.12)',
+            '--editor-button-hover-border': 'rgba(255,255,255,.22)',
+            '--editor-button-active-bg': 'rgba(142,216,255,.18)',
+            '--editor-button-active-border': 'rgba(142,216,255,.42)',
+            '--editor-kicker': 'rgba(226,239,246,.72)',
+            '--editor-wave-radius': '16px',
+          },
+        },
+        {
+          number: 2,
+          name: 'split deck',
+          pack: 'solid',
+          layout: 'duo',
+          buttonShape: 'pill',
+          trackStyle: 'slab',
+          maxWidth: '1320px',
+          waveBg: 'rgba(11, 26, 32, 0.92)',
+          waveFill: 'rgba(173, 227, 255, 0.86)',
+          waveFillDim: 'rgba(124, 198, 232, 0.54)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(14, 29, 35, 0.96), rgba(8, 18, 22, 0.98))',
+            '--editor-shell-border': 'rgba(178,223,241,.18)',
+            '--editor-shell-shadow': '0 30px 80px rgba(0,0,0,.40)',
+            '--editor-title-strong': '#f3fbff',
+            '--editor-title-muted': 'rgba(226,243,250,.84)',
+            '--editor-accent': '#B6EAFF',
+            '--editor-accent-strong': '#F4FDFF',
+            '--editor-accent-soft': 'rgba(182,234,255,.20)',
+            '--editor-panel-bg': 'linear-gradient(155deg, rgba(255,255,255,.11), rgba(255,255,255,.045))',
+            '--editor-panel-border': 'rgba(197,230,242,.14)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(222,245,255,.10), rgba(72,124,144,.08))',
+            '--editor-track-border': 'rgba(189,226,240,.18)',
+            '--editor-track-shadow': '0 18px 36px rgba(0,0,0,.22)',
+            '--editor-selection-bg': 'rgba(182,234,255,.16)',
+            '--editor-selection-border': 'rgba(182,234,255,.30)',
+            '--editor-marker': 'rgba(244,253,255,.98)',
+            '--editor-chip-bg': 'rgba(221,245,255,.07)',
+            '--editor-chip-border': 'rgba(192,225,238,.14)',
+            '--editor-button-bg': 'rgba(227,246,255,.08)',
+            '--editor-button-border': 'rgba(195,226,239,.14)',
+            '--editor-button-hover-bg': 'rgba(227,246,255,.15)',
+            '--editor-button-hover-border': 'rgba(214,238,248,.24)',
+            '--editor-button-active-bg': 'rgba(182,234,255,.24)',
+            '--editor-button-active-border': 'rgba(182,234,255,.44)',
+            '--editor-kicker': 'rgba(221,238,245,.72)',
+            '--editor-wave-radius': '18px',
+          },
+        },
+        {
+          number: 3,
+          name: 'tape rack',
+          pack: 'retro',
+          layout: 'deck',
+          buttonShape: 'rail',
+          trackStyle: 'tape',
+          maxWidth: '1360px',
+          waveBg: 'rgba(10, 21, 26, 0.94)',
+          waveFill: 'rgba(153, 228, 245, 0.80)',
+          waveFillDim: 'rgba(113, 187, 207, 0.54)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(12, 24, 30, 0.98), rgba(7, 15, 19, 0.99))',
+            '--editor-shell-border': 'rgba(151,211,231,.16)',
+            '--editor-shell-shadow': '0 28px 78px rgba(0,0,0,.42)',
+            '--editor-title-strong': '#effbfd',
+            '--editor-title-muted': 'rgba(217,239,245,.84)',
+            '--editor-accent': '#99E0F0',
+            '--editor-accent-strong': '#F2FDFF',
+            '--editor-panel-bg': 'linear-gradient(150deg, rgba(255,255,255,.055), rgba(255,255,255,.025))',
+            '--editor-panel-border': 'rgba(151,211,231,.13)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(122,185,201,.10), rgba(255,255,255,.03))',
+            '--editor-track-border': 'rgba(151,211,231,.20)',
+            '--editor-selection-bg': 'rgba(153,224,240,.14)',
+            '--editor-selection-border': 'rgba(153,224,240,.30)',
+            '--editor-marker': 'rgba(241,253,255,.96)',
+            '--editor-chip-bg': 'rgba(153,224,240,.08)',
+            '--editor-chip-border': 'rgba(153,224,240,.16)',
+            '--editor-button-bg': 'rgba(153,224,240,.08)',
+            '--editor-button-border': 'rgba(153,224,240,.16)',
+            '--editor-button-hover-bg': 'rgba(153,224,240,.16)',
+            '--editor-button-hover-border': 'rgba(183,233,245,.28)',
+            '--editor-button-active-bg': 'rgba(153,224,240,.24)',
+            '--editor-button-active-border': 'rgba(153,224,240,.42)',
+            '--editor-kicker': 'rgba(208,232,239,.68)',
+            '--editor-wave-radius': '12px',
+          },
+        },
+        {
+          number: 4,
+          name: 'wave lab',
+          pack: 'signal',
+          layout: 'focus',
+          buttonShape: 'pill',
+          trackStyle: 'minimal',
+          maxWidth: '1180px',
+          waveBg: 'rgba(7, 19, 24, 0.96)',
+          waveFill: 'rgba(163, 237, 255, 0.84)',
+          waveFillDim: 'rgba(116, 201, 224, 0.52)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(10, 22, 28, 0.98), rgba(6, 15, 20, 0.99))',
+            '--editor-shell-border': 'rgba(189,231,243,.14)',
+            '--editor-shell-shadow': '0 34px 88px rgba(0,0,0,.44)',
+            '--editor-title-strong': '#f5fdff',
+            '--editor-title-muted': 'rgba(223,245,250,.84)',
+            '--editor-accent': '#B1F1FF',
+            '--editor-accent-strong': '#F7FEFF',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(255,255,255,.04), rgba(255,255,255,.02))',
+            '--editor-panel-border': 'rgba(189,231,243,.11)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.018))',
+            '--editor-track-border': 'rgba(188,231,242,.10)',
+            '--editor-selection-bg': 'rgba(177,241,255,.12)',
+            '--editor-selection-border': 'rgba(177,241,255,.30)',
+            '--editor-marker': 'rgba(247,254,255,.96)',
+            '--editor-chip-bg': 'rgba(177,241,255,.06)',
+            '--editor-chip-border': 'rgba(177,241,255,.12)',
+            '--editor-button-bg': 'rgba(255,255,255,.04)',
+            '--editor-button-border': 'rgba(188,231,242,.12)',
+            '--editor-button-hover-bg': 'rgba(177,241,255,.10)',
+            '--editor-button-hover-border': 'rgba(188,231,242,.20)',
+            '--editor-button-active-bg': 'rgba(177,241,255,.18)',
+            '--editor-button-active-border': 'rgba(177,241,255,.34)',
+            '--editor-kicker': 'rgba(210,234,240,.66)',
+            '--editor-wave-radius': '20px',
+          },
+        },
+        {
+          number: 5,
+          name: 'clip grid',
+          pack: 'solid',
+          layout: 'grid',
+          buttonShape: 'round',
+          trackStyle: 'slab',
+          maxWidth: '1380px',
+          waveBg: 'rgba(9, 21, 28, 0.92)',
+          waveFill: 'rgba(138, 229, 246, 0.84)',
+          waveFillDim: 'rgba(106, 184, 202, 0.56)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(13, 28, 35, 0.97), rgba(8, 18, 23, 0.99))',
+            '--editor-shell-border': 'rgba(173,223,236,.16)',
+            '--editor-shell-shadow': '0 28px 76px rgba(0,0,0,.42)',
+            '--editor-title-strong': '#f1fcff',
+            '--editor-title-muted': 'rgba(220,243,248,.82)',
+            '--editor-accent': '#8DE1F4',
+            '--editor-accent-strong': '#F3FDFF',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(255,255,255,.085), rgba(255,255,255,.035))',
+            '--editor-panel-border': 'rgba(173,223,236,.14)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.025))',
+            '--editor-track-border': 'rgba(173,223,236,.16)',
+            '--editor-selection-bg': 'rgba(141,225,244,.14)',
+            '--editor-selection-border': 'rgba(141,225,244,.28)',
+            '--editor-marker': 'rgba(244,253,255,.97)',
+            '--editor-chip-bg': 'rgba(141,225,244,.08)',
+            '--editor-chip-border': 'rgba(173,223,236,.15)',
+            '--editor-button-bg': 'rgba(141,225,244,.08)',
+            '--editor-button-border': 'rgba(173,223,236,.16)',
+            '--editor-button-hover-bg': 'rgba(141,225,244,.14)',
+            '--editor-button-hover-border': 'rgba(197,235,243,.26)',
+            '--editor-button-active-bg': 'rgba(141,225,244,.22)',
+            '--editor-button-active-border': 'rgba(141,225,244,.40)',
+            '--editor-kicker': 'rgba(214,235,241,.69)',
+            '--editor-wave-radius': '18px',
+          },
+        },
+        {
+          number: 6,
+          name: 'console strip',
+          pack: 'retro',
+          layout: 'console',
+          buttonShape: 'tile',
+          trackStyle: 'console',
+          maxWidth: '1300px',
+          waveBg: 'rgba(7, 18, 24, 0.96)',
+          waveFill: 'rgba(121, 215, 232, 0.82)',
+          waveFillDim: 'rgba(88, 167, 186, 0.55)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(9, 19, 24, 0.98), rgba(6, 12, 16, 0.99))',
+            '--editor-shell-border': 'rgba(140,208,225,.14)',
+            '--editor-shell-shadow': '0 34px 92px rgba(0,0,0,.48)',
+            '--editor-title-strong': '#eefbfd',
+            '--editor-title-muted': 'rgba(208,235,241,.78)',
+            '--editor-accent': '#79D7E8',
+            '--editor-accent-strong': '#EEFCFF',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(16,36,42,.96), rgba(9,20,24,.98))',
+            '--editor-panel-border': 'rgba(121,215,232,.14)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(17,39,46,.94), rgba(10,21,25,.98))',
+            '--editor-track-border': 'rgba(121,215,232,.16)',
+            '--editor-selection-bg': 'rgba(121,215,232,.14)',
+            '--editor-selection-border': 'rgba(121,215,232,.28)',
+            '--editor-marker': 'rgba(241,253,255,.94)',
+            '--editor-chip-bg': 'rgba(121,215,232,.07)',
+            '--editor-chip-border': 'rgba(121,215,232,.14)',
+            '--editor-button-bg': 'rgba(121,215,232,.08)',
+            '--editor-button-border': 'rgba(121,215,232,.16)',
+            '--editor-button-hover-bg': 'rgba(121,215,232,.14)',
+            '--editor-button-hover-border': 'rgba(167,228,238,.24)',
+            '--editor-button-active-bg': 'rgba(121,215,232,.24)',
+            '--editor-button-active-border': 'rgba(121,215,232,.40)',
+            '--editor-kicker': 'rgba(193,224,231,.66)',
+            '--editor-wave-radius': '14px',
+          },
+        },
+        {
+          number: 7,
+          name: 'storyboard',
+          pack: 'wire',
+          layout: 'story',
+          buttonShape: 'pill',
+          trackStyle: 'minimal',
+          maxWidth: '1280px',
+          waveBg: 'rgba(10, 23, 29, 0.92)',
+          waveFill: 'rgba(160, 230, 255, 0.82)',
+          waveFillDim: 'rgba(110, 193, 220, 0.52)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(16, 31, 38, 0.97), rgba(9, 20, 24, 0.99))',
+            '--editor-shell-border': 'rgba(176,226,241,.14)',
+            '--editor-shell-shadow': '0 28px 80px rgba(0,0,0,.40)',
+            '--editor-title-strong': '#f4fdff',
+            '--editor-title-muted': 'rgba(223,245,251,.84)',
+            '--editor-accent': '#A6E6FF',
+            '--editor-accent-strong': '#F7FDFF',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,.02))',
+            '--editor-panel-border': 'rgba(176,226,241,.12)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02))',
+            '--editor-track-border': 'rgba(176,226,241,.11)',
+            '--editor-selection-bg': 'rgba(166,230,255,.12)',
+            '--editor-selection-border': 'rgba(166,230,255,.28)',
+            '--editor-marker': 'rgba(247,254,255,.96)',
+            '--editor-chip-bg': 'rgba(166,230,255,.06)',
+            '--editor-chip-border': 'rgba(176,226,241,.12)',
+            '--editor-button-bg': 'rgba(255,255,255,.05)',
+            '--editor-button-border': 'rgba(176,226,241,.12)',
+            '--editor-button-hover-bg': 'rgba(166,230,255,.10)',
+            '--editor-button-hover-border': 'rgba(176,226,241,.22)',
+            '--editor-button-active-bg': 'rgba(166,230,255,.19)',
+            '--editor-button-active-border': 'rgba(166,230,255,.36)',
+            '--editor-kicker': 'rgba(212,236,243,.68)',
+            '--editor-wave-radius': '18px',
+          },
+        },
+        {
+          number: 8,
+          name: 'scout desk',
+          pack: 'signal',
+          layout: 'splitStack',
+          buttonShape: 'round',
+          trackStyle: 'glass',
+          maxWidth: '1340px',
+          waveBg: 'rgba(8, 18, 23, 0.94)',
+          waveFill: 'rgba(134, 223, 241, 0.82)',
+          waveFillDim: 'rgba(95, 181, 202, 0.54)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(15, 29, 35, 0.97), rgba(8, 18, 22, 0.99))',
+            '--editor-shell-border': 'rgba(167,221,236,.15)',
+            '--editor-shell-shadow': '0 30px 82px rgba(0,0,0,.42)',
+            '--editor-title-strong': '#f0fbff',
+            '--editor-title-muted': 'rgba(215,241,247,.82)',
+            '--editor-accent': '#86DFF1',
+            '--editor-accent-strong': '#F3FDFF',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(255,255,255,.07), rgba(255,255,255,.03))',
+            '--editor-panel-border': 'rgba(167,221,236,.13)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025))',
+            '--editor-track-border': 'rgba(167,221,236,.14)',
+            '--editor-selection-bg': 'rgba(134,223,241,.13)',
+            '--editor-selection-border': 'rgba(134,223,241,.28)',
+            '--editor-marker': 'rgba(245,253,255,.96)',
+            '--editor-chip-bg': 'rgba(134,223,241,.07)',
+            '--editor-chip-border': 'rgba(167,221,236,.14)',
+            '--editor-button-bg': 'rgba(134,223,241,.08)',
+            '--editor-button-border': 'rgba(167,221,236,.16)',
+            '--editor-button-hover-bg': 'rgba(134,223,241,.14)',
+            '--editor-button-hover-border': 'rgba(194,233,242,.24)',
+            '--editor-button-active-bg': 'rgba(134,223,241,.22)',
+            '--editor-button-active-border': 'rgba(134,223,241,.40)',
+            '--editor-kicker': 'rgba(206,233,240,.68)',
+            '--editor-wave-radius': '16px',
+          },
+        },
+        {
+          number: 9,
+          name: 'pilot deck',
+          pack: 'retro',
+          layout: 'cockpit',
+          buttonShape: 'pill',
+          trackStyle: 'console',
+          maxWidth: '1260px',
+          waveBg: 'rgba(7, 16, 21, 0.96)',
+          waveFill: 'rgba(145, 220, 235, 0.82)',
+          waveFillDim: 'rgba(100, 171, 188, 0.54)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(10, 20, 25, 0.98), rgba(6, 13, 17, 0.99))',
+            '--editor-shell-border': 'rgba(168,220,232,.14)',
+            '--editor-shell-shadow': '0 36px 94px rgba(0,0,0,.48)',
+            '--editor-title-strong': '#eefbfd',
+            '--editor-title-muted': 'rgba(210,236,242,.82)',
+            '--editor-accent': '#91DCEB',
+            '--editor-accent-strong': '#F1FCFF',
+            '--editor-panel-bg': 'linear-gradient(160deg, rgba(18,38,44,.96), rgba(9,18,23,.98))',
+            '--editor-panel-border': 'rgba(145,220,235,.14)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(19,42,49,.95), rgba(10,20,24,.98))',
+            '--editor-track-border': 'rgba(145,220,235,.16)',
+            '--editor-selection-bg': 'rgba(145,220,235,.14)',
+            '--editor-selection-border': 'rgba(145,220,235,.28)',
+            '--editor-marker': 'rgba(242,253,255,.96)',
+            '--editor-chip-bg': 'rgba(145,220,235,.08)',
+            '--editor-chip-border': 'rgba(145,220,235,.15)',
+            '--editor-button-bg': 'rgba(145,220,235,.08)',
+            '--editor-button-border': 'rgba(145,220,235,.16)',
+            '--editor-button-hover-bg': 'rgba(145,220,235,.15)',
+            '--editor-button-hover-border': 'rgba(187,232,241,.24)',
+            '--editor-button-active-bg': 'rgba(145,220,235,.24)',
+            '--editor-button-active-border': 'rgba(145,220,235,.42)',
+            '--editor-kicker': 'rgba(199,227,234,.67)',
+            '--editor-wave-radius': '14px',
+          },
+        },
+        {
+          number: 10,
+          name: 'broadcast lane',
+          pack: 'solid',
+          layout: 'broadcast',
+          buttonShape: 'tile',
+          trackStyle: 'slab',
+          maxWidth: '1400px',
+          waveBg: 'rgba(9, 22, 28, 0.94)',
+          waveFill: 'rgba(186, 235, 255, 0.84)',
+          waveFillDim: 'rgba(129, 198, 224, 0.56)',
+          theme: {
+            '--editor-shell-bg': 'linear-gradient(180deg, rgba(13, 28, 34, 0.97), rgba(7, 16, 20, 0.99))',
+            '--editor-shell-border': 'rgba(193,233,245,.16)',
+            '--editor-shell-shadow': '0 32px 88px rgba(0,0,0,.44)',
+            '--editor-title-strong': '#f4fdff',
+            '--editor-title-muted': 'rgba(226,246,252,.84)',
+            '--editor-accent': '#C0EEFF',
+            '--editor-accent-strong': '#F7FEFF',
+            '--editor-panel-bg': 'linear-gradient(155deg, rgba(255,255,255,.10), rgba(255,255,255,.04))',
+            '--editor-panel-border': 'rgba(193,233,245,.14)',
+            '--editor-track-bg': 'linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03))',
+            '--editor-track-border': 'rgba(193,233,245,.16)',
+            '--editor-selection-bg': 'rgba(192,238,255,.14)',
+            '--editor-selection-border': 'rgba(192,238,255,.30)',
+            '--editor-marker': 'rgba(247,254,255,.98)',
+            '--editor-chip-bg': 'rgba(192,238,255,.08)',
+            '--editor-chip-border': 'rgba(193,233,245,.16)',
+            '--editor-button-bg': 'rgba(192,238,255,.08)',
+            '--editor-button-border': 'rgba(193,233,245,.16)',
+            '--editor-button-hover-bg': 'rgba(192,238,255,.15)',
+            '--editor-button-hover-border': 'rgba(220,244,250,.26)',
+            '--editor-button-active-bg': 'rgba(192,238,255,.24)',
+            '--editor-button-active-border': 'rgba(192,238,255,.44)',
+            '--editor-kicker': 'rgba(220,239,245,.72)',
+            '--editor-wave-radius': '18px',
+          },
+        },
+      ];
+
+      const byNumber = new Map(editorVariants.map((variant) => [variant.number, variant]));
+
+      const appendChildren = (parent, children) => {
+        (Array.isArray(children) ? children : []).filter(Boolean).forEach((child) => parent.appendChild(child));
+        return parent;
+      };
+
+      const makeElement = (tag, className = '', text = '') => {
+        const element = document.createElement(tag);
+        if(className) element.className = className;
+        if(text) element.textContent = text;
+        return element;
+      };
+
+      const setTooltip = (target, message) => {
+        if(!target) return;
+        if(message){
+          target.dataset.tooltip = message;
+          bindDelayedTooltip(target);
+        }
+      };
+
+      const svgIcon = (kind, pack = currentVariant ? currentVariant.pack : 'wire') => {
+        const wireGroup = '<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">';
+        const solidOpen = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">';
+        const wireOpen = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">';
+        const wireEnd = '</g></svg>';
+        if(pack === 'solid'){
+          if(kind === 'magnet') return `${solidOpen}<path fill="currentColor" d="M8 3h4v6H8zM14 3h4v6h-4z"/><path fill="currentColor" d="M8 10.5a1 1 0 0 1 1 1V18a3 3 0 1 0 6 0v-6.5a1 1 0 0 1 2 0V18a5 5 0 1 1-10 0v-6.5a1 1 0 0 1 1-1Z"/></svg>`;
+          if(kind === 'select') return `${solidOpen}<path fill="currentColor" d="m5 4 8.4 3.2-3.2 1.2L16.5 16l-2.5 2.2-6.1-7.2-1.4 3.4z"/></svg>`;
+          if(kind === 'razor') return `${solidOpen}<path fill="currentColor" d="M6 7.5A2.5 2.5 0 1 1 8.5 10 2.5 2.5 0 0 1 6 7.5Zm9 9A2.5 2.5 0 1 1 17.5 19 2.5 2.5 0 0 1 15 16.5ZM5.2 18l13-13 1.6 1.6-13 13z"/></svg>`;
+          if(kind === 'slip') return `${solidOpen}<path fill="currentColor" d="M6 5h2v14H6zm10 0h2v14h-2zM3 8l3 4-3 4zm18 0-3 4 3 4z"/></svg>`;
+          if(kind === 'slide') return `${solidOpen}<path fill="currentColor" d="M4 9h5v6H4zm11 0h5v6h-5zM9 11h6v2H9z"/></svg>`;
+          if(kind === 'timeline') return `${solidOpen}<path fill="currentColor" d="M4 5h8v4H4zm5 5h11v4H9zm-5 5h7v4H4z"/></svg>`;
+          if(kind === 'monitor') return `${solidOpen}<path fill="currentColor" d="M6 5h12a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm3 14h6v2H9z"/></svg>`;
+          if(kind === 'in') return `${solidOpen}<path fill="currentColor" d="M6 4h4v16H6zm6 1h2v14h-2z"/></svg>`;
+          if(kind === 'out') return `${solidOpen}<path fill="currentColor" d="M14 4h4v16h-4zm-4 1h2v14h-2z"/></svg>`;
+          if(kind === 'clear') return `${solidOpen}<path fill="currentColor" d="M6 6h12v12H6z" opacity=".35"/><path fill="currentColor" d="m8.4 7 3.6 3.6L15.6 7 17 8.4 13.4 12 17 15.6 15.6 17 12 13.4 8.4 17 7 15.6 10.6 12 7 8.4z"/></svg>`;
+          if(kind === 'zoom-in') return `${solidOpen}<path fill="currentColor" d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 2a.75.75 0 0 0-.75.75V9.75H6.75a.75.75 0 0 0 0 1.5h3V14.25a.75.75 0 0 0 1.5 0v-3h3a.75.75 0 0 0 0-1.5h-3V6.75A.75.75 0 0 0 10.5 6Zm5.9 9.8 3.6 3.6-1.4 1.4-3.6-3.6z"/></svg>`;
+          if(kind === 'zoom-out') return `${solidOpen}<path fill="currentColor" d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm-3.75 5.75a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5Zm9.65 6.05 3.6 3.6-1.4 1.4-3.6-3.6z"/></svg>`;
+          if(kind === 'start') return `${solidOpen}<path fill="currentColor" d="M5 5h2v14H5zm4 7 10-6v12z"/></svg>`;
+          if(kind === 'jump-in') return `${solidOpen}<path fill="currentColor" d="M6 5h2v14H6zm11 13-8-6 8-6z"/></svg>`;
+          if(kind === 'play') return `${solidOpen}<path fill="currentColor" d="M8 5.8v12.4a.8.8 0 0 0 1.2.69l9.2-6.2a.8.8 0 0 0 0-1.38l-9.2-6.2A.8.8 0 0 0 8 5.8Z"/></svg>`;
+          if(kind === 'pause') return `${solidOpen}<rect x="7" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="13" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg>`;
+          if(kind === 'jump-out') return `${solidOpen}<path fill="currentColor" d="M16 5h2v14h-2zM7 6l8 6-8 6z"/></svg>`;
+          if(kind === 'end') return `${solidOpen}<path fill="currentColor" d="M17 5h2v14h-2zM7 6l8 6-8 6z"/></svg>`;
+        }
+        if(pack === 'retro'){
+          if(kind === 'magnet') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square" stroke-linejoin="miter"><path d="M8 4h4v4H8z"/><path d="M14 4h4v4h-4z"/><path d="M8 9v7a4 4 0 1 0 8 0V9"/></g></svg>`;
+          if(kind === 'select') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="m5 4 7 6-3 .8L12 18"/><path d="m12 18 3-2"/></g></svg>`;
+          if(kind === 'razor') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square" stroke-linejoin="miter"><path d="M5 19 19 5"/><path d="M7 7h4"/><path d="M13 17h4"/><path d="M6.5 5.5v3"/><path d="M17.5 15.5v3"/></g></svg>`;
+          if(kind === 'slip') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 9h5"/><path d="M3 15h5"/><path d="M16 9h5"/><path d="M16 15h5"/></g></svg>`;
+          if(kind === 'slide') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><rect x="4" y="9" width="5" height="6"/><rect x="15" y="9" width="5" height="6"/><path d="M9 12h6"/></g></svg>`;
+          if(kind === 'timeline') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M4 7h8"/><path d="M9 12h11"/><path d="M4 17h7"/></g></svg>`;
+          if(kind === 'monitor') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><rect x="5" y="6" width="14" height="11"/><path d="M9 20h6"/></g></svg>`;
+          if(kind === 'in') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M7 4v16"/><path d="M11 6v12"/></g></svg>`;
+          if(kind === 'out') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M17 4v16"/><path d="M13 6v12"/></g></svg>`;
+          if(kind === 'clear') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><rect x="7" y="7" width="10" height="10"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></g></svg>`;
+          if(kind === 'zoom-in') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><circle cx="10" cy="10" r="5"/><path d="M10 7v6"/><path d="M7 10h6"/><path d="M15 15l5 5"/></g></svg>`;
+          if(kind === 'zoom-out') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><circle cx="10" cy="10" r="5"/><path d="M7 10h6"/><path d="M15 15l5 5"/></g></svg>`;
+          if(kind === 'start') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M6 5v14"/><path d="M18 7 10 12l8 5"/></g></svg>`;
+          if(kind === 'jump-in') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M7 5v14"/><path d="m16 18-7-6 7-6"/></g></svg>`;
+          if(kind === 'play') return `${wireOpen}<path fill="currentColor" d="M8 5.5v13l9-6.5z"/></svg>`;
+          if(kind === 'pause') return `${wireOpen}<g fill="currentColor"><rect x="7" y="5" width="4" height="14"/><rect x="13" y="5" width="4" height="14"/></g></svg>`;
+          if(kind === 'jump-out') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M17 5v14"/><path d="m8 18 7-6-7-6"/></g></svg>`;
+          if(kind === 'end') return `${wireOpen}<g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M18 5v14"/><path d="M7 7l8 5-8 5"/></g></svg>`;
+        }
+        if(pack === 'signal'){
+          if(kind === 'magnet') return `${wireOpen}${wireGroup}<path d="M8.5 4.5H12V8H8.5z"/><path d="M12 8v3.5a4 4 0 1 0 8 0V8"/><path d="M16.5 4.5H20V8h-3.5"/></g></svg>`;
+          if(kind === 'select') return `${wireOpen}${wireGroup}<path d="m5 6 7 4-3 .7L11 18"/></g></svg>`;
+          if(kind === 'razor') return `${wireOpen}${wireGroup}<path d="M4.5 18.5 19.5 5.5"/><path d="M8 5.5c1.4 0 2.5 1.1 2.5 2.5"/><path d="M13.5 16c0 1.4 1.1 2.5 2.5 2.5"/></g></svg>`;
+          if(kind === 'slip') return `${wireOpen}${wireGroup}<path d="M7 6v12"/><path d="M17 6v12"/><path d="M4 12h5"/><path d="M15 12h5"/></g></svg>`;
+          if(kind === 'slide') return `${wireOpen}${wireGroup}<path d="M5 9h4v6H5z"/><path d="M15 9h4v6h-4z"/><path d="M9 12h6"/></g></svg>`;
+          if(kind === 'timeline') return `${wireOpen}${wireGroup}<path d="M4 7h7"/><path d="M9 12h11"/><path d="M4 17h8"/></g></svg>`;
+          if(kind === 'monitor') return `${wireOpen}${wireGroup}<rect x="5" y="6" width="14" height="11" rx="2"/><path d="M9 20h6"/></g></svg>`;
+          if(kind === 'in') return `${wireOpen}${wireGroup}<path d="M8 5v14"/><path d="M12 8h-3"/></g></svg>`;
+          if(kind === 'out') return `${wireOpen}${wireGroup}<path d="M16 5v14"/><path d="M12 8h3"/></g></svg>`;
+          if(kind === 'clear') return `${wireOpen}${wireGroup}<path d="M7 7h10v10H7z"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></g></svg>`;
+          if(kind === 'zoom-in') return `${wireOpen}${wireGroup}<circle cx="10.5" cy="10.5" r="5"/><path d="M10.5 7.5v6"/><path d="M7.5 10.5h6"/><path d="M15 15 20 20"/></g></svg>`;
+          if(kind === 'zoom-out') return `${wireOpen}${wireGroup}<circle cx="10.5" cy="10.5" r="5"/><path d="M7.5 10.5h6"/><path d="M15 15 20 20"/></g></svg>`;
+          if(kind === 'start') return `${wireOpen}${wireGroup}<path d="M6 5v14"/><path d="M18 7.5 11 12l7 4.5"/></g></svg>`;
+          if(kind === 'jump-in') return `${wireOpen}${wireGroup}<path d="M7 5v14"/><path d="m17 18-7-6 7-6"/></g></svg>`;
+          if(kind === 'play') return `${wireOpen}<path fill="currentColor" d="M8.5 6.2v11.6a.7.7 0 0 0 1.05.6l8.3-5.8a.7.7 0 0 0 0-1.2l-8.3-5.8a.7.7 0 0 0-1.05.6Z"/></svg>`;
+          if(kind === 'pause') return `${wireOpen}<rect x="7.3" y="5.4" width="3.8" height="13.2" rx="1" fill="currentColor"/><rect x="12.9" y="5.4" width="3.8" height="13.2" rx="1" fill="currentColor"/></svg>`;
+          if(kind === 'jump-out') return `${wireOpen}${wireGroup}<path d="M17 5v14"/><path d="m7 18 7-6-7-6"/></g></svg>`;
+          if(kind === 'end') return `${wireOpen}${wireGroup}<path d="M18 5v14"/><path d="M7 7.5 14 12l-7 4.5"/></g></svg>`;
+        }
+        if(kind === 'magnet') return `${wireOpen}${wireGroup}<path d="M9 3.5h3.5V7H9z"/><path d="M11.5 7v2.5a2.5 2.5 0 1 0 5 0V7"/><path d="M14.5 3.5H18V7h-3.5"/><path d="M8.5 11.5V18a3.5 3.5 0 1 0 7 0v-6.5"/>${wireEnd}`;
+        if(kind === 'select') return `${wireOpen}${wireGroup}<path d="M5.5 4.5 10 9l-2.5.5.5 2.5L13 19l2-2-7-7 2.5-.5L5.5 4.5z"/><path d="m13 17 3 3"/>${wireEnd}`;
+        if(kind === 'razor') return `${wireOpen}${wireGroup}<path d="M5 19 19 5"/><path d="M8 5h3l2.5 3.5"/><path d="M14 16h3l-2.5-3.5"/><circle cx="7" cy="7" r="1.6"/><circle cx="17" cy="17" r="1.6"/>${wireEnd}`;
+        if(kind === 'slip') return `${wireOpen}${wireGroup}<path d="M7 7v10"/><path d="M17 7v10"/><path d="M9.5 9.5h-4"/><path d="M9.5 14.5h-4"/><path d="M14.5 9.5h4"/><path d="M14.5 14.5h4"/>${wireEnd}`;
+        if(kind === 'slide') return `${wireOpen}${wireGroup}<path d="M5 9h4v6H5z"/><path d="M15 9h4v6h-4z"/><path d="M9 12h6"/>${wireEnd}`;
+        if(kind === 'timeline') return `${wireOpen}${wireGroup}<rect x="4" y="5" width="8" height="3.5" rx="1.75"/><rect x="9" y="10.25" width="11" height="3.5" rx="1.75"/><rect x="4" y="15.5" width="7" height="3.5" rx="1.75"/>${wireEnd}`;
+        if(kind === 'monitor') return `${wireOpen}${wireGroup}<rect x="5" y="6" width="14" height="12" rx="2.5"/><path d="M9 21h6"/>${wireEnd}`;
+        if(kind === 'in') return `${wireOpen}${wireGroup}<path d="M10 5H7v14h3"/>${wireEnd}`;
+        if(kind === 'out') return `${wireOpen}${wireGroup}<path d="M14 5h3v14h-3"/>${wireEnd}`;
+        if(kind === 'clear') return `${wireOpen}${wireGroup}<path d="M7 7h10v10H7z" stroke-dasharray="2.5 2"/><path d="m8.5 8.5 7 7"/><path d="m15.5 8.5-7 7"/>${wireEnd}`;
+        if(kind === 'zoom-in') return `${wireOpen}${wireGroup}<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15 20 20"/><path d="M10.5 8v5"/><path d="M8 10.5h5"/>${wireEnd}`;
+        if(kind === 'zoom-out') return `${wireOpen}${wireGroup}<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15 20 20"/><path d="M8 10.5h5"/>${wireEnd}`;
+        if(kind === 'start') return `${wireOpen}${wireGroup}<path d="M6 5v14"/><path d="M18 6l-8 6 8 6V6Z"/>${wireEnd}`;
+        if(kind === 'jump-in') return `${wireOpen}${wireGroup}<path d="M7 5v14"/><path d="m17 18-8-6 8-6"/>${wireEnd}`;
+        if(kind === 'play') return `${wireOpen}<path fill="currentColor" d="M8 5.8v12.4a.8.8 0 0 0 1.2.69l9.2-6.2a.8.8 0 0 0 0-1.38l-9.2-6.2A.8.8 0 0 0 8 5.8Z"/></svg>`;
+        if(kind === 'pause') return `${wireOpen}<rect x="7" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="13" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg>`;
+        if(kind === 'jump-out') return `${wireOpen}${wireGroup}<path d="M17 5v14"/><path d="m7 18 8-6-8-6"/>${wireEnd}`;
+        if(kind === 'end') return `${wireOpen}${wireGroup}<path d="M18 5v14"/><path d="M6 6l8 6-8 6V6Z"/>${wireEnd}`;
         return '';
       };
 
-      const makeToolButton = ({ icon = '', label = '', compact = false, primary = false, active = false, title = '', dataset = null } = {}) => {
+      const makeToolButton = ({ iconKind, compact = true, active = false, title = '', tooltip = '', dataset = null } = {}) => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = `editor-tool-btn ${primary ? 'bg-white text-black' : ''} ${active ? 'is-active' : ''}`.trim();
+        btn.className = `editor-tool-btn ${active ? 'is-active' : ''}`.trim();
         if(compact) btn.dataset.compact = 'true';
         if(title) btn.title = title;
         if(dataset && typeof dataset === 'object'){
@@ -4638,100 +5355,50 @@
             btn.dataset[key] = String(dataset[key]);
           });
         }
-        if(icon){
-          btn.innerHTML = icon;
-        }
-        if(label){
-          const text = document.createElement('span');
-          text.textContent = label;
-          btn.appendChild(text);
-        }
+        btn.dataset.iconKind = iconKind || '';
+        if(tooltip) setTooltip(btn, tooltip);
         return btn;
       };
 
       const buttons = {
-        select: makeToolButton({ icon: svgIcon('select'), compact: true, active: true, title: 'selection', dataset: { editorTool: 'select' } }),
-        razor: makeToolButton({ icon: svgIcon('razor'), compact: true, title: 'razor', dataset: { editorTool: 'razor' } }),
-        slip: makeToolButton({ icon: svgIcon('slip'), compact: true, title: 'slip', dataset: { editorTool: 'slip' } }),
-        slide: makeToolButton({ icon: svgIcon('slide'), compact: true, title: 'slide', dataset: { editorTool: 'slide' } }),
-        magnet: makeToolButton({ icon: svgIcon('magnet'), compact: true, active: snapEnabled, title: snapEnabled ? 'snapping on' : 'snapping off' }),
-        start: makeToolButton({ icon: svgIcon('start'), compact: true, title: 'skip to beginning' }),
-        jumpIn: makeToolButton({ icon: svgIcon('jump-in'), compact: true, title: 'skip to in point' }),
-        play: makeToolButton({ icon: svgIcon('play'), compact: true, primary: true, title: 'play' }),
-        jumpOut: makeToolButton({ icon: svgIcon('jump-out'), compact: true, title: 'skip to out point' }),
-        end: makeToolButton({ icon: svgIcon('end'), compact: true, title: 'skip to end' }),
-        setIn: makeToolButton({ icon: svgIcon('in'), compact: true, title: 'set in point (i)' }),
-        setOut: makeToolButton({ icon: svgIcon('out'), compact: true, title: 'set out point (o)' }),
-        clear: makeToolButton({ icon: svgIcon('clear'), compact: true, title: 'clear trim' }),
-        zoomOut: makeToolButton({ icon: svgIcon('zoom-out'), compact: true, title: 'zoom out' }),
-        zoomIn: makeToolButton({ icon: svgIcon('zoom-in'), compact: true, title: 'zoom in' }),
+        select: makeToolButton({ iconKind: 'select', active: true, title: 'selection', tooltip: 'selection tool', dataset: { editorTool: 'select' } }),
+        razor: makeToolButton({ iconKind: 'razor', title: 'razor', tooltip: 'razor tool', dataset: { editorTool: 'razor' } }),
+        slip: makeToolButton({ iconKind: 'slip', title: 'slip', tooltip: 'slip tool', dataset: { editorTool: 'slip' } }),
+        slide: makeToolButton({ iconKind: 'slide', title: 'slide', tooltip: 'slide tool', dataset: { editorTool: 'slide' } }),
+        magnet: makeToolButton({ iconKind: 'magnet', active: snapEnabled, title: snapEnabled ? 'snapping on' : 'snapping off', tooltip: 'toggle trim snapping' }),
+        start: makeToolButton({ iconKind: 'start', title: 'skip to beginning', tooltip: 'jump to beginning' }),
+        jumpIn: makeToolButton({ iconKind: 'jump-in', title: 'skip to in point', tooltip: 'jump to in point' }),
+        play: makeToolButton({ iconKind: 'play', title: 'play', tooltip: 'play or pause - space' }),
+        jumpOut: makeToolButton({ iconKind: 'jump-out', title: 'skip to out point', tooltip: 'jump to out point' }),
+        end: makeToolButton({ iconKind: 'end', title: 'skip to end', tooltip: 'jump to end' }),
+        setIn: makeToolButton({ iconKind: 'in', title: 'set in point', tooltip: 'set in point - I' }),
+        setOut: makeToolButton({ iconKind: 'out', title: 'set out point', tooltip: 'set out point - O' }),
+        clear: makeToolButton({ iconKind: 'clear', title: 'clear trim', tooltip: 'clear trim' }),
+        zoomOut: makeToolButton({ iconKind: 'zoom-out', title: 'zoom out', tooltip: 'zoom out' }),
+        zoomIn: makeToolButton({ iconKind: 'zoom-in', title: 'zoom in', tooltip: 'zoom in' }),
       };
 
-      const toolbarWrap = document.createElement('div');
-      toolbarWrap.className = 'flex flex-col gap-2 w-full';
-
-      const rowTools = document.createElement('div');
-      rowTools.className = 'editor-toolbar-row';
-      const clusterModes = document.createElement('div');
-      clusterModes.className = 'editor-toolbar-cluster';
-      [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((b) => clusterModes.appendChild(b));
+      const refreshButtonIcons = () => {
+        Object.values(buttons).forEach((button) => {
+          const kind = button.dataset.iconKind || '';
+          button.innerHTML = svgIcon(kind, currentVariant ? currentVariant.pack : 'wire');
+        });
+      };
 
       const meta = document.createElement('div');
-      meta.className = 'editor-meta-grid editor-toolbar-grow';
+      meta.className = 'editor-meta-grid w-full';
       meta.style.minWidth = '0';
       meta.innerHTML = `
         <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">in</div><div class="text-sm font-mono tabular-nums" data-role="in-label">0:00.00</div></div>
         <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">out</div><div class="text-sm font-mono tabular-nums" data-role="out-label">0:00.00</div></div>
         <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">playhead</div><div class="text-sm font-mono tabular-nums" data-role="cursor-label">0:00.00</div></div>
       `;
-      rowTools.append(clusterModes, meta);
-      toolbarWrap.appendChild(rowTools);
-
-      const rowTransport = document.createElement('div');
-      rowTransport.className = 'editor-toolbar-row';
-      const clusterTransport = document.createElement('div');
-      clusterTransport.className = 'editor-toolbar-cluster';
-      const spacer = document.createElement('div');
-      spacer.className = 'editor-toolbar-spacer';
-      clusterTransport.append(buttons.magnet, spacer, buttons.start, buttons.jumpIn, buttons.play, buttons.jumpOut, buttons.end);
-      const clusterTrim = document.createElement('div');
-      clusterTrim.className = 'editor-toolbar-cluster';
-      clusterTrim.append(buttons.setIn, buttons.setOut, buttons.clear, buttons.zoomOut, buttons.zoomIn);
-      rowTransport.append(clusterTransport, clusterTrim);
-      toolbarWrap.appendChild(rowTransport);
-      card.appendChild(toolbarWrap);
-
-      const nleBody = document.createElement('div');
-      nleBody.className = 'editor-nle-body';
-      const monitorLabel = document.createElement('div');
-      monitorLabel.className = 'editor-panel-label';
-      monitorLabel.innerHTML = `${svgIcon('monitor')}<span>source monitor</span>`;
-      const monitorShell = document.createElement('div');
-      monitorShell.className = 'editor-tracks';
-      const timelineLabel = document.createElement('div');
-      timelineLabel.className = 'editor-panel-label';
-      timelineLabel.innerHTML = `${svgIcon('timeline')}<span>timeline</span>`;
-      timelineLabel.hidden = true;
-      const lanesShell = document.createElement('div');
-      lanesShell.className = 'editor-tracks editor-tracks--lanes';
-      lanesShell.hidden = true;
-      nleBody.append(monitorLabel, monitorShell, timelineLabel, lanesShell);
-      card.appendChild(nleBody);
-
-      const actions = document.createElement('div');
-      actions.className = 'flex gap-2 justify-end';
-      const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
-      const saveBtn = makeActionButton('save', 'bg-white text-black');
-      actions.append(cancelBtn, saveBtn);
-      card.appendChild(actions);
-
       const inLabel = meta.querySelector('[data-role="in-label"]');
       const outLabel = meta.querySelector('[data-role="out-label"]');
       const cursorLabel = meta.querySelector('[data-role="cursor-label"]');
+
       const audio = document.createElement('audio');
       audio.preload = 'metadata';
-
-      const clipEqual = (left, right) => JSON.stringify(cloneClipState(left)) === JSON.stringify(cloneClipState(right));
 
       const baseTracks = [{ key: 'source', label: 'source', output: null }];
       if(task.id && Array.isArray(task.outputs) && task.outputs.length){
@@ -4743,6 +5410,7 @@
           });
         });
       }
+
       const tracks = baseTracks.map((baseTrack) => {
         const draft = originalTrackDrafts[baseTrack.key];
         return {
@@ -4757,26 +5425,6 @@
       });
 
       const activeTrack = () => tracks.find((trackItem) => trackItem.key === activeTrackKey) || tracks[0];
-
-      const repositionTracksForNle = () => {
-        const active = activeTrack();
-        tracks.forEach((t) => {
-          if(t.dom && t.dom.track.parentNode){
-            t.dom.track.remove();
-          }
-        });
-        if(active && active.dom && active.dom.track){
-          monitorShell.appendChild(active.dom.track);
-        }
-        tracks.forEach((t) => {
-          if(t.key !== activeTrackKey && t.dom && t.dom.track){
-            lanesShell.appendChild(t.dom.track);
-          }
-        });
-        const multi = tracks.length > 1;
-        lanesShell.hidden = !multi;
-        timelineLabel.hidden = !multi;
-      };
 
       const closeContextMenu = () => {
         if(contextMenuEl && contextMenuEl.parentNode){
@@ -4811,10 +5459,7 @@
         tracks.forEach((trackItem) => {
           normalizeTrackClip(trackItem);
           const endValue = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs;
-          [
-            ['in', trackItem.clip.startMs],
-            ['out', endValue],
-          ].forEach(([edge, value]) => {
+          [['in', trackItem.clip.startMs], ['out', endValue]].forEach(([edge, value]) => {
             if(trackItem.key === movingTrackKey && edge === movingEdge) return;
             const diff = Math.abs(Number(value) - Number(rawMs));
             if(diff > threshold) return;
@@ -4834,10 +5479,225 @@
         return Math.round(pct * Math.max(0, trackItem.durationMs || 0));
       };
 
+      const makeSectionLabel = (label, iconKind) => {
+        const wrap = makeElement('div', 'editor-section-kicker');
+        wrap.innerHTML = `${svgIcon(iconKind, currentVariant ? currentVariant.pack : 'wire')}<span>${label}</span>`;
+        return wrap;
+      };
+
+      const makePanel = ({ label = '', icon = 'timeline', classes = '', tight = false, ghost = false } = {}) => {
+        const panel = makeElement('div', `editor-panel-surface ${classes}`.trim());
+        if(tight) panel.dataset.tight = 'true';
+        if(ghost) panel.dataset.ghost = 'true';
+        if(label){
+          panel.appendChild(makeSectionLabel(label, icon));
+        }
+        return panel;
+      };
+
+      const makeControlPanel = ({ label, icon, children, classes = '', tight = false } = {}) => {
+        const panel = makePanel({ label, icon, classes: `p-3 flex flex-col gap-3 ${classes}`.trim(), tight });
+        const body = makeElement('div', 'flex flex-wrap gap-2');
+        appendChildren(body, children);
+        panel.appendChild(body);
+        return panel;
+      };
+
+      const makeMetaPanel = ({ label = 'readout', icon = 'monitor', classes = '' } = {}) => {
+        const panel = makePanel({ label, icon, classes: `p-3 flex flex-col gap-3 ${classes}`.trim(), tight: true });
+        panel.appendChild(meta);
+        return panel;
+      };
+
+      const makeTrackPanel = ({ label, icon, classes = '', secondary = false, horizontal = false, grid = false } = {}) => {
+        const panel = makePanel({ label, icon, classes: `p-3 flex flex-col gap-3 min-h-0 ${classes}`.trim() });
+        const host = makeElement('div', `editor-secondary-host ${horizontal ? 'is-horizontal' : ''} ${grid ? 'is-grid' : ''}`.trim());
+        if(!secondary){
+          host.classList.remove('editor-secondary-host');
+          host.className = 'flex flex-col gap-3 min-h-0';
+        }
+        panel.appendChild(host);
+        return { panel, host };
+      };
+
+      const renderTrackPlacement = () => {
+        if(!layoutRefs || !layoutRefs.primaryHost) return;
+        const active = activeTrack();
+        tracks.forEach((trackItem) => {
+          if(trackItem.dom && trackItem.dom.track.parentNode){
+            trackItem.dom.track.remove();
+          }
+        });
+        if(active && active.dom && active.dom.track){
+          layoutRefs.primaryHost.appendChild(active.dom.track);
+        }
+        const secondaryTracks = tracks.filter((trackItem) => trackItem.key !== activeTrackKey && trackItem.dom && trackItem.dom.track);
+        if(layoutRefs.secondaryHost){
+          secondaryTracks.forEach((trackItem) => layoutRefs.secondaryHost.appendChild(trackItem.dom.track));
+        }
+        (layoutRefs.secondaryPanels || []).forEach((panel) => {
+          panel.hidden = secondaryTracks.length === 0;
+        });
+      };
+
+      const buildLayout = () => {
+        const variant = currentVariant || editorVariants[0];
+        const toolPanel = makeControlPanel({
+          label: variant.layout === 'deck' ? 'rack' : 'tools',
+          icon: 'select',
+          classes: variant.layout === 'console' ? 'h-full' : '',
+          children: [buttons.select, buttons.razor, buttons.slip, buttons.slide],
+        });
+        const transportPanel = makeControlPanel({
+          label: variant.layout === 'broadcast' ? 'transport' : 'deck',
+          icon: 'play',
+          children: [buttons.magnet, buttons.start, buttons.jumpIn, buttons.play, buttons.jumpOut, buttons.end],
+        });
+        const trimPanel = makeControlPanel({
+          label: variant.layout === 'story' ? 'marks' : 'trim',
+          icon: 'in',
+          children: [buttons.setIn, buttons.setOut, buttons.clear, buttons.zoomOut, buttons.zoomIn],
+        });
+        const metaPanel = makeMetaPanel({
+          label: variant.layout === 'focus' ? 'meters' : 'readout',
+          icon: variant.layout === 'focus' ? 'timeline' : 'monitor',
+        });
+        const primaryTrack = makeTrackPanel({
+          label: variant.layout === 'broadcast' ? 'program' : (variant.layout === 'grid' ? 'hero' : 'focus'),
+          icon: 'monitor',
+          classes: variant.layout === 'focus' ? 'grow' : '',
+        });
+        const secondaryTrack = makeTrackPanel({
+          label: variant.layout === 'deck' ? 'cassettes' : (variant.layout === 'story' ? 'storyline' : (variant.layout === 'console' ? 'banks' : 'stems')),
+          icon: 'timeline',
+          secondary: true,
+          horizontal: ['focus', 'story'].includes(variant.layout),
+          grid: variant.layout === 'grid',
+        });
+
+        const root = makeElement('div', 'flex flex-col gap-3 min-h-0');
+
+        if(variant.layout === 'stacked'){
+          const grid = makeElement('div', 'grid gap-3 xl:grid-cols-[240px_minmax(0,1fr)] min-h-0');
+          const dock = makeElement('div', 'flex flex-col gap-3');
+          dock.append(toolPanel, transportPanel, trimPanel);
+          const main = makeElement('div', 'flex flex-col gap-3 min-w-0 min-h-0');
+          main.append(metaPanel, primaryTrack.panel, secondaryTrack.panel);
+          grid.append(dock, main);
+          root.appendChild(grid);
+        }else if(variant.layout === 'duo'){
+          const top = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_340px] min-h-0');
+          const left = makeElement('div', 'flex flex-col gap-3 min-w-0 min-h-0');
+          const right = makeElement('div', 'flex flex-col gap-3');
+          left.append(primaryTrack.panel, secondaryTrack.panel);
+          right.append(metaPanel, toolPanel, transportPanel, trimPanel);
+          top.append(left, right);
+          root.appendChild(top);
+        }else if(variant.layout === 'deck'){
+          const grid = makeElement('div', 'grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)_280px] min-h-0');
+          const left = makeElement('div', 'flex flex-col gap-3');
+          const center = makeElement('div', 'flex flex-col gap-3 min-w-0 min-h-0');
+          const right = makeElement('div', 'flex flex-col gap-3');
+          left.append(toolPanel, trimPanel);
+          center.append(metaPanel, primaryTrack.panel);
+          right.append(secondaryTrack.panel, transportPanel);
+          grid.append(left, center, right);
+          root.appendChild(grid);
+        }else if(variant.layout === 'focus'){
+          const top = makeElement('div', 'flex flex-col gap-3 min-h-0');
+          const headerRow = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]');
+          const rail = makeElement('div', 'flex flex-wrap gap-3 justify-end');
+          rail.append(toolPanel, transportPanel, trimPanel);
+          headerRow.append(metaPanel, rail);
+          top.append(headerRow, secondaryTrack.panel, primaryTrack.panel);
+          root.appendChild(top);
+        }else if(variant.layout === 'grid'){
+          const headerRow = makeElement('div', 'grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]');
+          headerRow.append(metaPanel, toolPanel, transportPanel, trimPanel);
+          const body = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,.8fr)] min-h-0');
+          body.append(primaryTrack.panel, secondaryTrack.panel);
+          root.append(headerRow, body);
+        }else if(variant.layout === 'console'){
+          const body = makeElement('div', 'grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)_320px] min-h-0');
+          const left = makeElement('div', 'flex flex-col gap-3');
+          const right = makeElement('div', 'flex flex-col gap-3');
+          left.append(toolPanel, transportPanel);
+          right.append(metaPanel, trimPanel, secondaryTrack.panel);
+          body.append(left, primaryTrack.panel, right);
+          root.appendChild(body);
+        }else if(variant.layout === 'story'){
+          const top = makeElement('div', 'flex flex-col gap-3 min-h-0');
+          const bottom = makeElement('div', 'grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]');
+          bottom.append(metaPanel, toolPanel, transportPanel);
+          top.append(secondaryTrack.panel, primaryTrack.panel, bottom, trimPanel);
+          root.appendChild(top);
+        }else if(variant.layout === 'splitStack'){
+          const top = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(280px,.85fr)] min-h-0');
+          const left = makeElement('div', 'flex flex-col gap-3 min-h-0');
+          const right = makeElement('div', 'flex flex-col gap-3');
+          left.append(primaryTrack.panel, transportPanel);
+          right.append(metaPanel, secondaryTrack.panel, trimPanel);
+          top.append(left, right);
+          root.append(toolPanel, top);
+        }else if(variant.layout === 'cockpit'){
+          const top = makeElement('div', 'grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto]');
+          top.append(toolPanel, transportPanel, trimPanel);
+          const lower = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px] min-h-0');
+          lower.append(primaryTrack.panel, makeElement('div', 'flex flex-col gap-3'));
+          lower.lastChild.append(metaPanel, secondaryTrack.panel);
+          root.append(top, lower);
+        }else{
+          const top = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]');
+          const left = makeElement('div', 'flex flex-col gap-3 min-h-0');
+          const right = makeElement('div', 'flex flex-col gap-3');
+          const footer = makeElement('div', 'grid gap-3 lg:grid-cols-[auto_auto_minmax(0,1fr)]');
+          footer.append(toolPanel, trimPanel, transportPanel);
+          left.append(metaPanel, primaryTrack.panel, footer);
+          right.append(secondaryTrack.panel);
+          top.append(left, right);
+          root.appendChild(top);
+        }
+
+        return {
+          root,
+          primaryHost: primaryTrack.host,
+          secondaryHost: secondaryTrack.host,
+          secondaryPanels: [secondaryTrack.panel],
+        };
+      };
+
+      const applyVariantTheme = (variant) => {
+        card.style.maxWidth = variant.maxWidth || '1240px';
+        Object.entries(variant.theme || {}).forEach(([key, value]) => {
+          card.style.setProperty(key, value);
+          editorShell.style.setProperty(key, value);
+        });
+        editorShell.dataset.buttonShape = variant.buttonShape || 'tile';
+        editorShell.dataset.trackStyle = variant.trackStyle || 'glass';
+        setTooltip(titleEl, `${variant.name} layout - press 1-0 to switch`);
+      };
+
+      const setVariant = (variantNumber, { persist = true } = {}) => {
+        const next = byNumber.get(variantNumber) || editorVariants[0];
+        currentVariant = next;
+        if(persist){
+          editorSetLayoutVariant(next.number);
+        }
+        applyVariantTheme(next);
+        refreshButtonIcons();
+        editorShell.innerHTML = '';
+        layoutRefs = buildLayout();
+        editorShell.appendChild(layoutRefs.root);
+        renderTrackPlacement();
+        syncUi();
+      };
+
       const syncPlayButton = () => {
         const paused = audio.paused;
         buttons.play.innerHTML = paused ? svgIcon('play') : svgIcon('pause');
         buttons.play.title = paused ? 'play' : 'pause';
+        buttons.play.classList.toggle('is-active', !paused);
+        buttons.play.dataset.tooltip = paused ? 'play or pause - space' : 'pause playback - space';
       };
 
       const syncPlaybackFrame = () => {
@@ -4878,11 +5738,13 @@
         const width = canvas.width;
         const height = canvas.height;
         ctx.clearRect(0, 0, width, height);
-        ctx.fillStyle = 'rgba(12, 24, 31, 0.96)';
+        ctx.fillStyle = currentVariant ? currentVariant.waveBg : 'rgba(12, 24, 31, 0.96)';
         ctx.fillRect(0, 0, width, height);
         const values = Array.isArray(trackItem.points) && trackItem.points.length ? trackItem.points : new Array(220).fill(0.12);
         const step = width / values.length;
-        ctx.fillStyle = 'rgba(142, 216, 255, 0.78)';
+        ctx.fillStyle = trackItem.key === activeTrackKey
+          ? (currentVariant ? currentVariant.waveFill : 'rgba(142, 216, 255, 0.78)')
+          : (currentVariant ? currentVariant.waveFillDim : 'rgba(142, 216, 255, 0.54)');
         values.forEach((value, index) => {
           const amp = Math.max(0.035, Math.min(1, Number(value) || 0));
           const barHeight = amp * (height * 0.86);
@@ -4920,24 +5782,24 @@
       };
 
       const applyWaveZoom = () => {
-        tracks.forEach((t) => {
-          if(!t.dom || !t.dom.waveShell || !t.dom.zoomWrap) return;
-          if(t.key === activeTrackKey){
-            t.dom.waveShell.style.transformOrigin = 'left center';
-            t.dom.waveShell.style.transform = waveZoom > 1 ? `scaleX(${waveZoom})` : '';
-            t.dom.zoomWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
+        tracks.forEach((trackItem) => {
+          if(!trackItem.dom || !trackItem.dom.waveShell || !trackItem.dom.zoomWrap) return;
+          if(trackItem.key === activeTrackKey){
+            trackItem.dom.waveShell.style.transformOrigin = 'left center';
+            trackItem.dom.waveShell.style.transform = waveZoom > 1 ? `scaleX(${waveZoom})` : '';
+            trackItem.dom.zoomWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
           }else{
-            t.dom.waveShell.style.transform = '';
-            t.dom.zoomWrap.style.overflowX = 'hidden';
+            trackItem.dom.waveShell.style.transform = '';
+            trackItem.dom.zoomWrap.style.overflowX = 'hidden';
           }
         });
       };
 
       const syncEditorToolUi = () => {
-        [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((b) => {
-          const mode = b.dataset.editorTool;
+        [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((button) => {
+          const mode = button.dataset.editorTool;
           if(!mode) return;
-          b.classList.toggle('is-active', editorToolMode === mode);
+          button.classList.toggle('is-active', editorToolMode === mode);
         });
       };
 
@@ -4948,6 +5810,7 @@
         syncEditorToolUi();
         buttons.magnet.classList.toggle('is-active', snapEnabled);
         buttons.magnet.title = snapEnabled ? 'snapping on' : 'snapping off';
+        buttons.magnet.dataset.tooltip = snapEnabled ? 'snapping on' : 'snapping off';
         syncPlayButton();
       };
 
@@ -5015,7 +5878,7 @@
         const changed = activeTrackKey !== trackKey;
         activeTrackKey = trackKey;
         if(changed){
-          repositionTracksForNle();
+          renderTrackPlacement();
         }
         syncUi();
         if(changed || !loadedPreviewTrackKey){
@@ -5069,17 +5932,17 @@
         menu.className = 'editor-wave-context';
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
-        copyBtn.textContent = 'copy in/out';
+        copyBtn.textContent = 'copy trim';
         const pasteBtn = document.createElement('button');
         pasteBtn.type = 'button';
-        pasteBtn.textContent = 'paste in/out';
+        pasteBtn.textContent = 'paste trim';
         const clipboard = editorReadClipboard();
         pasteBtn.disabled = !clipboard;
         pasteBtn.style.opacity = clipboard ? '1' : '.4';
         guardClick(copyBtn, (event) => {
           event.preventDefault();
           editorWriteClipboard(trackItem.clip);
-          showPopup('copied in/out');
+          showPopup('copied trim');
           closeContextMenu();
         }, 150);
         guardClick(pasteBtn, (event) => {
@@ -5106,11 +5969,12 @@
         trackEl.className = 'editor-track';
         const head = document.createElement('div');
         head.className = 'editor-track-head';
+        head.style.cursor = 'pointer';
         const title = document.createElement('div');
         title.className = 'editor-track-title';
         title.textContent = trackItem.label;
         head.appendChild(title);
-        head.style.cursor = 'pointer';
+        setTooltip(head, trackItem.key === 'source' ? 'focus source track' : `focus ${trackItem.label}`);
         head.addEventListener('click', async (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -5122,6 +5986,7 @@
         zoomWrap.className = 'editor-wave-zoom-wrap';
         const waveShell = document.createElement('div');
         waveShell.className = 'editor-wave-shell';
+        setTooltip(waveShell, 'drag handles to trim - right-click for trim clipboard');
         waveShell.innerHTML = `
           <canvas class="editor-wave-canvas" width="1600" height="260"></canvas>
           <div class="editor-wave-overlay">
@@ -5211,11 +6076,9 @@
           await setActiveTrack(trackItem.key);
           openContextMenuForTrack(trackItem, event.clientX, event.clientY);
         });
-
       };
 
       tracks.forEach(createTrackUi);
-      repositionTracksForNle();
 
       const saveEditorChanges = async (reason) => {
         if(reason === 'cancel'){
@@ -5305,10 +6168,21 @@
       document.addEventListener('pointermove', handleDocumentPointerMove);
       document.addEventListener('pointerup', handleDocumentPointerUp);
       document.addEventListener('pointerdown', handleDocumentPointerDown);
+
       const handleEditorKeydown = async (event) => {
         if(!overlay.isConnected) return;
         const target = event.target;
         if(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        const variantNumber = variantShortcutMap[event.code];
+        if(variantNumber){
+          event.preventDefault();
+          event.stopPropagation();
+          if(!currentVariant || currentVariant.number !== variantNumber){
+            closeContextMenu();
+            setVariant(variantNumber);
+          }
+          return;
+        }
         if(event.repeat && (event.code === 'Space' || event.code === 'KeyI' || event.code === 'KeyO')) return;
         if(event.code === 'Space'){
           event.preventDefault();
@@ -5329,6 +6203,7 @@
         }
       };
       document.addEventListener('keydown', handleEditorKeydown, true);
+
       overlay.__cleanupFns.push(() => {
         document.removeEventListener('pointermove', handleDocumentPointerMove);
         document.removeEventListener('pointerup', handleDocumentPointerUp);
@@ -5337,7 +6212,10 @@
         closeContextMenu();
         stopPlaybackLoop();
         try { audio.pause(); } catch(_) {}
-        if(activeObjectUrl){ URL.revokeObjectURL(activeObjectUrl); activeObjectUrl = ''; }
+        if(activeObjectUrl){
+          URL.revokeObjectURL(activeObjectUrl);
+          activeObjectUrl = '';
+        }
       });
 
       overlay.__requestClose = async (reason = 'dismiss') => {
@@ -5391,10 +6269,10 @@
       audio.addEventListener('play', () => { startPlaybackLoop(); syncUi(); });
       audio.addEventListener('ended', () => { stopPlaybackLoop(); syncUi(); });
 
-      [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((btn) => {
-        guardClick(btn, (event) => {
+      [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((button) => {
+        guardClick(button, (event) => {
           event.preventDefault();
-          const mode = btn.dataset.editorTool;
+          const mode = button.dataset.editorTool;
           if(!mode) return;
           editorToolMode = mode;
           syncUi();
@@ -5471,7 +6349,10 @@
         if(saveBtn.dataset.busy === '1') return;
         await requestOverlayClose(overlay, 'save');
       });
+      setTooltip(cancelBtn, 'close without saving');
+      setTooltip(saveBtn, 'save trim changes');
 
+      setVariant(editorReadLayoutVariant(), { persist: false });
       syncUi();
       void Promise.all(tracks.map((trackItem) => loadWaveformForTrack(trackItem)));
       await setActiveTrack('source', { preservePlayhead: false });
