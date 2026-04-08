@@ -2022,6 +2022,7 @@
       -ms-overflow-style: none;
       border-radius: 0;
       -webkit-overflow-scrolling: touch;
+      position: relative;
     }
     .editor-wave-zoom-wrap::-webkit-scrollbar {
       display: none;
@@ -2063,6 +2064,12 @@
       height: 34px;
       display: block;
       background: transparent;
+      position: absolute;
+      left: 0;
+      top: 0;
+      z-index: 0;
+      pointer-events: none;
+      will-change: transform;
     }
     .editor-track.is-active .editor-wave-canvas {
       height: 42px;
@@ -2079,6 +2086,7 @@
       position: absolute;
       inset: 0;
       pointer-events: auto;
+      z-index: 1;
     }
     .editor-wave-dim {
       position: absolute;
@@ -6021,6 +6029,7 @@
       const RULER_HEIGHT = 32;
       const EDITOR_WAVEFORM_POINTS_MIN = 1280;
       const EDITOR_WAVEFORM_POINTS_MAX = 16384;
+      const EDITOR_WAVEFORM_POINT_STEPS = [1280, 2560, 4096, 6144, 8192, 12288, 16384];
 
       const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
       const timelineRenderWidth = (zoomValue = waveZoom) => {
@@ -6029,7 +6038,7 @@
       };
       const waveformPointTarget = (zoomValue = waveZoom) => {
         const widthTarget = Math.round(timelineRenderWidth(zoomValue) * 1.35);
-        return clampNumber(widthTarget, EDITOR_WAVEFORM_POINTS_MIN, EDITOR_WAVEFORM_POINTS_MAX);
+        return EDITOR_WAVEFORM_POINT_STEPS.find((value) => value >= widthTarget) || EDITOR_WAVEFORM_POINTS_MAX;
       };
       const resizeHiDPICanvas = (canvas, cssWidth, cssHeight) => {
         if(!canvas) return null;
@@ -6694,11 +6703,15 @@
 
       const drawTrackWaveform = (trackItem) => {
         if(!trackItem || !trackItem.dom || !trackItem.dom.ctx) return;
-        const { canvas } = trackItem.dom;
+        const { canvas, zoomWrap } = trackItem.dom;
+        if(!zoomWrap) return;
         const cssHeight = Math.max(34, Math.round(canvas.getBoundingClientRect().height || (trackItem.key === 'source' ? 194 : 34)));
-        const width = timelineRenderWidth();
+        const width = Math.max(1, Math.round(zoomWrap.clientWidth || 0));
         const height = cssHeight;
-        const drawKey = `${width}:${height}:${trackItem.key === activeTrackKey ? 1 : 0}:${trackItem.waveformRevision || 0}`;
+        const renderWidth = timelineRenderWidth();
+        const scrollLeft = Math.max(0, Math.round(zoomWrap.scrollLeft || 0));
+        canvas.style.transform = `translateX(${scrollLeft}px)`;
+        const drawKey = `${width}:${height}:${scrollLeft}:${renderWidth}:${trackItem.key === activeTrackKey ? 1 : 0}:${trackItem.waveformRevision || 0}`;
         if(trackItem.dom.waveformDrawKey === drawKey) return;
         trackItem.dom.waveformDrawKey = drawKey;
         const ctx = resizeHiDPICanvas(canvas, width, height);
@@ -6721,22 +6734,33 @@
         const verticalPadding = trackItem.key === 'source' ? 12 : 8;
         const amplitudeScale = Math.max(12, (height / 2) - verticalPadding);
         const sampleCount = Math.max(1, Math.min(mins.length, maxs.length));
-        const stepX = width / Math.max(1, sampleCount - 1);
-        const projectedUpper = new Array(sampleCount);
-        const projectedLower = new Array(sampleCount);
-        for(let index = 0; index < sampleCount; index += 1){
+        const overscanPx = Math.min(width * 0.2, 320);
+        const renderStart = Math.max(0, scrollLeft - overscanPx);
+        const renderEnd = Math.min(renderWidth, scrollLeft + width + overscanPx);
+        const visibleStartIndex = clampNumber(Math.floor((renderStart / Math.max(1, renderWidth)) * sampleCount) - 1, 0, sampleCount - 1);
+        const visibleEndIndex = clampNumber(Math.ceil((renderEnd / Math.max(1, renderWidth)) * sampleCount) + 1, visibleStartIndex + 1, sampleCount);
+        const visibleCount = Math.max(1, visibleEndIndex - visibleStartIndex);
+        const projectedUpper = new Array(visibleCount);
+        const projectedLower = new Array(visibleCount);
+        for(let offset = 0; offset < visibleCount; offset += 1){
+          const index = visibleStartIndex + offset;
           const minValue = Math.max(-1, Math.min(0, Number(mins[index] ?? 0)));
           const maxValue = Math.max(0, Math.min(1, Number(maxs[index] ?? 0)));
-          projectedUpper[index] = centerY - (maxValue * amplitudeScale);
-          projectedLower[index] = centerY - (minValue * amplitudeScale);
+          projectedUpper[offset] = centerY - (maxValue * amplitudeScale);
+          projectedLower[offset] = centerY - (minValue * amplitudeScale);
         }
+        const projectX = (offset) => {
+          const index = visibleStartIndex + offset;
+          const pct = sampleCount <= 1 ? 0 : (index / (sampleCount - 1));
+          return (pct * renderWidth) - scrollLeft;
+        };
         ctx.beginPath();
-        ctx.moveTo(0, projectedUpper[0] ?? centerY);
-        for(let index = 1; index < sampleCount; index += 1){
-          ctx.lineTo(index * stepX, projectedUpper[index] ?? centerY);
+        ctx.moveTo(projectX(0), projectedUpper[0] ?? centerY);
+        for(let offset = 1; offset < visibleCount; offset += 1){
+          ctx.lineTo(projectX(offset), projectedUpper[offset] ?? centerY);
         }
-        for(let index = sampleCount - 1; index >= 0; index -= 1){
-          ctx.lineTo(index * stepX, projectedLower[index] ?? centerY);
+        for(let offset = visibleCount - 1; offset >= 0; offset -= 1){
+          ctx.lineTo(projectX(offset), projectedLower[offset] ?? centerY);
         }
         ctx.closePath();
         ctx.fillStyle = fillColor;
@@ -6750,17 +6774,28 @@
         ctx.stroke();
         ctx.strokeStyle = strokeColor;
         ctx.beginPath();
-        ctx.moveTo(0, projectedUpper[0] ?? centerY);
-        for(let index = 1; index < sampleCount; index += 1){
-          ctx.lineTo(index * stepX, projectedUpper[index] ?? centerY);
+        ctx.moveTo(projectX(0), projectedUpper[0] ?? centerY);
+        for(let offset = 1; offset < visibleCount; offset += 1){
+          ctx.lineTo(projectX(offset), projectedUpper[offset] ?? centerY);
         }
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(0, projectedLower[0] ?? centerY);
-        for(let index = 1; index < sampleCount; index += 1){
-          ctx.lineTo(index * stepX, projectedLower[index] ?? centerY);
+        ctx.moveTo(projectX(0), projectedLower[0] ?? centerY);
+        for(let offset = 1; offset < visibleCount; offset += 1){
+          ctx.lineTo(projectX(offset), projectedLower[offset] ?? centerY);
         }
         ctx.stroke();
+      };
+
+      const scheduleViewportRender = (trackItem) => {
+        if(!trackItem || !trackItem.dom || trackItem.dom.waveformRenderScheduled) return;
+        trackItem.dom.waveformRenderScheduled = true;
+        requestAnimationFrame(() => {
+          if(trackItem.dom){
+            trackItem.dom.waveformRenderScheduled = false;
+          }
+          drawTrackWaveform(trackItem);
+        });
       };
 
       const syncTrackUi = (trackItem) => {
@@ -6861,25 +6896,31 @@
         if(task.id){
           timelineTracks.forEach((trackItem) => {
             if((trackItem.pointCount || 0) >= requestedPointTarget) return;
-            ensureEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget)
-              .then((payload) => {
-                if(!payload || !overlay.isConnected) return;
-                const nextPointCount = Math.max(
-                  Array.isArray(payload.points) ? payload.points.length : 0,
-                  Array.isArray(payload.mins) ? payload.mins.length : 0,
-                  Array.isArray(payload.maxs) ? payload.maxs.length : 0,
-                  Math.round(Number(payload.point_count) || 0),
-                );
-                if(nextPointCount <= (trackItem.pointCount || 0)) return;
-                trackItem.points = Array.isArray(payload.points) ? payload.points : [];
-                trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
-                trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
-                trackItem.pointCount = nextPointCount;
-                trackItem.durationMs = Math.max(trackItem.durationMs || 0, Math.round(Number(payload.duration_ms) || 0));
-                trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
-                syncUi();
-              })
-              .catch(() => {});
+            if(trackItem.detailFetchTimer){
+              clearTimeout(trackItem.detailFetchTimer);
+            }
+            trackItem.detailFetchTimer = setTimeout(() => {
+              trackItem.detailFetchTimer = null;
+              ensureEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget)
+                .then((payload) => {
+                  if(!payload || !overlay.isConnected) return;
+                  const nextPointCount = Math.max(
+                    Array.isArray(payload.points) ? payload.points.length : 0,
+                    Array.isArray(payload.mins) ? payload.mins.length : 0,
+                    Array.isArray(payload.maxs) ? payload.maxs.length : 0,
+                    Math.round(Number(payload.point_count) || 0),
+                  );
+                  if(nextPointCount <= (trackItem.pointCount || 0)) return;
+                  trackItem.points = Array.isArray(payload.points) ? payload.points : [];
+                  trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
+                  trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
+                  trackItem.pointCount = nextPointCount;
+                  trackItem.durationMs = Math.max(trackItem.durationMs || 0, Math.round(Number(payload.duration_ms) || 0));
+                  trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
+                  syncUi();
+                })
+                .catch(() => {});
+            }, 120);
           });
         }
         if(wrap && Number.isFinite(Number(anchorClientX))){
@@ -7214,6 +7255,7 @@
 
         zoomWrap.addEventListener('scroll', (event) => {
           syncTimelineScroll(event.currentTarget.scrollLeft, event.currentTarget);
+          scheduleViewportRender(trackItem);
         });
         zoomWrap.addEventListener('wheel', (event) => {
           if(!event.altKey) return;
