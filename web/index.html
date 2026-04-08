@@ -2012,6 +2012,7 @@
     .editor-track--source .editor-track-body {
       padding-top: 8px;
       padding-bottom: 8px;
+      align-items: stretch;
     }
     .editor-wave-zoom-wrap {
       width: 100%;
@@ -2040,8 +2041,9 @@
       will-change: auto;
     }
     .editor-track--source .editor-wave-shell {
-      min-height: 194px;
+      min-height: 264px;
       height: 100%;
+      overflow: hidden;
     }
     .editor-wave-shell--placeholder {
       min-height: 30px;
@@ -2066,10 +2068,12 @@
       height: 42px;
     }
     .editor-track--source .editor-wave-canvas {
-      height: 194px;
+      height: 100%;
+      min-height: 264px;
     }
     .editor-track--source.is-active .editor-wave-canvas {
-      height: 210px;
+      height: 100%;
+      min-height: 280px;
     }
     .editor-wave-overlay {
       position: absolute;
@@ -5513,12 +5517,13 @@
       }catch(_){}
     }
 
-    function editorWaveformCacheKey(taskId, output){
-      return `${String(taskId || '')}::${String(output || 'source')}`;
+    function editorWaveformCacheKey(taskId, output, points){
+      return `${String(taskId || '')}::${String(output || 'source')}::${Math.max(0, Math.round(Number(points) || 0))}`;
     }
 
-    async function ensureEditorWaveformPayload(taskId, output = ''){
-      const cacheKey = editorWaveformCacheKey(taskId, output);
+    async function ensureEditorWaveformPayload(taskId, output = '', points = 1280){
+      const normalizedPoints = Math.max(640, Math.min(16384, Math.round(Number(points) || 1280)));
+      const cacheKey = editorWaveformCacheKey(taskId, output, normalizedPoints);
       if(editorWaveformPayloadCache.has(cacheKey)){
         return editorWaveformPayloadCache.get(cacheKey);
       }
@@ -5527,8 +5532,8 @@
       }
       const requested = String(output || '').trim();
       const url = requested
-        ? `/api/tasks/${encodeURIComponent(taskId)}/waveform?output=${encodeURIComponent(requested)}`
-        : `/api/tasks/${encodeURIComponent(taskId)}/waveform`;
+        ? `/api/tasks/${encodeURIComponent(taskId)}/waveform?output=${encodeURIComponent(requested)}&points=${normalizedPoints}`
+        : `/api/tasks/${encodeURIComponent(taskId)}/waveform?points=${normalizedPoints}`;
       const fetchPromise = fetch(url)
         .then((response) => response.ok ? response.json() : null)
         .then((payload) => {
@@ -5547,11 +5552,11 @@
 
     function primeTaskEditorAssets(task){
       if(!task || !task.id) return;
-      void ensureEditorWaveformPayload(task.id, '');
+      void ensureEditorWaveformPayload(task.id, '', 1280);
       if(String(task.stage || '').toLowerCase() === 'done' && Array.isArray(task.outputs)){
         task.outputs.forEach((output) => {
           if(!output) return;
-          void ensureEditorWaveformPayload(task.id, String(output));
+          void ensureEditorWaveformPayload(task.id, String(output), 1280);
         });
       }
     }
@@ -6011,14 +6016,20 @@
       currentVariant = editorVariants[0];
       const HISTORY_LIMIT = 20;
       const WAVE_ZOOM_MIN = 1;
-      const WAVE_ZOOM_MAX = 6;
+      const WAVE_ZOOM_MAX = 24;
       const TIMELINE_BASE_WIDTH = 1600;
       const RULER_HEIGHT = 32;
+      const EDITOR_WAVEFORM_POINTS_MIN = 1280;
+      const EDITOR_WAVEFORM_POINTS_MAX = 16384;
 
       const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
       const timelineRenderWidth = (zoomValue = waveZoom) => {
         const numericZoom = Number.isFinite(Number(zoomValue)) ? Number(zoomValue) : 1;
         return Math.max(TIMELINE_BASE_WIDTH, Math.round(TIMELINE_BASE_WIDTH * numericZoom));
+      };
+      const waveformPointTarget = (zoomValue = waveZoom) => {
+        const widthTarget = Math.round(timelineRenderWidth(zoomValue) * 1.35);
+        return clampNumber(widthTarget, EDITOR_WAVEFORM_POINTS_MIN, EDITOR_WAVEFORM_POINTS_MAX);
       };
       const resizeHiDPICanvas = (canvas, cssWidth, cssHeight) => {
         if(!canvas) return null;
@@ -6233,6 +6244,9 @@
           clip: cloneClipState(baseTrack.key === 'source' ? sourceOriginalClip : (draft || sourceOriginalClip)),
           durationMs: 0,
           points: [],
+          mins: [],
+          maxs: [],
+          pointCount: 0,
           dom: null,
           waveformLoaded: false,
           previewLoaded: false,
@@ -6693,36 +6707,60 @@
         ctx.fillStyle = currentVariant ? currentVariant.waveBg : 'rgba(12, 24, 31, 0.96)';
         ctx.fillRect(0, 0, width, height);
         const values = Array.isArray(trackItem.points) && trackItem.points.length ? trackItem.points : new Array(220).fill(0.12);
+        const mins = Array.isArray(trackItem.mins) && trackItem.mins.length ? trackItem.mins : values.map((value) => -(Number(value) || 0));
+        const maxs = Array.isArray(trackItem.maxs) && trackItem.maxs.length ? trackItem.maxs : values.map((value) => Number(value) || 0);
         const active = trackItem.key === activeTrackKey;
         const centerY = height / 2;
-        const lineColor = active
-          ? (currentVariant ? currentVariant.waveFill : 'rgba(142, 216, 255, 0.82)')
-          : (currentVariant ? currentVariant.waveFillDim : 'rgba(142, 216, 255, 0.58)');
-        const glowColor = active ? 'rgba(174, 230, 248, 0.08)' : 'rgba(142, 216, 255, 0.04)';
-        const strokeWidth = trackItem.key === 'source' ? 1.4 : 1.1;
-        const amplitudeScale = height * (trackItem.key === 'source' ? 0.45 : 0.38);
-        ctx.fillStyle = glowColor;
-        ctx.fillRect(0, centerY - 1, width, 2);
-        ctx.strokeStyle = lineColor;
-        ctx.lineWidth = strokeWidth;
-        ctx.lineCap = 'round';
-        for(let x = 0; x < width; x += 2){
-          const startIndex = Math.floor((x / width) * values.length);
-          const endIndex = Math.min(values.length, Math.ceil(((x + 2) / width) * values.length) + 1);
-          let peak = 0;
-          for(let index = startIndex; index < endIndex; index += 1){
-            const value = Number(values[index]) || 0;
-            const left = Number(values[index - 1] ?? value);
-            const right = Number(values[index + 1] ?? value);
-            peak = Math.max(peak, (left + value + right) / 3);
-          }
-          const amp = Math.max(0.028, Math.min(1, peak));
-          const extent = amp * amplitudeScale;
-          ctx.beginPath();
-          ctx.moveTo(x + 0.5, centerY - extent);
-          ctx.lineTo(x + 0.5, centerY + extent);
-          ctx.stroke();
+        const strokeColor = active
+          ? (currentVariant ? currentVariant.waveFill : 'rgba(214, 240, 252, 0.96)')
+          : 'rgba(189, 220, 234, 0.82)';
+        const fillColor = active
+          ? 'rgba(197, 229, 244, 0.96)'
+          : 'rgba(173, 209, 224, 0.82)';
+        const centerLineColor = active ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.10)';
+        const verticalPadding = trackItem.key === 'source' ? 12 : 8;
+        const amplitudeScale = Math.max(12, (height / 2) - verticalPadding);
+        const sampleCount = Math.max(1, Math.min(mins.length, maxs.length));
+        const stepX = width / Math.max(1, sampleCount - 1);
+        const projectedUpper = new Array(sampleCount);
+        const projectedLower = new Array(sampleCount);
+        for(let index = 0; index < sampleCount; index += 1){
+          const minValue = Math.max(-1, Math.min(0, Number(mins[index] ?? 0)));
+          const maxValue = Math.max(0, Math.min(1, Number(maxs[index] ?? 0)));
+          projectedUpper[index] = centerY - (maxValue * amplitudeScale);
+          projectedLower[index] = centerY - (minValue * amplitudeScale);
         }
+        ctx.beginPath();
+        ctx.moveTo(0, projectedUpper[0] ?? centerY);
+        for(let index = 1; index < sampleCount; index += 1){
+          ctx.lineTo(index * stepX, projectedUpper[index] ?? centerY);
+        }
+        for(let index = sampleCount - 1; index >= 0; index -= 1){
+          ctx.lineTo(index * stepX, projectedLower[index] ?? centerY);
+        }
+        ctx.closePath();
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, centerY + 0.5);
+        ctx.lineTo(width, centerY + 0.5);
+        ctx.strokeStyle = centerLineColor;
+        ctx.stroke();
+        ctx.strokeStyle = strokeColor;
+        ctx.beginPath();
+        ctx.moveTo(0, projectedUpper[0] ?? centerY);
+        for(let index = 1; index < sampleCount; index += 1){
+          ctx.lineTo(index * stepX, projectedUpper[index] ?? centerY);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, projectedLower[0] ?? centerY);
+        for(let index = 1; index < sampleCount; index += 1){
+          ctx.lineTo(index * stepX, projectedLower[index] ?? centerY);
+        }
+        ctx.stroke();
       };
 
       const syncTrackUi = (trackItem) => {
@@ -6819,6 +6857,31 @@
         }
         waveZoom = clampedZoom;
         syncUi();
+        const requestedPointTarget = waveformPointTarget(clampedZoom);
+        if(task.id){
+          timelineTracks.forEach((trackItem) => {
+            if((trackItem.pointCount || 0) >= requestedPointTarget) return;
+            ensureEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget)
+              .then((payload) => {
+                if(!payload || !overlay.isConnected) return;
+                const nextPointCount = Math.max(
+                  Array.isArray(payload.points) ? payload.points.length : 0,
+                  Array.isArray(payload.mins) ? payload.mins.length : 0,
+                  Array.isArray(payload.maxs) ? payload.maxs.length : 0,
+                  Math.round(Number(payload.point_count) || 0),
+                );
+                if(nextPointCount <= (trackItem.pointCount || 0)) return;
+                trackItem.points = Array.isArray(payload.points) ? payload.points : [];
+                trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
+                trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
+                trackItem.pointCount = nextPointCount;
+                trackItem.durationMs = Math.max(trackItem.durationMs || 0, Math.round(Number(payload.duration_ms) || 0));
+                trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
+                syncUi();
+              })
+              .catch(() => {});
+          });
+        }
         if(wrap && Number.isFinite(Number(anchorClientX))){
           const nextWidth = timelineRenderWidth(waveZoom);
           const maxScroll = Math.max(0, nextWidth - wrap.clientWidth);
@@ -6890,9 +6953,17 @@
         if(!trackItem || trackItem.waveformLoaded) return;
         if(task.id){
           try{
-            const payload = await ensureEditorWaveformPayload(task.id, trackItem.output || '');
+            const payload = await ensureEditorWaveformPayload(task.id, trackItem.output || '', waveformPointTarget());
             if(payload){
               trackItem.points = Array.isArray(payload.points) ? payload.points : [];
+              trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
+              trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
+              trackItem.pointCount = Math.max(
+                Array.isArray(trackItem.points) ? trackItem.points.length : 0,
+                Array.isArray(trackItem.mins) ? trackItem.mins.length : 0,
+                Array.isArray(trackItem.maxs) ? trackItem.maxs.length : 0,
+                Math.round(Number(payload.point_count) || 0),
+              );
               trackItem.durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
               trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
               if(trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){

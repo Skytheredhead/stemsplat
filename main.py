@@ -1255,7 +1255,9 @@ BOTH_SEPARATE_INSTRUMENTAL_START_PCT = 50
 BOTH_SEPARATE_INSTRUMENTAL_END_PCT = 95
 EXPORT_PROGRESS_START_PCT = 96
 EXPORT_PROGRESS_END_PCT = 99
-EDITOR_WAVEFORM_POINTS = 640
+EDITOR_WAVEFORM_POINTS = 1280
+EDITOR_WAVEFORM_POINTS_MIN = 640
+EDITOR_WAVEFORM_POINTS_MAX = 16384
 EDITOR_SAMPLE_RATE = 44_100
 
 MODE_CHOICES = set(MODE_TO_STEMS)
@@ -2659,6 +2661,51 @@ def _apply_clip_to_waveform(task: dict[str, Any], waveform: torch.Tensor) -> tup
     return waveform[:, start_sample:end_sample], clip
 
 
+def _coerce_editor_waveform_points(points: int | None) -> int:
+    try:
+        numeric = int(points or EDITOR_WAVEFORM_POINTS)
+    except Exception:
+        numeric = EDITOR_WAVEFORM_POINTS
+    return max(EDITOR_WAVEFORM_POINTS_MIN, min(EDITOR_WAVEFORM_POINTS_MAX, numeric))
+
+
+def _editor_waveform_payload_from_mono(
+    mono: torch.Tensor,
+    *,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any]:
+    total_samples = int(mono.shape[0])
+    duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
+    if total_samples <= 0:
+        return {"duration_ms": duration_ms, "points": [], "mins": [], "maxs": [], "point_count": 0}
+    normalized_points = _coerce_editor_waveform_points(points)
+    bucket_size = max(1, math.ceil(total_samples / max(8, normalized_points)))
+    payload_points: list[float] = []
+    payload_mins: list[float] = []
+    payload_maxs: list[float] = []
+    for start in range(0, total_samples, bucket_size):
+        stop = min(total_samples, start + bucket_size)
+        window = mono[start:stop]
+        if window.numel():
+            min_value = float(window.min().item())
+            max_value = float(window.max().item())
+            abs_peak = max(abs(min_value), abs(max_value))
+        else:
+            min_value = 0.0
+            max_value = 0.0
+            abs_peak = 0.0
+        payload_points.append(round(abs_peak, 4))
+        payload_mins.append(round(max(-1.0, min(1.0, min_value)), 4))
+        payload_maxs.append(round(max(-1.0, min(1.0, max_value)), 4))
+    return {
+        "duration_ms": duration_ms,
+        "points": payload_points,
+        "mins": payload_mins,
+        "maxs": payload_maxs,
+        "point_count": len(payload_points),
+    }
+
+
 def _editor_waveform_payload_for_path(audio_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
     temp_dir: Path | None = None
     wav_path = audio_path
@@ -2668,18 +2715,8 @@ def _editor_waveform_payload_for_path(audio_path: Path, *, points: int = EDITOR_
             temp_dir = Path(tempfile.mkdtemp(prefix="editor_waveform_", dir=str(WORK_DIR)))
             wav_path = _decode_audio_to_wav(audio_path, temp_dir, source_info.channels)
         waveform = _load_waveform(wav_path)
-        mono = waveform.abs().amax(dim=0) if waveform.shape[0] > 1 else waveform[0].abs()
-        total_samples = int(mono.shape[0])
-        duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
-        if total_samples <= 0:
-            return {"duration_ms": duration_ms, "points": []}
-        bucket_size = max(1, math.ceil(total_samples / max(8, points)))
-        payload_points: list[float] = []
-        for start in range(0, total_samples, bucket_size):
-            stop = min(total_samples, start + bucket_size)
-            window = mono[start:stop]
-            payload_points.append(round(float(window.max().item() if window.numel() else 0.0), 4))
-        return {"duration_ms": duration_ms, "points": payload_points}
+        mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+        return _editor_waveform_payload_from_mono(mono, points=points)
     finally:
         if temp_dir is not None:
             _cleanup_path(temp_dir)
@@ -2693,8 +2730,11 @@ def _editor_source_preview_path(task_id: str) -> Path:
     return _editor_cache_dir(task_id) / "source_preview.wav"
 
 
-def _editor_source_waveform_cache_path(task_id: str) -> Path:
-    return _editor_cache_dir(task_id) / "source_waveform.json"
+def _editor_source_waveform_cache_path(task_id: str, points: int = EDITOR_WAVEFORM_POINTS) -> Path:
+    normalized_points = _coerce_editor_waveform_points(points)
+    if normalized_points == EDITOR_WAVEFORM_POINTS:
+        return _editor_cache_dir(task_id) / "source_waveform.json"
+    return _editor_cache_dir(task_id) / f"source_waveform_{normalized_points}.json"
 
 
 def _editor_waveform_payload_from_tensor(
@@ -2702,18 +2742,8 @@ def _editor_waveform_payload_from_tensor(
     *,
     points: int = EDITOR_WAVEFORM_POINTS,
 ) -> dict[str, Any]:
-    mono = waveform.abs().amax(dim=0) if waveform.shape[0] > 1 else waveform[0].abs()
-    total_samples = int(mono.shape[0])
-    duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
-    if total_samples <= 0:
-        return {"duration_ms": duration_ms, "points": []}
-    bucket_size = max(1, math.ceil(total_samples / max(8, points)))
-    payload_points: list[float] = []
-    for start in range(0, total_samples, bucket_size):
-        stop = min(total_samples, start + bucket_size)
-        window = mono[start:stop]
-        payload_points.append(round(float(window.max().item() if window.numel() else 0.0), 4))
-    return {"duration_ms": duration_ms, "points": payload_points}
+    mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+    return _editor_waveform_payload_from_mono(mono, points=points)
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -2737,9 +2767,14 @@ def _read_editor_waveform_cache(path: Path) -> dict[str, Any] | None:
     if not isinstance(points, list):
         return None
     try:
+        mins = payload.get("mins")
+        maxs = payload.get("maxs")
         return {
             "duration_ms": max(0, int(round(float(duration_ms or 0)))),
             "points": [max(0.0, min(1.0, float(value or 0.0))) for value in points],
+            "mins": [max(-1.0, min(1.0, float(value or 0.0))) for value in mins] if isinstance(mins, list) else [],
+            "maxs": [max(-1.0, min(1.0, float(value or 0.0))) for value in maxs] if isinstance(maxs, list) else [],
+            "point_count": max(0, int(round(float(payload.get("point_count") or len(points))))),
         }
     except Exception:
         return None
@@ -2752,14 +2787,14 @@ def _cached_editor_source_preview_path(task_id: str) -> Path | None:
     return None
 
 
-def _cached_editor_source_waveform_payload(task_id: str) -> dict[str, Any] | None:
-    return _read_editor_waveform_cache(_editor_source_waveform_cache_path(task_id))
+def _cached_editor_source_waveform_payload(task_id: str, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any] | None:
+    return _read_editor_waveform_cache(_editor_source_waveform_cache_path(task_id, points))
 
 
-def _cache_editor_source_waveform(task_id: str, wav_path: Path) -> dict[str, Any]:
+def _cache_editor_source_waveform(task_id: str, wav_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
     waveform = _load_waveform(wav_path)
-    payload = _editor_waveform_payload_from_tensor(waveform)
-    _write_json_atomic(_editor_source_waveform_cache_path(task_id), payload)
+    payload = _editor_waveform_payload_from_tensor(waveform, points=points)
+    _write_json_atomic(_editor_source_waveform_cache_path(task_id, points), payload)
     return payload
 
 
@@ -7372,29 +7407,32 @@ async def task_preview_audio(task_id: str, output: str | None = None):
 
 
 @app.get("/api/tasks/{task_id}/waveform")
-async def task_waveform(task_id: str, output: str | None = None) -> dict[str, Any]:
+async def task_waveform(task_id: str, output: str | None = None, points: int | None = None) -> dict[str, Any]:
     try:
         task = _require_task(task_id)
     except AppError as exc:
         status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
         raise exc.to_http(status)
     requested = str(output or "").strip()
+    normalized_points = _coerce_editor_waveform_points(points)
     if not requested or requested == "source":
-        payload = _cached_editor_source_waveform_payload(task_id)
+        payload = _cached_editor_source_waveform_payload(task_id, normalized_points)
         if payload is None:
             preview_path = _ensure_editor_source_cache(task_id)
             if preview_path is not None:
-                payload = _cached_editor_source_waveform_payload(task_id)
+                payload = _cached_editor_source_waveform_payload(task_id, normalized_points)
+                if payload is None:
+                    payload = _cache_editor_source_waveform(task_id, preview_path, points=normalized_points)
         if payload is None:
             audio_path = _task_named_output_path(task, output)
-            payload = _editor_waveform_payload_for_path(audio_path)
+            payload = _editor_waveform_payload_for_path(audio_path, points=normalized_points)
     else:
         try:
             audio_path = _task_named_output_path(task, output)
         except AppError as exc:
             status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
             raise exc.to_http(status)
-        payload = _editor_waveform_payload_for_path(audio_path)
+        payload = _editor_waveform_payload_for_path(audio_path, points=normalized_points)
     payload.update(_task_clip_snapshot(task, duration_ms=int(payload.get("duration_ms") or 0)))
     return payload
 
