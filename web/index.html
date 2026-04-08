@@ -1121,6 +1121,9 @@
       opacity: .88;
       font-weight: 500;
     }
+    .editor-nle-card {
+      max-width: 1100px;
+    }
     .editor-toolbar {
       display: flex;
       align-items: center;
@@ -1129,9 +1132,69 @@
       flex-wrap: wrap;
       padding: 2px 0 6px;
     }
+    .editor-toolbar-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      width: 100%;
+    }
+    .editor-toolbar-cluster {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .editor-toolbar-spacer {
       width: 10px;
       flex: 0 0 auto;
+    }
+    .editor-toolbar-grow {
+      flex: 1 1 120px;
+      min-width: 0;
+    }
+    .editor-panel-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      opacity: 0.62;
+      margin: 4px 2px 0;
+    }
+    .editor-panel-label svg {
+      width: 16px;
+      height: 16px;
+      opacity: 0.85;
+      flex: 0 0 auto;
+    }
+    .editor-nle-body {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
+    }
+    .editor-tracks {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .editor-tracks.editor-tracks--lanes {
+      padding-top: 4px;
+      border-top: 1px solid rgba(255, 255, 255, 0.07);
+      margin-top: 2px;
+    }
+    .editor-wave-zoom-wrap {
+      border-radius: 16px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    .editor-track:not(.is-active) .editor-wave-zoom-wrap {
+      overflow: hidden;
     }
     .editor-tool-btn {
       min-width: 42px;
@@ -1167,21 +1230,26 @@
       padding: 0;
       width: 42px;
     }
-    .editor-tracks {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
     .editor-track {
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,.09);
       background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
       padding: 14px;
-      transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+      transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease, padding .18s ease;
     }
     .editor-track.is-active {
-      border-color: rgba(255,255,255,.18);
+      border-color: rgba(255,255,255,.22);
       box-shadow: 0 18px 28px rgba(0,0,0,.2);
+      padding: 16px;
+    }
+    .editor-track:not(.is-active) {
+      padding: 8px 12px 10px;
+      border-radius: 16px;
+      opacity: 0.92;
+    }
+    .editor-track:not(.is-active):hover {
+      border-color: rgba(255,255,255,.14);
+      opacity: 1;
     }
     .editor-track-head {
       display: flex;
@@ -1189,6 +1257,9 @@
       justify-content: space-between;
       gap: 12px;
       margin-bottom: 10px;
+    }
+    .editor-track:not(.is-active) .editor-track-head {
+      margin-bottom: 6px;
     }
     .editor-track-title {
       font-size: 12px;
@@ -1209,6 +1280,13 @@
       cursor: pointer;
       user-select: none;
       -webkit-user-select: none;
+      will-change: transform;
+    }
+    .editor-track.is-active .editor-wave-shell {
+      min-height: 168px;
+    }
+    .editor-track:not(.is-active) .editor-wave-shell {
+      padding: 6px 8px 8px;
     }
     .editor-wave-canvas {
       width: 100%;
@@ -1216,6 +1294,13 @@
       display: block;
       border-radius: 12px;
       background: rgba(9,18,23,.82);
+      transition: height .18s ease;
+    }
+    .editor-track.is-active .editor-wave-canvas {
+      height: 168px;
+    }
+    .editor-track:not(.is-active) .editor-wave-canvas {
+      height: 52px;
     }
     .editor-wave-overlay {
       position: absolute;
@@ -1224,6 +1309,15 @@
       top: 10px;
       height: 124px;
       pointer-events: auto;
+    }
+    .editor-track.is-active .editor-wave-overlay {
+      height: 168px;
+    }
+    .editor-track:not(.is-active) .editor-wave-overlay {
+      left: 8px;
+      right: 8px;
+      top: 6px;
+      height: 52px;
     }
     .editor-wave-selection {
       position: absolute;
@@ -1237,7 +1331,7 @@
     }
     .editor-marker {
       position: absolute;
-      top: -2px;
+      top: -3px;
       bottom: -2px;
       width: 0;
       transform: translateX(-1px);
@@ -1254,15 +1348,10 @@
     }
     .editor-marker-cap {
       position: absolute;
-      top: -10px;
-      width: 0;
-      height: 0;
-      border-left: 8px solid transparent;
-      border-right: 8px solid transparent;
-      border-top: 0;
-      border-bottom: 10px solid rgba(255,255,255,.96);
-      transform: translateX(-7px);
-      filter: drop-shadow(0 3px 8px rgba(0,0,0,.24));
+      top: -16px;
+      left: 0;
+      background: rgba(255,255,255,.98);
+      filter: drop-shadow(0 4px 10px rgba(0,0,0,.28));
     }
     .editor-marker-handle {
       position: absolute;
@@ -1277,13 +1366,43 @@
     .editor-marker-playhead.is-dragging .editor-marker-handle {
       cursor: grabbing;
     }
+    .editor-marker-playhead .editor-marker-line {
+      width: 2px;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.18), 0 0 18px rgba(255,255,255,.12);
+    }
+    .editor-marker-playhead .editor-marker-cap {
+      width: 18px;
+      height: 18px;
+      transform: translateX(-8px);
+      clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%);
+      border-radius: 4px 4px 6px 6px;
+    }
+    .editor-marker-in .editor-marker-cap,
+    .editor-marker-out .editor-marker-cap {
+      width: 18px;
+      height: 14px;
+      border-radius: 3px 3px 4px 4px;
+    }
     .editor-marker-in .editor-marker-cap {
-      left: 0;
       transform: translateX(1px);
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 38% 100%, 0 58%);
     }
     .editor-marker-out .editor-marker-cap {
-      left: 0;
-      transform: translateX(-15px) scaleX(-1);
+      transform: translateX(-17px);
+      clip-path: polygon(0 0, 100% 0, 100% 58%, 62% 100%, 0 100%);
+    }
+    .editor-track:not(.is-active) .editor-marker-cap {
+      transform: scale(0.82);
+      top: -12px;
+    }
+    .editor-track:not(.is-active) .editor-marker-in .editor-marker-cap {
+      transform: translateX(1px) scale(0.82);
+    }
+    .editor-track:not(.is-active) .editor-marker-out .editor-marker-cap {
+      transform: translateX(-17px) scale(0.82);
+    }
+    .editor-track:not(.is-active) .editor-marker-handle {
+      inset: -12px -8px -6px -8px;
     }
     .editor-track-meta {
       display: flex;
@@ -1338,6 +1457,125 @@
     .editor-wave-context button:hover {
       background: rgba(255,255,255,.1);
       transform: translateX(1px);
+    }
+    .queue-group-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .queue-group-parent-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+    }
+    .queue-group-parent-row .card {
+      position: relative;
+    }
+    .queue-group-parent-row .card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 14px;
+      pointer-events: none;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.05);
+    }
+    .queue-group-children {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+      transition: max-height .28s ease, opacity .22s ease, transform .22s ease, margin-top .22s ease;
+      transform-origin: top center;
+    }
+    .queue-group-shell.is-collapsed > .queue-group-children {
+      max-height: 0 !important;
+      opacity: 0;
+      transform: translateY(-8px);
+      margin-top: -4px;
+      pointer-events: none;
+    }
+    .queue-group-shell.is-expanded > .queue-group-children {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .queue-song-shell > .queue-group-children,
+    .queue-batch-shell > .queue-group-children {
+      padding-left: 24px;
+    }
+    .queue-batch-shell .queue-song-shell > .queue-group-children {
+      padding-left: 18px;
+    }
+    .queue-group-parent-row + .queue-group-children .item-row .card,
+    .queue-group-children > .item-row .card {
+      padding-top: 0.82rem;
+      padding-bottom: 0.82rem;
+    }
+    .queue-group-children > .item-row {
+      transform: scale(.97);
+      transform-origin: top center;
+    }
+    .queue-batch-shell .queue-group-children > .item-row,
+    .queue-batch-shell .queue-song-shell > .queue-group-children > .item-row {
+      transform: scale(.95);
+    }
+    .queue-batch-shell .queue-song-shell .queue-group-children > .item-row {
+      transform: scale(.93);
+    }
+    .queue-parent-caret {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.1);
+      background: rgba(255,255,255,.05);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      color: rgba(245,251,255,.88);
+      transition: transform .18s ease, background .16s ease, border-color .16s ease;
+    }
+    .queue-group-shell.is-expanded > .queue-group-parent-row .queue-parent-caret {
+      transform: rotate(90deg);
+      background: rgba(255,255,255,.1);
+      border-color: rgba(255,255,255,.16);
+    }
+    .queue-artwork-grid {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-template-rows: repeat(2, 1fr);
+      gap: 5px;
+      padding: 5px;
+      border-radius: inherit;
+      overflow: hidden;
+    }
+    .queue-artwork-grid[hidden] {
+      display: none !important;
+    }
+    .queue-artwork-grid-cell {
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(255,255,255,.14), rgba(255,255,255,.04));
+      overflow: hidden;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .queue-artwork-grid-cell.is-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      color: rgba(245,251,255,.92);
+      text-transform: uppercase;
+    }
+    .queue-group-parent-row .task-editor-btn {
+      align-self: center;
     }
     .preset-choice {
       width: 100%;
@@ -1940,11 +2178,9 @@
     <div class="item-row flex items-center gap-3">
       <button class="task-editor-btn self-center" type="button" title="edit clip" data-tooltip="edit song">
         <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 5v14"></path>
-          <path d="M19 5v14"></path>
-          <path d="M8 12h8"></path>
-          <path d="M10.5 9.5 8 12l2.5 2.5"></path>
-          <path d="M13.5 9.5 16 12l-2.5 2.5"></path>
+          <rect x="3.5" y="5" width="6" height="4" rx="1.7"></rect>
+          <rect x="5.5" y="15" width="8" height="4" rx="1.7"></rect>
+          <rect x="10.5" y="10" width="10" height="4" rx="1.7"></rect>
         </svg>
       </button>
       <div class="glass card rounded-xl px-4 py-4 flex-1">
@@ -2337,6 +2573,9 @@
     let dirPickerInput = null;
     let desktopLaunchAnimated = false;
     let queueContextMenuEl = null;
+    let queueGroupExpansionState = {};
+    const editorWaveformPayloadCache = new Map();
+    const editorWaveformFetches = new Map();
 
     function applyDesktopShellState(){
       const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
@@ -2779,7 +3018,7 @@
     updateStartButton();
     function updateStartButton(){
       if(!startBtn) return;
-      const hasItems = queue.children.length > 0;
+      const hasItems = queueTaskCount() > 0;
       if(!hasItems || startLock || storageBlocked || memoryBlocked || modelsBlocked){
         startBtn.disabled = true;
         const icon = startBtn.querySelector('svg');
@@ -3851,6 +4090,91 @@
     }
     function saveTasks(){ localStorage.setItem('tasks', JSON.stringify(tasks)); }
 
+    function makeUiGroupKey(prefix = 'group'){
+      if(window.crypto && typeof window.crypto.randomUUID === 'function'){
+        return `${prefix}-${window.crypto.randomUUID()}`;
+      }
+      return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function queueLeafRows(){
+      return Array.from(queue.querySelectorAll('.item-row'));
+    }
+
+    function queueDisplayEntries(){
+      return Array.from(queue.children || []);
+    }
+
+    function stemsIdentityKey(stems){
+      return normalizeStemList(stems).join('|');
+    }
+
+    function taskRowIdentity(task){
+      if(!task) return '';
+      if(task.id) return `id:${task.id}`;
+      return `temp:${task.tempKey || ''}:${stemsIdentityKey(task.stems || [])}`;
+    }
+
+    function queueTaskCount(){
+      return queueDisplayEntries().length;
+    }
+
+    function queueSongGroupKey(task){
+      if(task && task.tempKey) return `song:${task.tempKey}`;
+      if(task && task.id) return `song-id:${task.id}`;
+      return '';
+    }
+
+    function songDisplayTitle(name){
+      let text = String(name || '').trim();
+      if(!text) return 'untitled';
+      text = text.replace(/\.[^.]+$/u, '').trim();
+      text = text.replace(/^\s*\d{1,3}\s*[-._)\]]+\s*/u, '');
+      text = text.replace(/^\s*\d{1,3}\s+/u, '');
+      text = text.replace(/\s*[\[(](?:from|feat\.?|ft\.?|official|lyrics?|audio|video)[^)\]]*[\])]\s*$/iu, '');
+      text = text.replace(/\s+/g, ' ').trim();
+      return text || String(name || '').replace(/\.[^.]+$/u, '').trim() || 'untitled';
+    }
+
+    function megaCardTitle(tasksList, limit = 35){
+      const seen = new Set();
+      const names = [];
+      (Array.isArray(tasksList) ? tasksList : []).forEach((task) => {
+        const title = songDisplayTitle(task && task.name);
+        if(!title || seen.has(title)) return;
+        seen.add(title);
+        names.push(title);
+      });
+      if(!names.length) return 'songs';
+      let result = '';
+      for(const title of names){
+        const candidate = result ? `${result}, ${title}` : title;
+        if(candidate.length > limit){
+          break;
+        }
+        result = candidate;
+      }
+      if(!result){
+        result = names[0].slice(0, limit).trim();
+      }
+      if(result.length < names.join(', ').length){
+        result = `${result}${result.endsWith('…') ? '' : '…'}`;
+      }
+      return result;
+    }
+
+    function groupExpansionKey(kind, key){
+      return `${kind}:${key}`;
+    }
+
+    function isGroupExpanded(kind, key){
+      return !!queueGroupExpansionState[groupExpansionKey(kind, key)];
+    }
+
+    function setGroupExpanded(kind, key, expanded){
+      queueGroupExpansionState[groupExpansionKey(kind, key)] = !!expanded;
+    }
+
     function truncateFilename(name, max = 25){
       const text = String(name || '');
       if(text.length <= max) return text;
@@ -4023,6 +4347,7 @@
     }
 
     function canOpenTaskEditor(task){
+      if(task && task.disableEditor) return false;
       return !!(task && (task.id || taskPendingEntry(task)));
     }
 
@@ -4054,6 +4379,15 @@
       task.clip_enabled = !!clip.enabled;
     }
 
+    function taskGroupMembers(task){
+      if(!task) return [];
+      if(task.tempKey){
+        const grouped = tasks.filter((candidate) => candidate && candidate.tempKey === task.tempKey);
+        if(grouped.length) return grouped;
+      }
+      return [task];
+    }
+
     function syncPendingClipState(task, clip){
       const pending = taskPendingEntry(task);
       if(!pending) return;
@@ -4062,6 +4396,20 @@
         ? Math.round(Number(clip.endMs))
         : null;
       pending.clip_enabled = !!clip.enabled;
+    }
+
+    function syncPendingClipStateToGroup(task, clip){
+      if(task && task.tempKey){
+        pendingItems.forEach((pending) => {
+          if(!pending || pending.tempKey !== task.tempKey) return;
+          syncPendingClipState({ tempKey: pending.tempKey, id: pending.id }, clip);
+          pending.clip_start_ms = Math.max(0, Math.round(Number(clip.startMs) || 0));
+          pending.clip_end_ms = Number.isFinite(Number(clip.endMs)) && Number(clip.endMs) > 0 ? Math.round(Number(clip.endMs)) : null;
+          pending.clip_enabled = !!clip.enabled;
+        });
+        return;
+      }
+      syncPendingClipState(task, clip);
     }
 
     function editorTimeLabel(ms){
@@ -4159,9 +4507,58 @@
       }catch(_){}
     }
 
+    function editorWaveformCacheKey(taskId, output){
+      return `${String(taskId || '')}::${String(output || 'source')}`;
+    }
+
+    async function ensureEditorWaveformPayload(taskId, output = ''){
+      const cacheKey = editorWaveformCacheKey(taskId, output);
+      if(editorWaveformPayloadCache.has(cacheKey)){
+        return editorWaveformPayloadCache.get(cacheKey);
+      }
+      if(editorWaveformFetches.has(cacheKey)){
+        return editorWaveformFetches.get(cacheKey);
+      }
+      const requested = String(output || '').trim();
+      const url = requested
+        ? `/api/tasks/${encodeURIComponent(taskId)}/waveform?output=${encodeURIComponent(requested)}`
+        : `/api/tasks/${encodeURIComponent(taskId)}/waveform`;
+      const fetchPromise = fetch(url)
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload) => {
+          if(payload && typeof payload === 'object'){
+            editorWaveformPayloadCache.set(cacheKey, payload);
+          }
+          return payload;
+        })
+        .catch(() => null)
+        .finally(() => {
+          editorWaveformFetches.delete(cacheKey);
+        });
+      editorWaveformFetches.set(cacheKey, fetchPromise);
+      return fetchPromise;
+    }
+
+    function primeTaskEditorAssets(task){
+      if(!task || !task.id) return;
+      void ensureEditorWaveformPayload(task.id, '');
+      if(String(task.stage || '').toLowerCase() === 'done' && Array.isArray(task.outputs)){
+        task.outputs.forEach((output) => {
+          if(!output) return;
+          void ensureEditorWaveformPayload(task.id, String(output));
+        });
+      }
+    }
+
     function bindTaskEditorButton(btn, task){
       if(!btn) return;
       bindDelayedTooltip(btn);
+      const host = btn.closest('.item-row, .queue-group-parent-row');
+      if(host && host.dataset.forceHideEditor === '1'){
+        btn.hidden = true;
+        btn.disabled = true;
+        return;
+      }
       const visible = canOpenTaskEditor(task);
       btn.hidden = !visible;
       btn.disabled = !visible;
@@ -4177,7 +4574,8 @@
       if(!task) return;
       const pending = taskPendingEntry(task);
       const { overlay, card } = createOverlayCard('editor');
-      card.style.maxWidth = '980px';
+      card.classList.add('editor-nle-card');
+      card.style.maxWidth = '1100px';
       const titleEl = card.querySelector('h3');
       titleEl.className = 'editor-title';
       titleEl.textContent = '';
@@ -4194,32 +4592,52 @@
       let playheadMs = sourceOriginalClip.startMs || 0;
       let activeObjectUrl = '';
       let activeTrackKey = 'source';
+      let loadedPreviewTrackKey = '';
       let closingEditor = false;
       let dragState = null;
       let clickLockUntil = 0;
       let contextMenuEl = null;
-
-      const toolbar = document.createElement('div');
-      toolbar.className = 'editor-toolbar';
-      card.appendChild(toolbar);
+      let playbackFrame = 0;
+      let dismissLockUntil = 0;
+      let editorToolMode = 'select';
+      let waveZoom = 1;
 
       const svgIcon = (kind) => {
-        if(kind === 'magnet') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6a6 6 0 0 0 12 0V3"></path><path d="M6 3h4"></path><path d="M14 3h4"></path></svg>';
-        if(kind === 'start') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14"></path><path d="M18 6l-8 6 8 6V6Z"></path></svg>';
-        if(kind === 'jump-in') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5v14"></path><path d="m17 18-8-6 8-6"></path></svg>';
-        if(kind === 'play') return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.69l9.2-6.2a.8.8 0 0 0 0-1.38l-9.2-6.2A.8.8 0 0 0 8 5.8Z"/></svg>';
-        if(kind === 'pause') return '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="4" height="14" rx="1.2"></rect><rect x="13" y="5" width="4" height="14" rx="1.2"></rect></svg>';
-        if(kind === 'jump-out') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 5v14"></path><path d="m7 18 8-6-8-6"></path></svg>';
-        if(kind === 'end') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14"></path><path d="M6 6l8 6-8 6V6Z"></path></svg>';
+        const g = '<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">';
+        const svgEnd = '</g></svg>';
+        const svgOpen = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">';
+        if(kind === 'magnet') return `${svgOpen}${g}<path d="M9 3.5h3.5V7H9z"/><path d="M11.5 7v2.5a2.5 2.5 0 1 0 5 0V7"/><path d="M14.5 3.5H18V7h-3.5"/><path d="M8.5 11.5V18a3.5 3.5 0 1 0 7 0v-6.5"/>${svgEnd}`;
+        if(kind === 'select') return `${svgOpen}${g}<path d="M5.5 4.5 10 9l-2.5.5.5 2.5L13 19l2-2-7-7 2.5-.5L5.5 4.5z"/><path d="m13 17 3 3"/>${svgEnd}`;
+        if(kind === 'razor') return `${svgOpen}${g}<path d="M5 19 19 5"/><path d="M8 5h3l2.5 3.5"/><path d="M14 16h3l-2.5-3.5"/><circle cx="7" cy="7" r="1.6"/><circle cx="17" cy="17" r="1.6"/>${svgEnd}`;
+        if(kind === 'slip') return `${svgOpen}${g}<path d="M7 7v10"/><path d="M17 7v10"/><path d="M9.5 9.5h-4"/><path d="M9.5 14.5h-4"/><path d="M14.5 9.5h4"/><path d="M14.5 14.5h4"/>${svgEnd}`;
+        if(kind === 'slide') return `${svgOpen}${g}<path d="M5 9h4v6H5z"/><path d="M15 9h4v6h-4z"/><path d="M9 12h6"/>${svgEnd}`;
+        if(kind === 'timeline') return `${svgOpen}${g}<rect x="4" y="5" width="8" height="3.5" rx="1.75"/><rect x="9" y="10.25" width="11" height="3.5" rx="1.75"/><rect x="4" y="15.5" width="7" height="3.5" rx="1.75"/>${svgEnd}`;
+        if(kind === 'monitor') return `${svgOpen}${g}<rect x="5" y="6" width="14" height="12" rx="2.5"/><path d="M9 21h6"/>${svgEnd}`;
+        if(kind === 'in') return `${svgOpen}${g}<path d="M10 5H7v14h3"/>${svgEnd}`;
+        if(kind === 'out') return `${svgOpen}${g}<path d="M14 5h3v14h-3"/>${svgEnd}`;
+        if(kind === 'clear') return `${svgOpen}${g}<path d="M7 7h10v10H7z" stroke-dasharray="2.5 2"/><path d="m8.5 8.5 7 7"/><path d="m15.5 8.5-7 7"/>${svgEnd}`;
+        if(kind === 'zoom-in') return `${svgOpen}${g}<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15 20 20"/><path d="M10.5 8v5"/><path d="M8 10.5h5"/>${svgEnd}`;
+        if(kind === 'zoom-out') return `${svgOpen}${g}<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15 20 20"/><path d="M8 10.5h5"/>${svgEnd}`;
+        if(kind === 'start') return `${svgOpen}${g}<path d="M6 5v14"/><path d="M18 6l-8 6 8 6V6Z"/>${svgEnd}`;
+        if(kind === 'jump-in') return `${svgOpen}${g}<path d="M7 5v14"/><path d="m17 18-8-6 8-6"/>${svgEnd}`;
+        if(kind === 'play') return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M8 5.8v12.4a.8.8 0 0 0 1.2.69l9.2-6.2a.8.8 0 0 0 0-1.38l-9.2-6.2A.8.8 0 0 0 8 5.8Z"/></svg>';
+        if(kind === 'pause') return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="7" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="13" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg>';
+        if(kind === 'jump-out') return `${svgOpen}${g}<path d="M17 5v14"/><path d="m7 18 8-6-8-6"/>${svgEnd}`;
+        if(kind === 'end') return `${svgOpen}${g}<path d="M18 5v14"/><path d="M6 6l8 6-8 6V6Z"/>${svgEnd}`;
         return '';
       };
 
-      const makeToolButton = ({ icon = '', label = '', compact = false, primary = false, active = false, title = '' } = {}) => {
+      const makeToolButton = ({ icon = '', label = '', compact = false, primary = false, active = false, title = '', dataset = null } = {}) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = `editor-tool-btn ${primary ? 'bg-white text-black' : ''} ${active ? 'is-active' : ''}`.trim();
         if(compact) btn.dataset.compact = 'true';
         if(title) btn.title = title;
+        if(dataset && typeof dataset === 'object'){
+          Object.keys(dataset).forEach((key) => {
+            btn.dataset[key] = String(dataset[key]);
+          });
+        }
         if(icon){
           btn.innerHTML = icon;
         }
@@ -4232,34 +4650,73 @@
       };
 
       const buttons = {
+        select: makeToolButton({ icon: svgIcon('select'), compact: true, active: true, title: 'selection', dataset: { editorTool: 'select' } }),
+        razor: makeToolButton({ icon: svgIcon('razor'), compact: true, title: 'razor', dataset: { editorTool: 'razor' } }),
+        slip: makeToolButton({ icon: svgIcon('slip'), compact: true, title: 'slip', dataset: { editorTool: 'slip' } }),
+        slide: makeToolButton({ icon: svgIcon('slide'), compact: true, title: 'slide', dataset: { editorTool: 'slide' } }),
         magnet: makeToolButton({ icon: svgIcon('magnet'), compact: true, active: snapEnabled, title: snapEnabled ? 'snapping on' : 'snapping off' }),
         start: makeToolButton({ icon: svgIcon('start'), compact: true, title: 'skip to beginning' }),
         jumpIn: makeToolButton({ icon: svgIcon('jump-in'), compact: true, title: 'skip to in point' }),
         play: makeToolButton({ icon: svgIcon('play'), compact: true, primary: true, title: 'play' }),
         jumpOut: makeToolButton({ icon: svgIcon('jump-out'), compact: true, title: 'skip to out point' }),
         end: makeToolButton({ icon: svgIcon('end'), compact: true, title: 'skip to end' }),
-        setIn: makeToolButton({ label: 'set in', title: 'set in point' }),
-        setOut: makeToolButton({ label: 'set out', title: 'set out point' }),
-        clear: makeToolButton({ label: 'clear trim', title: 'clear trim' }),
+        setIn: makeToolButton({ icon: svgIcon('in'), compact: true, title: 'set in point (i)' }),
+        setOut: makeToolButton({ icon: svgIcon('out'), compact: true, title: 'set out point (o)' }),
+        clear: makeToolButton({ icon: svgIcon('clear'), compact: true, title: 'clear trim' }),
+        zoomOut: makeToolButton({ icon: svgIcon('zoom-out'), compact: true, title: 'zoom out' }),
+        zoomIn: makeToolButton({ icon: svgIcon('zoom-in'), compact: true, title: 'zoom in' }),
       };
-      toolbar.append(buttons.magnet);
-      const spacer = document.createElement('div');
-      spacer.className = 'editor-toolbar-spacer';
-      toolbar.appendChild(spacer);
-      [buttons.start, buttons.jumpIn, buttons.play, buttons.jumpOut, buttons.end, buttons.setIn, buttons.setOut, buttons.clear].forEach((button) => toolbar.appendChild(button));
 
-      const tracksShell = document.createElement('div');
-      tracksShell.className = 'editor-tracks';
-      card.appendChild(tracksShell);
+      const toolbarWrap = document.createElement('div');
+      toolbarWrap.className = 'flex flex-col gap-2 w-full';
+
+      const rowTools = document.createElement('div');
+      rowTools.className = 'editor-toolbar-row';
+      const clusterModes = document.createElement('div');
+      clusterModes.className = 'editor-toolbar-cluster';
+      [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((b) => clusterModes.appendChild(b));
 
       const meta = document.createElement('div');
-      meta.className = 'editor-meta-grid';
+      meta.className = 'editor-meta-grid editor-toolbar-grow';
+      meta.style.minWidth = '0';
       meta.innerHTML = `
-        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">in</div><div class="text-sm" data-role="in-label">0:00.00</div></div>
-        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">out</div><div class="text-sm" data-role="out-label">0:00.00</div></div>
-        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">cursor</div><div class="text-sm" data-role="cursor-label">0:00.00</div></div>
+        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">in</div><div class="text-sm font-mono tabular-nums" data-role="in-label">0:00.00</div></div>
+        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">out</div><div class="text-sm font-mono tabular-nums" data-role="out-label">0:00.00</div></div>
+        <div class="editor-meta-chip"><div class="text-[11px] uppercase tracking-[0.16em] opacity-60">playhead</div><div class="text-sm font-mono tabular-nums" data-role="cursor-label">0:00.00</div></div>
       `;
-      card.appendChild(meta);
+      rowTools.append(clusterModes, meta);
+      toolbarWrap.appendChild(rowTools);
+
+      const rowTransport = document.createElement('div');
+      rowTransport.className = 'editor-toolbar-row';
+      const clusterTransport = document.createElement('div');
+      clusterTransport.className = 'editor-toolbar-cluster';
+      const spacer = document.createElement('div');
+      spacer.className = 'editor-toolbar-spacer';
+      clusterTransport.append(buttons.magnet, spacer, buttons.start, buttons.jumpIn, buttons.play, buttons.jumpOut, buttons.end);
+      const clusterTrim = document.createElement('div');
+      clusterTrim.className = 'editor-toolbar-cluster';
+      clusterTrim.append(buttons.setIn, buttons.setOut, buttons.clear, buttons.zoomOut, buttons.zoomIn);
+      rowTransport.append(clusterTransport, clusterTrim);
+      toolbarWrap.appendChild(rowTransport);
+      card.appendChild(toolbarWrap);
+
+      const nleBody = document.createElement('div');
+      nleBody.className = 'editor-nle-body';
+      const monitorLabel = document.createElement('div');
+      monitorLabel.className = 'editor-panel-label';
+      monitorLabel.innerHTML = `${svgIcon('monitor')}<span>source monitor</span>`;
+      const monitorShell = document.createElement('div');
+      monitorShell.className = 'editor-tracks';
+      const timelineLabel = document.createElement('div');
+      timelineLabel.className = 'editor-panel-label';
+      timelineLabel.innerHTML = `${svgIcon('timeline')}<span>timeline</span>`;
+      timelineLabel.hidden = true;
+      const lanesShell = document.createElement('div');
+      lanesShell.className = 'editor-tracks editor-tracks--lanes';
+      lanesShell.hidden = true;
+      nleBody.append(monitorLabel, monitorShell, timelineLabel, lanesShell);
+      card.appendChild(nleBody);
 
       const actions = document.createElement('div');
       actions.className = 'flex gap-2 justify-end';
@@ -4300,6 +4757,26 @@
       });
 
       const activeTrack = () => tracks.find((trackItem) => trackItem.key === activeTrackKey) || tracks[0];
+
+      const repositionTracksForNle = () => {
+        const active = activeTrack();
+        tracks.forEach((t) => {
+          if(t.dom && t.dom.track.parentNode){
+            t.dom.track.remove();
+          }
+        });
+        if(active && active.dom && active.dom.track){
+          monitorShell.appendChild(active.dom.track);
+        }
+        tracks.forEach((t) => {
+          if(t.key !== activeTrackKey && t.dom && t.dom.track){
+            lanesShell.appendChild(t.dom.track);
+          }
+        });
+        const multi = tracks.length > 1;
+        lanesShell.hidden = !multi;
+        timelineLabel.hidden = !multi;
+      };
 
       const closeContextMenu = () => {
         if(contextMenuEl && contextMenuEl.parentNode){
@@ -4363,6 +4840,38 @@
         buttons.play.title = paused ? 'play' : 'pause';
       };
 
+      const syncPlaybackFrame = () => {
+        playbackFrame = 0;
+        if(audio.paused) return;
+        playheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        const trackItem = activeTrack();
+        if(trackItem){
+          const outMs = trackItem.clip.enabled
+            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
+            : trackItem.durationMs;
+          if(outMs > 0 && playheadMs >= outMs){
+            audio.pause();
+            playheadMs = outMs;
+            try { audio.currentTime = outMs / 1000; } catch(_) {}
+            syncUi();
+            return;
+          }
+        }
+        syncUi();
+        playbackFrame = requestAnimationFrame(syncPlaybackFrame);
+      };
+
+      const startPlaybackLoop = () => {
+        if(playbackFrame) return;
+        playbackFrame = requestAnimationFrame(syncPlaybackFrame);
+      };
+
+      const stopPlaybackLoop = () => {
+        if(!playbackFrame) return;
+        cancelAnimationFrame(playbackFrame);
+        playbackFrame = 0;
+      };
+
       const drawTrackWaveform = (trackItem) => {
         if(!trackItem || !trackItem.dom || !trackItem.dom.ctx) return;
         const { canvas, ctx } = trackItem.dom;
@@ -4410,21 +4919,50 @@
         cursorLabel.textContent = editorTimeLabel(playheadMs);
       };
 
+      const applyWaveZoom = () => {
+        tracks.forEach((t) => {
+          if(!t.dom || !t.dom.waveShell || !t.dom.zoomWrap) return;
+          if(t.key === activeTrackKey){
+            t.dom.waveShell.style.transformOrigin = 'left center';
+            t.dom.waveShell.style.transform = waveZoom > 1 ? `scaleX(${waveZoom})` : '';
+            t.dom.zoomWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
+          }else{
+            t.dom.waveShell.style.transform = '';
+            t.dom.zoomWrap.style.overflowX = 'hidden';
+          }
+        });
+      };
+
+      const syncEditorToolUi = () => {
+        [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((b) => {
+          const mode = b.dataset.editorTool;
+          if(!mode) return;
+          b.classList.toggle('is-active', editorToolMode === mode);
+        });
+      };
+
       const syncUi = () => {
         tracks.forEach(syncTrackUi);
         syncMetaUi();
+        applyWaveZoom();
+        syncEditorToolUi();
         buttons.magnet.classList.toggle('is-active', snapEnabled);
         buttons.magnet.title = snapEnabled ? 'snapping on' : 'snapping off';
         syncPlayButton();
       };
 
-      const loadPreviewForTrack = async (trackItem, { preservePlayhead = true } = {}) => {
+      const loadPreviewForTrack = async (trackItem, { preservePlayhead = true, force = false } = {}) => {
         if(!trackItem) return;
+        if(!force && loadedPreviewTrackKey === trackItem.key && audio.src){
+          return;
+        }
+        stopPlaybackLoop();
+        const resumeAfterLoad = !audio.paused && loadedPreviewTrackKey === trackItem.key;
+        audio.pause();
         if(activeObjectUrl){
           URL.revokeObjectURL(activeObjectUrl);
           activeObjectUrl = '';
         }
-        audio.pause();
         if(task.id){
           const previewUrl = trackItem.output
             ? `/api/tasks/${task.id}/preview_audio?output=${encodeURIComponent(trackItem.output)}`
@@ -4434,17 +4972,19 @@
           activeObjectUrl = URL.createObjectURL(pending.file);
           audio.src = activeObjectUrl;
         }
+        loadedPreviewTrackKey = trackItem.key;
         audio.load();
         trackItem.previewLoaded = true;
-        if(preservePlayhead){
-          const targetMs = Math.max(0, Math.min(trackItem.durationMs || 0, playheadMs));
-          if(targetMs > 0){
-            const seek = () => {
-              try { audio.currentTime = targetMs / 1000; } catch(_) {}
-              audio.removeEventListener('loadedmetadata', seek);
-            };
-            audio.addEventListener('loadedmetadata', seek);
+        const targetMs = Math.max(0, Math.min(trackItem.durationMs || 0, playheadMs));
+        const seek = async () => {
+          try { audio.currentTime = targetMs / 1000; } catch(_) {}
+          if(resumeAfterLoad){
+            try { await audio.play(); } catch(_) {}
           }
+          audio.removeEventListener('loadedmetadata', seek);
+        };
+        if(preservePlayhead || resumeAfterLoad){
+          audio.addEventListener('loadedmetadata', seek);
         }
       };
 
@@ -4452,12 +4992,8 @@
         if(!trackItem || trackItem.waveformLoaded) return;
         if(task.id){
           try{
-            const waveformUrl = trackItem.output
-              ? `/api/tasks/${task.id}/waveform?output=${encodeURIComponent(trackItem.output)}`
-              : `/api/tasks/${task.id}/waveform`;
-            const response = await fetch(waveformUrl, { cache: 'no-store' });
-            if(response.ok){
-              const payload = await response.json();
+            const payload = await ensureEditorWaveformPayload(task.id, trackItem.output || '');
+            if(payload){
               trackItem.points = Array.isArray(payload.points) ? payload.points : [];
               trackItem.durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
               if(trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){
@@ -4476,9 +5012,55 @@
       };
 
       const setActiveTrack = async (trackKey, { preservePlayhead = true } = {}) => {
+        const changed = activeTrackKey !== trackKey;
         activeTrackKey = trackKey;
+        if(changed){
+          repositionTracksForNle();
+        }
         syncUi();
-        await loadPreviewForTrack(activeTrack(), { preservePlayhead });
+        if(changed || !loadedPreviewTrackKey){
+          await loadPreviewForTrack(activeTrack(), { preservePlayhead, force: changed });
+        }
+      };
+
+      const setPlayhead = (nextMs) => {
+        playheadMs = Math.max(0, Math.round(Number(nextMs) || 0));
+        try { audio.currentTime = playheadMs / 1000; } catch(_) {}
+        syncUi();
+      };
+
+      const setInPoint = () => {
+        const trackItem = activeTrack();
+        trackItem.clip.startMs = nearestSnapValue(playheadMs, trackItem.key, 'in');
+        trackItem.clip.enabled = true;
+        syncUi();
+      };
+
+      const setOutPoint = () => {
+        const trackItem = activeTrack();
+        trackItem.clip.endMs = nearestSnapValue(playheadMs, trackItem.key, 'out');
+        trackItem.clip.enabled = true;
+        syncUi();
+      };
+
+      const togglePlayback = async () => {
+        const trackItem = activeTrack();
+        await loadPreviewForTrack(trackItem);
+        if(audio.paused){
+          const outMs = trackItem.clip.enabled
+            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
+            : trackItem.durationMs;
+          if(outMs > 0 && playheadMs >= outMs){
+            playheadMs = trackItem.clip.startMs;
+          }
+          try { audio.currentTime = playheadMs / 1000; } catch(_) {}
+          try { await audio.play(); } catch(_) {}
+          startPlaybackLoop();
+        }else{
+          audio.pause();
+          stopPlaybackLoop();
+        }
+        syncUi();
       };
 
       const openContextMenuForTrack = (trackItem, clientX, clientY) => {
@@ -4517,6 +5099,8 @@
         contextMenuEl = menu;
       };
 
+      overlay.__dismissGuard = () => !!dragState || Date.now() < dismissLockUntil;
+
       const createTrackUi = (trackItem) => {
         const trackEl = document.createElement('div');
         trackEl.className = 'editor-track';
@@ -4526,8 +5110,16 @@
         title.className = 'editor-track-title';
         title.textContent = trackItem.label;
         head.appendChild(title);
+        head.style.cursor = 'pointer';
+        head.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await setActiveTrack(trackItem.key);
+        });
         trackEl.appendChild(head);
 
+        const zoomWrap = document.createElement('div');
+        zoomWrap.className = 'editor-wave-zoom-wrap';
         const waveShell = document.createElement('div');
         waveShell.className = 'editor-wave-shell';
         waveShell.innerHTML = `
@@ -4551,7 +5143,8 @@
             </div>
           </div>
         `;
-        trackEl.appendChild(waveShell);
+        zoomWrap.appendChild(waveShell);
+        trackEl.appendChild(zoomWrap);
 
         const canvas = waveShell.querySelector('.editor-wave-canvas');
         const ctx = canvas.getContext('2d');
@@ -4570,13 +5163,17 @@
           inMarker,
           playhead: playheadMarker,
           outMarker,
+          waveShell,
+          zoomWrap,
         };
 
         overlayEl.querySelectorAll('.editor-marker-handle').forEach((handle) => {
           handle.addEventListener('pointerdown', async (event) => {
+            if(event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
             closeContextMenu();
+            dismissLockUntil = Date.now() + 320;
             const role = handle.dataset.role || 'playhead';
             dragState = {
               kind: role,
@@ -4590,15 +5187,22 @@
           });
         });
 
-        waveShell.addEventListener('click', async (event) => {
+        waveShell.addEventListener('pointerdown', async (event) => {
+          if(event.button !== 0) return;
           if(Date.now() < clickLockUntil) return;
           if(event.target.closest('.editor-marker-handle')) return;
+          event.preventDefault();
           closeContextMenu();
+          dismissLockUntil = Date.now() + 320;
           await setActiveTrack(trackItem.key);
           const nextMs = nearestSnapValue(msFromClientX(trackItem, event.clientX), trackItem.key, 'playhead');
-          playheadMs = nextMs;
-          try { audio.currentTime = playheadMs / 1000; } catch(_) {}
-          syncUi();
+          setPlayhead(nextMs);
+          dragState = {
+            kind: 'playhead',
+            trackKey: trackItem.key,
+            moved: false,
+          };
+          playheadMarker.classList.add('is-dragging');
         });
 
         waveShell.addEventListener('contextmenu', async (event) => {
@@ -4608,10 +5212,10 @@
           openContextMenuForTrack(trackItem, event.clientX, event.clientY);
         });
 
-        tracksShell.appendChild(trackEl);
       };
 
       tracks.forEach(createTrackUi);
+      repositionTracksForNle();
 
       const saveEditorChanges = async (reason) => {
         if(reason === 'cancel'){
@@ -4623,27 +5227,34 @@
         normalizeTrackClip(sourceTrack);
         const payload = cloneClipState(sourceTrack.clip);
         if(task.id){
-          const res = await fetch(`/api/tasks/${task.id}/edit`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              clip_start_ms: payload.startMs,
-              clip_end_ms: payload.endMs,
-              clip_enabled: payload.enabled,
-            }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if(!res.ok){
-            throw new Error((data && data.detail && data.detail.message) || 'could not save editor changes');
-          }
-          applyClipState(task, {
-            startMs: data.clip_start_ms,
-            endMs: data.clip_end_ms,
-            enabled: data.clip_enabled,
+          const members = taskGroupMembers(task).filter((member) => member && member.id);
+          const requestBody = {
+            clip_start_ms: payload.startMs,
+            clip_end_ms: payload.endMs,
+            clip_enabled: payload.enabled,
+          };
+          const responses = await Promise.all(members.map(async (member) => {
+            const res = await fetch(`/api/tasks/${member.id}/edit`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(requestBody),
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok){
+              throw new Error((data && data.detail && data.detail.message) || 'could not save editor changes');
+            }
+            return { member, data };
+          }));
+          responses.forEach(({ member, data }) => {
+            applyClipState(member, {
+              startMs: data.clip_start_ms,
+              endMs: data.clip_end_ms,
+              enabled: data.clip_enabled,
+            });
           });
         }else{
-          applyClipState(task, payload);
-          syncPendingClipState(task, payload);
+          taskGroupMembers(task).forEach((member) => applyClipState(member, payload));
+          syncPendingClipStateToGroup(task, payload);
         }
         saveTasks();
         updateUI();
@@ -4679,6 +5290,7 @@
         if(trackItem && trackItem.dom){
           trackItem.dom.playhead.classList.remove('is-dragging');
         }
+        dismissLockUntil = Date.now() + 220;
         if(dragState.moved){
           clickLockUntil = Date.now() + 140;
         }
@@ -4693,11 +5305,37 @@
       document.addEventListener('pointermove', handleDocumentPointerMove);
       document.addEventListener('pointerup', handleDocumentPointerUp);
       document.addEventListener('pointerdown', handleDocumentPointerDown);
+      const handleEditorKeydown = async (event) => {
+        if(!overlay.isConnected) return;
+        const target = event.target;
+        if(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if(event.repeat && (event.code === 'Space' || event.code === 'KeyI' || event.code === 'KeyO')) return;
+        if(event.code === 'Space'){
+          event.preventDefault();
+          event.stopPropagation();
+          await togglePlayback();
+          return;
+        }
+        if(event.code === 'KeyI'){
+          event.preventDefault();
+          event.stopPropagation();
+          setInPoint();
+          return;
+        }
+        if(event.code === 'KeyO'){
+          event.preventDefault();
+          event.stopPropagation();
+          setOutPoint();
+        }
+      };
+      document.addEventListener('keydown', handleEditorKeydown, true);
       overlay.__cleanupFns.push(() => {
         document.removeEventListener('pointermove', handleDocumentPointerMove);
         document.removeEventListener('pointerup', handleDocumentPointerUp);
         document.removeEventListener('pointerdown', handleDocumentPointerDown);
+        document.removeEventListener('keydown', handleEditorKeydown, true);
         closeContextMenu();
+        stopPlaybackLoop();
         try { audio.pause(); } catch(_) {}
         if(activeObjectUrl){ URL.revokeObjectURL(activeObjectUrl); activeObjectUrl = ''; }
       });
@@ -4749,10 +5387,29 @@
         }
         syncUi();
       });
-      audio.addEventListener('pause', syncUi);
-      audio.addEventListener('play', syncUi);
-      audio.addEventListener('ended', syncUi);
+      audio.addEventListener('pause', () => { stopPlaybackLoop(); syncUi(); });
+      audio.addEventListener('play', () => { startPlaybackLoop(); syncUi(); });
+      audio.addEventListener('ended', () => { stopPlaybackLoop(); syncUi(); });
 
+      [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((btn) => {
+        guardClick(btn, (event) => {
+          event.preventDefault();
+          const mode = btn.dataset.editorTool;
+          if(!mode) return;
+          editorToolMode = mode;
+          syncUi();
+        }, 120);
+      });
+      guardClick(buttons.zoomIn, (event) => {
+        event.preventDefault();
+        waveZoom = Math.min(2.5, Math.round((waveZoom + 0.25) * 100) / 100);
+        syncUi();
+      }, 120);
+      guardClick(buttons.zoomOut, (event) => {
+        event.preventDefault();
+        waveZoom = Math.max(1, Math.round((waveZoom - 0.25) * 100) / 100);
+        syncUi();
+      }, 120);
       guardClick(buttons.magnet, (event) => {
         event.preventDefault();
         snapEnabled = !snapEnabled;
@@ -4769,34 +5426,16 @@
       guardClick(buttons.jumpIn, (event) => {
         event.preventDefault();
         const trackItem = activeTrack();
-        playheadMs = Math.max(0, trackItem.clip.startMs);
-        try { audio.currentTime = playheadMs / 1000; } catch(_) {}
-        syncUi();
+        setPlayhead(Math.max(0, trackItem.clip.startMs));
       }, 120);
       guardClick(buttons.play, async (event) => {
         event.preventDefault();
-        const trackItem = activeTrack();
-        await loadPreviewForTrack(trackItem);
-        if(audio.paused){
-          const outMs = trackItem.clip.enabled
-            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
-            : trackItem.durationMs;
-          if(outMs > 0 && playheadMs >= outMs){
-            playheadMs = trackItem.clip.startMs;
-          }
-          try { audio.currentTime = playheadMs / 1000; } catch(_) {}
-          try { await audio.play(); } catch(_) {}
-        }else{
-          audio.pause();
-        }
-        syncUi();
+        await togglePlayback();
       }, 120);
       guardClick(buttons.jumpOut, (event) => {
         event.preventDefault();
         const trackItem = activeTrack();
-        playheadMs = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs;
-        try { audio.currentTime = playheadMs / 1000; } catch(_) {}
-        syncUi();
+        setPlayhead(Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs);
       }, 120);
       guardClick(buttons.end, (event) => {
         event.preventDefault();
@@ -4808,17 +5447,11 @@
       }, 120);
       guardClick(buttons.setIn, (event) => {
         event.preventDefault();
-        const trackItem = activeTrack();
-        trackItem.clip.startMs = nearestSnapValue(playheadMs, trackItem.key, 'in');
-        trackItem.clip.enabled = true;
-        syncUi();
+        setInPoint();
       }, 120);
       guardClick(buttons.setOut, (event) => {
         event.preventDefault();
-        const trackItem = activeTrack();
-        trackItem.clip.endMs = nearestSnapValue(playheadMs, trackItem.key, 'out');
-        trackItem.clip.enabled = true;
-        syncUi();
+        setOutPoint();
       }, 120);
       guardClick(buttons.clear, (event) => {
         event.preventDefault();
@@ -4839,7 +5472,8 @@
         await requestOverlayClose(overlay, 'save');
       });
 
-      await Promise.all(tracks.map((trackItem) => loadWaveformForTrack(trackItem)));
+      syncUi();
+      void Promise.all(tracks.map((trackItem) => loadWaveformForTrack(trackItem)));
       await setActiveTrack('source', { preservePlayhead: false });
       playheadMs = sourceOriginalClip.startMs || 0;
       syncUi();
@@ -4925,7 +5559,7 @@
       } else {
         hasClearable = tasks && tasks.some(t => t && (t.stage === 'stopped' || (typeof t.pct === 'number' && t.pct >= 100)));
       }
-      const itemCount = queue.children.length;
+      const itemCount = queueTaskCount();
       const manyItems = itemCount > 6;
       const compact = itemCount <= 2;
       spacer.style.height = hasClearable ? (compact ? '14px' : '22px') : '0px';
@@ -4951,7 +5585,7 @@
 
     function updateShellLayout(){
       if(!appShell) return;
-      const itemCount = queue.children.length;
+      const itemCount = queueTaskCount();
       const empty = itemCount === 0;
       const compact = itemCount > 0 && itemCount <= 2;
       appShell.classList.toggle('empty', empty);
@@ -4984,6 +5618,7 @@
     }
 
     function updateUI(){
+      regroupQueueDom();
       updateShellLayout();
       updateClear();
       updateVigs();
@@ -5026,8 +5661,8 @@
     }
 
     function refreshAllLabelVisibility(){
-      document.querySelectorAll('#queue .item-row').forEach((row) => {
-        const task = row.__taskId ? getTaskById(row.__taskId) : getTaskByTempKey(row.__tempKey);
+      queueLeafRows().forEach((row) => {
+        const task = getTaskByRow(row);
         if(task){
           applyRowState(row, task);
         }
@@ -5066,9 +5701,7 @@
       let inferredActive = false;
       const row = stopPad.closest ? stopPad.closest('.item-row') : null;
       if(row){
-        const id = row.__taskId;
-        const tempKey = row.__tempKey;
-        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        const task = getTaskByRow(row);
         inferredActive = !!task && (isProcessing(task) || (normalized === 'queued' && Number(task.pct || 0) > 0));
       }
       const active = forceShow || inferredActive || (normalized && !['ready','queued','done','stopped','error','errored'].includes(normalized));
@@ -5328,7 +5961,8 @@
     }
 
     function createItem(task){
-      const existing = task && task.tempKey ? Array.from(queue.children).find((row) => row.__tempKey === task.tempKey) : null;
+      primeTaskEditorAssets(task);
+      const existing = queueLeafRows().find((row) => row.__taskRowKey === taskRowIdentity(task)) || null;
       if(existing){
         applyLabels(existing.querySelector('.labels'), displayStemsForTask(task));
         applyRowState(existing, task);
@@ -5414,8 +6048,11 @@
       setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
       inserted.classList.add('enter-pre');
-      // Attach task id for later filtering
       inserted.__taskId = task.id;
+      inserted.__tempKey = task.tempKey || '';
+      inserted.__batchKey = task.batchKey || '';
+      inserted.__taskRowKey = taskRowIdentity(task);
+      inserted.__stems = Array.isArray(task.stems) ? task.stems.slice() : [];
       queue.insertBefore(inserted, queue.firstChild);
       // apply enter transition to the inserted card
       requestAnimationFrame(() => {
@@ -5427,6 +6064,311 @@
       ensureTaskProgressTracking(task);
       updateUI();
       return {bar, st, dl, stopPad, smooth};
+    }
+
+    function createGroupParentRow(kind, groupKey){
+      const frag = template.content.cloneNode(true);
+      const row = frag.firstElementChild;
+      row.className = 'queue-group-parent-row';
+      row.dataset.groupKind = kind;
+      row.dataset.groupKey = groupKey;
+      row.dataset.forceHideEditor = kind === 'batch' ? '1' : '0';
+      const stopPad = row.querySelector('.stop-pad');
+      if(stopPad){
+        stopPad.style.display = '';
+        stopPad.classList.add('show');
+        stopPad.title = 'expand';
+        stopPad.innerHTML = '<span class="queue-parent-caret" aria-hidden="true"><svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>';
+      }
+      return row;
+    }
+
+    function aggregateGroupTaskState(groupTasks){
+      const tasksList = Array.isArray(groupTasks) ? groupTasks.filter(Boolean) : [];
+      if(!tasksList.length){
+        return { stage: 'ready', pct: 0 };
+      }
+      const normalizedStages = tasksList.map((task) => String(task.stage || '').toLowerCase());
+      if(normalizedStages.some((stage) => stage === 'error')){
+        return { stage: 'error', pct: -1 };
+      }
+      const allDone = normalizedStages.every((stage) => stage === 'done');
+      if(allDone){
+        return { stage: 'done', pct: 100 };
+      }
+      const allStopped = normalizedStages.every((stage) => stage === 'stopped');
+      if(allStopped){
+        return { stage: 'stopped', pct: 0 };
+      }
+      const activeTasks = tasksList.filter((task) => isProcessing(task));
+      if(activeTasks.length){
+        const pct = Math.round(activeTasks.reduce((sum, task) => sum + Math.max(0, Math.min(100, Number(task.pct) || 0)), 0) / activeTasks.length);
+        const stageTask = activeTasks.find((task) => !['queued', 'ready'].includes(String(task.stage || '').toLowerCase())) || activeTasks[0];
+        return { stage: String(stageTask.stage || 'queued').toLowerCase(), pct };
+      }
+      const queued = normalizedStages.some((stage) => stage === 'queued');
+      if(queued){
+        return { stage: 'queued', pct: 0 };
+      }
+      const ready = normalizedStages.some((stage) => stage === 'ready');
+      return { stage: ready ? 'ready' : normalizedStages[0] || 'ready', pct: 0 };
+    }
+
+    function queueArtworkGridCellMarkup(task){
+      const taskId = task && task.id ? String(task.id) : '';
+      if(taskId){
+        return `<img class="queue-artwork-grid-cell" src="${artworkUrl(taskId)}?v=${encodeURIComponent(taskId)}" alt="">`;
+      }
+      const label = songDisplayTitle(task && task.name).slice(0, 2).toUpperCase();
+      return `<div class="queue-artwork-grid-cell is-fallback">${label || '♪'}</div>`;
+    }
+
+    function syncParentRow(row, parentTask, childTasks, { kind = 'song', title = '', artworkGridTasks = [] } = {}){
+      if(!row) return;
+      const filename = row.querySelector('.filename');
+      const dl = row.querySelector('.dl-pad');
+      const st = row.querySelector('.chip.status');
+      const stopPad = row.querySelector('.stop-pad');
+      const bar = row.querySelector('.bar-fill');
+      const labels = row.querySelector('.labels');
+      const editorBtn = row.querySelector('.task-editor-btn');
+      const presetBtn = row.querySelector('.task-preset-btn');
+      const shell = row.querySelector('.artwork-shell');
+      const fallback = row.querySelector('.artwork-fallback');
+      let grid = row.querySelector('.queue-artwork-grid');
+      if(!grid && shell){
+        grid = document.createElement('div');
+        grid.className = 'queue-artwork-grid';
+        shell.appendChild(grid);
+      }
+      applyFilename(filename, title || parentTask.name || '');
+      applyLabels(labels, displayStemsForTask(parentTask));
+      if(bar){
+        const pct = Math.max(0, Math.min(100, Number(parentTask.pct) || 0));
+        bar.style.width = `${pct}%`;
+      }
+      if(st){
+        if(parentTask.stage === 'done'){
+          hideStatus(st);
+        }else if(parentTask.stage === 'error'){
+          showStatus(st);
+          st.textContent = 'error';
+        }else if(shouldUseProgressSummary(parentTask.stage)){
+          showStatus(st);
+          st.textContent = formatProgressChip(parentTask.pct || 0, null, null);
+        }else{
+          showStatus(st);
+          st.textContent = displayStage(parentTask.stage) || 'queued';
+        }
+        setStatusVisibility(st, parentTask.stage);
+      }
+      if(editorBtn){
+        editorBtn.hidden = kind === 'batch';
+        editorBtn.disabled = kind === 'batch';
+      }
+      if(presetBtn){
+        presetBtn.hidden = true;
+      }
+      if(kind === 'batch'){
+        row.dataset.forceHideEditor = '1';
+        if(grid){
+          grid.hidden = false;
+          grid.innerHTML = artworkGridTasks.slice(0, 4).map(queueArtworkGridCellMarkup).join('');
+        }
+        if(shell){
+          shell.classList.add('has-image');
+        }
+        if(fallback){
+          fallback.hidden = true;
+        }
+        const img = row.querySelector('.artwork-img');
+        if(img){
+          img.hidden = true;
+          img.removeAttribute('src');
+        }
+        if(dl){
+          dl.classList.remove('show');
+        }
+      }else{
+        row.dataset.forceHideEditor = '0';
+        if(grid){
+          grid.hidden = true;
+          grid.innerHTML = '';
+        }
+        applyArtwork(row, childTasks.find((task) => task && task.id) || childTasks[0] || parentTask);
+        if(dl){
+          const doneRef = childTasks.find((task) => task && task.stage === 'done' && task.out_dir);
+          if(doneRef){
+            dl.classList.add('show');
+            dl.title = 'open folder';
+            bindFolderButton(dl, doneRef);
+          }else{
+            dl.classList.remove('show');
+          }
+        }
+      }
+      if(stopPad){
+        stopPad.style.display = '';
+      }
+      applyRowState(row, parentTask);
+    }
+
+    function applyGroupShellState(shell, expanded){
+      if(!shell) return;
+      shell.classList.toggle('is-expanded', !!expanded);
+      shell.classList.toggle('is-collapsed', !expanded);
+      const children = shell.querySelector(':scope > .queue-group-children');
+      if(children){
+        children.style.maxHeight = expanded ? `${children.scrollHeight + 12}px` : '0px';
+      }
+    }
+
+    function regroupQueueDom(){
+      const leafRows = queueLeafRows();
+      if(!leafRows.length) return;
+      const songOrder = [];
+      const songs = new Map();
+      leafRows.forEach((row) => {
+        const task = getTaskByRow(row);
+        const songKey = queueSongGroupKey(task || { tempKey: row.__tempKey, id: row.__taskId });
+        const batchKey = (task && task.batchKey) || row.__batchKey || '';
+        if(!songs.has(songKey)){
+          songs.set(songKey, { key: songKey, batchKey, rows: [], tasks: [] });
+          songOrder.push(songKey);
+        }
+        const group = songs.get(songKey);
+        group.rows.push(row);
+        if(task) group.tasks.push(task);
+      });
+      const batchSongKeys = new Map();
+      songOrder.forEach((songKey) => {
+        const group = songs.get(songKey);
+        if(group && group.batchKey){
+          const list = batchSongKeys.get(group.batchKey) || [];
+          list.push(songKey);
+          batchSongKeys.set(group.batchKey, list);
+        }
+      });
+
+      const buildSongEntry = (songGroup, { nested = false } = {}) => {
+        const songTasks = songGroup.tasks;
+        const representative = songTasks[0] || null;
+        const multiStem = songGroup.rows.length > 1;
+        songGroup.rows.forEach((row) => {
+          row.dataset.forceHideEditor = multiStem ? '1' : '0';
+          const task = getTaskByRow(row);
+          if(task){
+            applyRowState(row, task);
+          }
+        });
+        if(!multiStem){
+          return songGroup.rows[0];
+        }
+        const shell = document.createElement('div');
+        shell.className = 'queue-group-shell queue-song-shell';
+        const groupKey = songGroup.key;
+        const expanded = isGroupExpanded('song', groupKey);
+        const parentRow = createGroupParentRow('song', groupKey);
+        const children = document.createElement('div');
+        children.className = 'queue-group-children';
+        songGroup.rows.forEach((row) => children.appendChild(row));
+        const unionStems = representative && Array.isArray(representative.groupStems) && representative.groupStems.length
+          ? representative.groupStems.slice()
+          : Array.from(new Set(songTasks.flatMap((task) => Array.isArray(task.stems) ? task.stems : [])));
+        const aggregate = aggregateGroupTaskState(songTasks);
+        const parentTask = representative ? {
+          ...representative,
+          name: representative.name,
+          stage: aggregate.stage,
+          pct: aggregate.pct,
+          groupStems: unionStems,
+          stems: unionStems,
+        } : { name: 'song', stage: 'ready', pct: 0, stems: unionStems, groupStems: unionStems };
+        syncParentRow(parentRow, parentTask, songTasks, { kind: 'song', title: songDisplayTitle(parentTask.name) });
+        const toggle = (event) => {
+          if(event.target.closest('button')) return;
+          setGroupExpanded('song', groupKey, !isGroupExpanded('song', groupKey));
+          regroupQueueDom();
+          updateUI();
+        };
+        parentRow.addEventListener('click', toggle);
+        const caretBtn = parentRow.querySelector('.stop-pad');
+        if(caretBtn){
+          guardClick(caretBtn, async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setGroupExpanded('song', groupKey, !isGroupExpanded('song', groupKey));
+            regroupQueueDom();
+            updateUI();
+          }, 120);
+        }
+        shell.append(parentRow, children);
+        applyGroupShellState(shell, expanded);
+        return shell;
+      };
+
+      const fragment = document.createDocumentFragment();
+      const handledBatches = new Set();
+      songOrder.forEach((songKey) => {
+        const songGroup = songs.get(songKey);
+        if(!songGroup) return;
+        const songBatchKey = songGroup.batchKey;
+        const batchSongs = songBatchKey ? (batchSongKeys.get(songBatchKey) || []) : [];
+        if(songBatchKey && batchSongs.length > 1){
+          if(handledBatches.has(songBatchKey)) return;
+          handledBatches.add(songBatchKey);
+          const batchShell = document.createElement('div');
+          batchShell.className = 'queue-group-shell queue-batch-shell';
+          const parentRow = createGroupParentRow('batch', songBatchKey);
+          const children = document.createElement('div');
+          children.className = 'queue-group-children';
+          const songGroups = batchSongs.map((key) => songs.get(key)).filter(Boolean);
+          songGroups.forEach((childSongGroup) => {
+            children.appendChild(buildSongEntry(childSongGroup, { nested: true }));
+          });
+          const batchTasks = songGroups.flatMap((group) => group.tasks);
+          const aggregate = aggregateGroupTaskState(batchTasks);
+          const unionStems = Array.from(new Set(batchTasks.flatMap((task) => Array.isArray(task.groupStems) ? task.groupStems : (Array.isArray(task.stems) ? task.stems : []))));
+          const parentTask = {
+            name: megaCardTitle(songGroups.flatMap((group) => group.tasks.slice(0, 1))),
+            stage: aggregate.stage,
+            pct: aggregate.pct,
+            stems: unionStems,
+            groupStems: unionStems,
+            disableEditor: true,
+          };
+          syncParentRow(parentRow, parentTask, batchTasks, {
+            kind: 'batch',
+            title: megaCardTitle(songGroups.flatMap((group) => group.tasks.slice(0, 1))),
+            artworkGridTasks: songGroups.flatMap((group) => group.tasks.slice(0, 1)),
+          });
+          parentRow.addEventListener('click', (event) => {
+            if(event.target.closest('button')) return;
+            setGroupExpanded('batch', songBatchKey, !isGroupExpanded('batch', songBatchKey));
+            regroupQueueDom();
+            updateUI();
+          });
+          const caretBtn = parentRow.querySelector('.stop-pad');
+          if(caretBtn){
+            guardClick(caretBtn, async (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setGroupExpanded('batch', songBatchKey, !isGroupExpanded('batch', songBatchKey));
+              regroupQueueDom();
+              updateUI();
+            }, 120);
+          }
+          batchShell.append(parentRow, children);
+          applyGroupShellState(batchShell, isGroupExpanded('batch', songBatchKey));
+          fragment.appendChild(batchShell);
+          return;
+        }
+        fragment.appendChild(buildSongEntry(songGroup));
+      });
+
+      const existingChildren = Array.from(queue.childNodes);
+      existingChildren.forEach((node) => queue.removeChild(node));
+      queue.appendChild(fragment);
     }
 
     function withPageFade(doWork){
@@ -6326,6 +7268,7 @@
     function createOverlayCard(titleText){
       const overlay = document.createElement('div');
       overlay.className = 'fixed inset-0 z-[80] grid place-items-center px-4';
+      overlay.tabIndex = -1;
       const bg = document.createElement('div');
       bg.className = 'overlay-bg anim';
       const card = document.createElement('div');
@@ -6336,8 +7279,14 @@
       card.appendChild(titleEl);
       overlay.append(bg, card);
       document.body.appendChild(overlay);
+      requestAnimationFrame(() => {
+        try { overlay.focus({ preventScroll: true }); } catch(_) {}
+      });
       overlay.addEventListener('click', (e) => {
         if(e.target === overlay || e.target === bg){
+          if(typeof overlay.__dismissGuard === 'function' && overlay.__dismissGuard()){
+            return;
+          }
           requestOverlayClose(overlay, 'dismiss');
           if(activeReleaseOverlay === overlay){
             dismissReleaseUntilNextOpen(activeReleaseVersion);
@@ -7647,9 +8596,11 @@
     }
     function findRowForTask(task){
       if(!task) return null;
-      return Array.from(queue.children).find((row) => {
+      const rowKey = taskRowIdentity(task);
+      return queueLeafRows().find((row) => {
+        if(rowKey && row.__taskRowKey === rowKey) return true;
         if(task.id && row.__taskId === task.id) return true;
-        if(task.tempKey && row.__tempKey === task.tempKey) return true;
+        if(task.tempKey && row.__tempKey === task.tempKey && stemsIdentityKey(task.stems || []) === stemsIdentityKey(row.__stems || [])) return true;
         return false;
       }) || null;
     }
@@ -7711,6 +8662,18 @@
         || null;
     }
 
+    function getTaskByRow(row){
+      if(!row) return null;
+      const rowKey = row.__taskRowKey || '';
+      if(rowKey){
+        const exact = tasks.find((task) => task && taskRowIdentity(task) === rowKey);
+        if(exact) return exact;
+      }
+      const rowTaskId = row.__taskId || null;
+      if(rowTaskId) return getTaskById(rowTaskId);
+      return getTaskByTempKey(row.__tempKey || null);
+    }
+
     function groupHasRemainingTasks(task, excludeTaskId = null){
       if(!task || !task.tempKey) return false;
       return tasks.some((candidate) => {
@@ -7765,8 +8728,15 @@
 
     function failPendingUpload(pending, message){
       if(!pending) return;
-      dropPendingByTempKey(pending.tempKey);
-      const taskIndex = tasks.findIndex((task) => task && task.tempKey === pending.tempKey && !task.id);
+      const pendingRowKey = `temp:${pending.tempKey || ''}:${stemsIdentityKey(pending.stems || [])}`;
+      for(let index = pendingItems.length - 1; index >= 0; index -= 1){
+        const candidate = pendingItems[index];
+        if(!candidate) continue;
+        if(`temp:${candidate.tempKey || ''}:${stemsIdentityKey(candidate.stems || [])}` === pendingRowKey){
+          pendingItems.splice(index, 1);
+        }
+      }
+      const taskIndex = tasks.findIndex((task) => task && taskRowIdentity(task) === pendingRowKey && !task.id);
       if(taskIndex >= 0){
         tasks.splice(taskIndex, 1);
       }
@@ -7794,9 +8764,7 @@
       refreshAllLabelVisibility();
       document.querySelectorAll('#queue .stop-pad').forEach(pad => {
         const row = pad.closest('.item-row');
-        const id = row ? row.__taskId : null;
-        const tempKey = row ? row.__tempKey : null;
-        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        const task = getTaskByRow(row);
         const stage = task ? task.stage : null;
         setStopVisibility(pad, stage);
       });
@@ -7823,7 +8791,9 @@
       const stems = groups[0].slice();
       pendingItems.forEach((pending) => {
         if(!pending || pending.frozen) return;
-        const linkedTask = pending.id ? getTaskById(pending.id) : getTaskByTempKey(pending.tempKey);
+        const linkedTask = pending.id
+          ? getTaskById(pending.id)
+          : (tasks.find((task) => task && taskRowIdentity(task) === `temp:${pending.tempKey || ''}:${stemsIdentityKey(pending.stems || [])}`) || getTaskByTempKey(pending.tempKey));
         if(linkedTask && (linkedTask.stage !== 'ready' || Number(linkedTask.pct || 0) !== 0 || linkedTask.frozen)) return;
         pending.stems = stems.slice();
         if(pending.ui && pending.ui.item){
@@ -7880,16 +8850,8 @@
 
     function queueRowTaskCandidates(row){
       if(!row) return [];
-      const tempKey = row.__tempKey || null;
-      const rowTaskId = row.__taskId || null;
-      const grouped = tasks.filter((task) => {
-        if(!task) return false;
-        if(tempKey && task.tempKey === tempKey) return true;
-        return !!(rowTaskId && task.id === rowTaskId);
-      });
-      if(grouped.length) return grouped;
-      const fallback = rowTaskId ? getTaskById(rowTaskId) : getTaskByTempKey(tempKey);
-      return fallback ? [fallback] : [];
+      const exact = getTaskByRow(row);
+      return exact ? [exact] : [];
     }
 
     function queueModeKeyForTask(task){
@@ -7974,6 +8936,7 @@
       const candidates = queueRowTaskCandidates(row);
       if(!candidates.length) return false;
       const tempKey = row.__tempKey || null;
+      const rowKey = row.__taskRowKey || '';
       const ids = candidates.map((task) => task && task.id).filter(Boolean);
       for(const taskId of ids){
         closeTaskStream(taskId);
@@ -7981,6 +8944,7 @@
       if(tempKey){
         pendingItems.forEach((pending) => {
           if(!pending || pending.tempKey !== tempKey) return;
+          if(rowKey && `temp:${pending.tempKey || ''}:${stemsIdentityKey(pending.stems || [])}` !== rowKey) return;
           if(pending.xhr && typeof pending.xhr.abort === 'function'){
             try{ pending.xhr.abort(); }catch(_){}
           }
@@ -7999,7 +8963,17 @@
         }
       }
       if(tempKey){
-        dropPendingByTempKey(tempKey);
+        if(rowKey){
+          for(let index = pendingItems.length - 1; index >= 0; index -= 1){
+            const pending = pendingItems[index];
+            if(!pending) continue;
+            if(`temp:${pending.tempKey || ''}:${stemsIdentityKey(pending.stems || [])}` === rowKey){
+              pendingItems.splice(index, 1);
+            }
+          }
+        }else{
+          dropPendingByTempKey(tempKey);
+        }
       }
       const idSet = new Set(ids);
       tasks = tasks.filter((task) => {
@@ -8442,7 +9416,7 @@
       return typeof inferred === 'string' ? inferred : '';
     }
 
-    function createPendingQueueRow(name, stems, tempKey){
+    function createPendingQueueRow(name, stems, tempKey, options = {}){
       const frag = template.content.cloneNode(true);
       const item = frag.firstElementChild;
       const li   = item.querySelector('.filename');
@@ -8461,6 +9435,9 @@
       if (stopPad) stopPad.style.display = 'none';
       item.classList.add('enter-pre');
       item.__tempKey = tempKey;
+      item.__batchKey = options.batchKey || '';
+      item.__taskRowKey = `temp:${tempKey || ''}:${stemsIdentityKey(stems || [])}`;
+      item.__stems = Array.isArray(stems) ? stems.slice() : [];
       queue.insertBefore(item, queue.firstChild);
       requestAnimationFrame(() => {
         item.classList.add('enter-active');
@@ -8512,6 +9489,7 @@
         }
         return;
       }
+      const uploadBatchKey = audioFiles.length > 1 ? makeUiGroupKey('batch') : '';
       let availableSlots = Math.max(0, MAX_TASKS - existingCount);
       for(const file of files){
         if(availableSlots <= 0) break;
@@ -8519,12 +9497,12 @@
         const looksMedia = (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
         if(!looksMedia) continue;
         const tempKey = makeTempKey();
-        const sharedUi = createPendingQueueRow(file.name, displayStems, tempKey);
         for(const stems of uploadStemGroups){
           if(availableSlots <= 0) break;
           availableSlots -= 1;
+          const rowUi = createPendingQueueRow(file.name, stems, tempKey, { batchKey: uploadBatchKey });
           // record pending entry
-          const pending = { file, ui:sharedUi, started:false, id:null, stems:stems.slice(), groupStems: displayStems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false, clip_start_ms:0, clip_end_ms:null, clip_enabled:false, outputs:[] };
+          const pending = { file, ui:rowUi, started:false, id:null, stems:stems.slice(), groupStems: displayStems.slice(), tempKey, batchKey: uploadBatchKey, autoStart:startPressed, startedProcessing:false, frozen:false, clip_start_ms:0, clip_end_ms:null, clip_enabled:false, outputs:[] };
           pending.validationPromise = (async () => {
             const duration = await getAudioDuration(file);
             if(duration > 0){
@@ -8542,7 +9520,7 @@
           pendingItems.push(pending);
           newPending.push(pending);
           // persist placeholder task (no id yet)
-          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), groupStems: displayStems.slice(), file:null, tempKey, out_dir:null, clip_start_ms:0, clip_end_ms:null, clip_enabled:false, outputs:[], downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
+          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), groupStems: displayStems.slice(), file:null, tempKey, batchKey: uploadBatchKey, out_dir:null, clip_start_ms:0, clip_end_ms:null, clip_enabled:false, outputs:[], downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
           saveTasks();
           updateUI();
         }
@@ -8622,7 +9600,7 @@
           ui.item.__taskId = parsed.task_id;
           // replace placeholder task
           const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
-          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, groupStems: pending.groupStems || parsed.stems, tempKey: pending.tempKey, out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, clip_start_ms: Number(parsed.clip_start_ms) || Number(pending.clip_start_ms) || 0, clip_end_ms: Number.isFinite(Number(parsed.clip_end_ms)) ? Number(parsed.clip_end_ms) : (Number.isFinite(Number(pending.clip_end_ms)) ? Number(pending.clip_end_ms) : null), clip_enabled: typeof parsed.clip_enabled === 'boolean' ? !!parsed.clip_enabled : !!pending.clip_enabled, outputs: Array.isArray(parsed.outputs) ? parsed.outputs.slice() : [], downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
+          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, groupStems: pending.groupStems || parsed.stems, tempKey: pending.tempKey, batchKey: pending.batchKey || '', out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, clip_start_ms: Number(parsed.clip_start_ms) || Number(pending.clip_start_ms) || 0, clip_end_ms: Number.isFinite(Number(parsed.clip_end_ms)) ? Number(parsed.clip_end_ms) : (Number.isFinite(Number(pending.clip_end_ms)) ? Number(pending.clip_end_ms) : null), clip_enabled: typeof parsed.clip_enabled === 'boolean' ? !!parsed.clip_enabled : !!pending.clip_enabled, outputs: Array.isArray(parsed.outputs) ? parsed.outputs.slice() : [], downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
           if(idx>=0) tasks[idx]=t; else tasks.push(t);
           if(startPressed || pending.autoStart){
             t.stage = 'queued';
@@ -8751,12 +9729,10 @@
         return hasStartable;
       };
       const markReadyQueuedUI = () => {
-        const rows = Array.from(queue.children);
+        const rows = queueLeafRows();
         let changed = false;
         rows.forEach(row => {
-          const id = row.__taskId;
-          const tempKey = row.__tempKey;
-          const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+          const task = getTaskByRow(row);
           const chip = row.querySelector('.chip.status');
           if(task && (!task.stage || task.stage === 'ready' || task.stage === 'queued')){
             if(task.stage !== 'queued' || task.pct !== 0){
@@ -8912,6 +9888,8 @@
       try{
         const sourceDirs = trimmed.map((pathText) => normalizeSourceDirPath(pathText));
         const importedTasks = [];
+        const importBatchKey = trimmed.length > 1 ? makeUiGroupKey('batch') : '';
+        const songKeys = trimmed.map(() => makeUiGroupKey('song'));
         for(const stems of uploadStemGroups){
           const res = await fetch('/api/import_paths', {
             method: 'POST',
@@ -8932,7 +9910,13 @@
             showPopup(msg);
             return;
           }
-          importedTasks.push(...(Array.isArray(payload.tasks) ? payload.tasks : []));
+          (Array.isArray(payload.tasks) ? payload.tasks : []).forEach((task, index) => {
+            importedTasks.push({
+              ...task,
+              __tempKey: songKeys[index] || makeUiGroupKey('song'),
+              __batchKey: importBatchKey,
+            });
+          });
         }
         importedTasks.forEach((task) => {
           const item = {
@@ -8943,6 +9927,8 @@
             stage: task.stage || 'ready',
             stems: Array.isArray(task.stems) ? task.stems : [],
             out_dir: task.out_dir || null,
+            tempKey: task.__tempKey || '',
+            batchKey: task.__batchKey || '',
             preset_settings: task.preset_settings || null,
             can_adjust_preset: !!task.can_adjust_preset,
             clip_start_ms: Number(task.clip_start_ms) || 0,

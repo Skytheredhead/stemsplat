@@ -1438,10 +1438,11 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     boost_guitar_settings = _boost_guitar_settings_payload(normalized)
     normalized["boost_guitar_guitar_gain_db"] = boost_guitar_settings["overlay_gain_db"]
     normalized["boost_guitar_base_song_gain_db"] = boost_guitar_settings["base_song_gain_db"]
-    normalized["editor_snap_distance_ms"] = max(
-        0,
-        min(2_000, int(_coerce_optional_ms(normalized.get("editor_snap_distance_ms"), default=180) or 180)),
-    )
+    try:
+        editor_snap_distance_ms = int(float(normalized.get("editor_snap_distance_ms") or 180))
+    except Exception:
+        editor_snap_distance_ms = 180
+    normalized["editor_snap_distance_ms"] = max(0, min(2_000, editor_snap_distance_ms))
     normalized["structure_mode"] = "flat"
     return normalized
 
@@ -2684,6 +2685,117 @@ def _editor_waveform_payload_for_path(audio_path: Path, *, points: int = EDITOR_
             _cleanup_path(temp_dir)
 
 
+def _editor_cache_dir(task_id: str) -> Path:
+    return _ensure_dir(WORK_DIR / "editor_cache" / task_id)
+
+
+def _editor_source_preview_path(task_id: str) -> Path:
+    return _editor_cache_dir(task_id) / "source_preview.wav"
+
+
+def _editor_source_waveform_cache_path(task_id: str) -> Path:
+    return _editor_cache_dir(task_id) / "source_waveform.json"
+
+
+def _editor_waveform_payload_from_tensor(
+    waveform: torch.Tensor,
+    *,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any]:
+    mono = waveform.abs().amax(dim=0) if waveform.shape[0] > 1 else waveform[0].abs()
+    total_samples = int(mono.shape[0])
+    duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
+    if total_samples <= 0:
+        return {"duration_ms": duration_ms, "points": []}
+    bucket_size = max(1, math.ceil(total_samples / max(8, points)))
+    payload_points: list[float] = []
+    for start in range(0, total_samples, bucket_size):
+        stop = min(total_samples, start + bucket_size)
+        window = mono[start:stop]
+        payload_points.append(round(float(window.max().item() if window.numel() else 0.0), 4))
+    return {"duration_ms": duration_ms, "points": payload_points}
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path.write_text(json.dumps(payload), encoding="utf-8")
+    temp_path.replace(path)
+
+
+def _read_editor_waveform_cache(path: Path) -> dict[str, Any] | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    points = payload.get("points")
+    duration_ms = payload.get("duration_ms")
+    if not isinstance(points, list):
+        return None
+    try:
+        return {
+            "duration_ms": max(0, int(round(float(duration_ms or 0)))),
+            "points": [max(0.0, min(1.0, float(value or 0.0))) for value in points],
+        }
+    except Exception:
+        return None
+
+
+def _cached_editor_source_preview_path(task_id: str) -> Path | None:
+    candidate = _editor_source_preview_path(task_id)
+    if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+        return candidate
+    return None
+
+
+def _cached_editor_source_waveform_payload(task_id: str) -> dict[str, Any] | None:
+    return _read_editor_waveform_cache(_editor_source_waveform_cache_path(task_id))
+
+
+def _cache_editor_source_waveform(task_id: str, wav_path: Path) -> dict[str, Any]:
+    waveform = _load_waveform(wav_path)
+    payload = _editor_waveform_payload_from_tensor(waveform)
+    _write_json_atomic(_editor_source_waveform_cache_path(task_id), payload)
+    return payload
+
+
+def _ensure_editor_source_cache(task_id: str) -> Path | None:
+    task = _require_task(task_id)
+    cached_preview = _cached_editor_source_preview_path(task_id)
+    if cached_preview is not None:
+        if _cached_editor_source_waveform_payload(task_id) is None:
+            with contextlib.suppress(Exception):
+                _cache_editor_source_waveform(task_id, cached_preview)
+        return cached_preview
+
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        return None
+
+    preview_path = _editor_source_preview_path(task_id)
+    source_info = _probe_source(source_path)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"editor_cache_{task_id[:8]}_", dir=str(WORK_DIR)))
+    try:
+        decoded_path = _decode_audio_to_wav(source_path, temp_dir, source_info.channels)
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_preview_path = preview_path.with_suffix(".wav.tmp")
+        shutil.copy2(decoded_path, temp_preview_path)
+        temp_preview_path.replace(preview_path)
+        _cache_editor_source_waveform(task_id, preview_path)
+        return preview_path
+    finally:
+        _cleanup_path(temp_dir)
+
+
+def _warm_editor_source_cache(task_id: str) -> None:
+    with contextlib.suppress(Exception):
+        _ensure_editor_source_cache(task_id)
+
+
 def _write_temp_wave(out_dir: Path, name: str, tensor: torch.Tensor) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     candidate = out_dir / name
@@ -2816,6 +2928,12 @@ def _process_rss_limit_bytes() -> int:
 
 
 def _mps_memory_limit_bytes() -> int | None:
+    # `torch.mps.recommended_max_memory()` can segfault in some non-interactive
+    # launch environments on macOS. Keep the MPS watchdog opt-in so startup and
+    # packaged launches stay stable across terminals, agents, and GUI sessions.
+    mps_watchdog_enabled = str(os.environ.get("STEMSPLAT_ENABLE_MPS_WATCHDOG") or "").strip().lower()
+    if mps_watchdog_enabled not in {"1", "true", "yes"}:
+        return None
     if not getattr(torch, "mps", None):
         return None
     with contextlib.suppress(Exception):
@@ -4839,6 +4957,11 @@ def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
 def _task_named_output_path(task: dict[str, Any], output_name: str | None) -> Path:
     requested = str(output_name or "").strip()
     if not requested or requested == "source":
+        task_id = str(task.get("id") or "").strip()
+        if task_id:
+            cached_preview = _cached_editor_source_preview_path(task_id)
+            if cached_preview is not None:
+                return cached_preview
         source_path = Path(str(task.get("source_path") or "")).expanduser()
         if not source_path.exists() or not source_path.is_file():
             raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
@@ -4974,6 +5097,7 @@ def _cleanup_task_runtime(task_id: str, task: dict[str, Any]) -> None:
         for candidate in WORK_DIR.iterdir():
             if candidate.name.startswith(prefix):
                 _cleanup_path(candidate)
+        _cleanup_path(WORK_DIR / "editor_cache" / task_id)
 
     downloads_dir = RUNTIME_DIR / "downloads"
     if downloads_dir.exists():
@@ -5698,6 +5822,7 @@ def _register_task(
     with tasks_lock:
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
+    threading.Thread(target=_warm_editor_source_cache, args=(task_id,), daemon=True).start()
     if auto_start:
         _queue_task(task_id, front=queue_front)
     return payload
@@ -5918,12 +6043,19 @@ def _process_task(task_id: str) -> None:
 
         work_dir = Path(tempfile.mkdtemp(prefix=f"stemsplat_{task_id[:8]}_", dir=str(WORK_DIR)))
         _set_task_progress(task_id, "Preparing audio", 4)
-        decoded_path = _decode_audio_to_wav(
-            source_path,
-            work_dir,
-            source_info.channels,
-            stop_check=lambda: _stop_check(task_id),
-        )
+        decoded_path = _cached_editor_source_preview_path(task_id)
+        if decoded_path is None:
+            decoded_path = _decode_audio_to_wav(
+                source_path,
+                work_dir,
+                source_info.channels,
+                stop_check=lambda: _stop_check(task_id),
+            )
+            with contextlib.suppress(Exception):
+                preview_path = _editor_source_preview_path(task_id)
+                preview_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(decoded_path, preview_path)
+                _cache_editor_source_waveform(task_id, preview_path)
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
         waveform, clip_snapshot = _apply_clip_to_waveform(task, waveform)
@@ -7195,11 +7327,26 @@ async def task_preview_audio(task_id: str, output: str | None = None):
 async def task_waveform(task_id: str, output: str | None = None) -> dict[str, Any]:
     try:
         task = _require_task(task_id)
-        audio_path = _task_named_output_path(task, output)
     except AppError as exc:
         status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
         raise exc.to_http(status)
-    payload = _editor_waveform_payload_for_path(audio_path)
+    requested = str(output or "").strip()
+    if not requested or requested == "source":
+        payload = _cached_editor_source_waveform_payload(task_id)
+        if payload is None:
+            preview_path = _ensure_editor_source_cache(task_id)
+            if preview_path is not None:
+                payload = _cached_editor_source_waveform_payload(task_id)
+        if payload is None:
+            audio_path = _task_named_output_path(task, output)
+            payload = _editor_waveform_payload_for_path(audio_path)
+    else:
+        try:
+            audio_path = _task_named_output_path(task, output)
+        except AppError as exc:
+            status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+            raise exc.to_http(status)
+        payload = _editor_waveform_payload_for_path(audio_path)
     payload.update(_task_clip_snapshot(task, duration_ms=int(payload.get("duration_ms") or 0)))
     return payload
 
