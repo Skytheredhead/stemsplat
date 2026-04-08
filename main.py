@@ -2763,6 +2763,41 @@ def _cache_editor_source_waveform(task_id: str, wav_path: Path) -> dict[str, Any
     return payload
 
 
+def _editor_clipped_preview_path(task_id: str, clip: dict[str, Any]) -> Path:
+    start_ms = int(max(0, int(clip.get("clip_start_ms") or 0)))
+    end_value = clip.get("clip_end_ms")
+    end_part = "full" if end_value is None else str(int(max(0, int(end_value))))
+    enabled_part = "on" if clip.get("clip_enabled") else "off"
+    filename = f"source_preview_{enabled_part}_{start_ms}_{end_part}.wav"
+    return _editor_cache_dir(task_id) / filename
+
+
+def _preview_audio_path_for_task(task: dict[str, Any], output: str | None = None) -> Path:
+    requested = str(output or "").strip()
+    if requested and requested != "source":
+        return _task_named_output_path(task, output)
+
+    task_id = str(task.get("id") or "")
+    preview_path = _ensure_editor_source_cache(task_id)
+    if preview_path is None:
+        return _task_named_output_path(task, output)
+
+    clip = _task_clip_snapshot(
+        task,
+        duration_ms=int(round(max(0.0, float(task.get("audio_seconds") or 0.0)) * 1000.0)),
+    )
+    if not clip["clip_enabled"]:
+        return preview_path
+
+    clipped_path = _editor_clipped_preview_path(task_id, clip)
+    if clipped_path.exists() and clipped_path.is_file() and clipped_path.stat().st_size > 0:
+        return clipped_path
+
+    waveform = _load_waveform(preview_path)
+    clipped_waveform, _ = _apply_clip_to_waveform(task, waveform)
+    return _write_temp_wave(clipped_path.parent, clipped_path.name, clipped_waveform)
+
+
 def _ensure_editor_source_cache(task_id: str) -> Path | None:
     task = _require_task(task_id)
     cached_preview = _cached_editor_source_preview_path(task_id)
@@ -5396,9 +5431,22 @@ def _update_task_clip_settings(
             raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
         if str(task.get("status") or "") == "running":
             raise AppError(ErrorCode.INVALID_REQUEST, "You can only edit a song before or after processing.")
-        task["clip_start_ms"] = max(0, int(_coerce_optional_ms(clip_start_ms, default=0) or 0))
-        task["clip_end_ms"] = _coerce_optional_ms(clip_end_ms, default=None)
-        task["clip_enabled"] = bool(clip_enabled)
+        duration_ms = int(round(max(0.0, float(task.get("audio_seconds") or 0.0)) * 1000.0))
+        if duration_ms > 0:
+            start_ms, end_ms, enabled = _normalize_clip_bounds_ms(
+                clip_start_ms,
+                clip_end_ms,
+                duration_ms=duration_ms,
+                enabled=bool(clip_enabled),
+            )
+        else:
+            start_ms = max(0, int(_coerce_optional_ms(clip_start_ms, default=0) or 0))
+            end_ms = _coerce_optional_ms(clip_end_ms, default=None)
+            enabled = bool(clip_enabled)
+        task["clip_start_ms"] = start_ms
+        task["clip_end_ms"] = end_ms
+        task["clip_enabled"] = enabled
+        _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         task["version"] += 1
         return dict(task)
 
@@ -7311,7 +7359,7 @@ async def edit_task(task_id: str, request: Request) -> dict[str, Any]:
 async def task_preview_audio(task_id: str, output: str | None = None):
     try:
         task = _require_task(task_id)
-        audio_path = _task_named_output_path(task, output)
+        audio_path = _preview_audio_path_for_task(task, output)
     except AppError as exc:
         status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
         raise exc.to_http(status)

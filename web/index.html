@@ -42,6 +42,17 @@
       to   { backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); background-color: rgba(0, 0, 0, 0.0); }
     }
     .overlay-bg.anim-out { animation: overlayBlurOut 0.18s ease both; }
+    body.desktop-shell .overlay-root {
+      top: 46px;
+      padding-top: 0;
+      padding-bottom: 12px;
+    }
+    body.desktop-shell .overlay-root .overlay-bg {
+      top: 46px;
+    }
+    body.desktop-shell .overlay-root .overlay-card {
+      max-height: calc(100vh - 70px);
+    }
     @keyframes settingsCardIn {
       from { opacity: 0; transform: translateY(8px) scale(0.98); }
       to   { opacity: 1; transform: translateY(0)    scale(1.00); }
@@ -1689,6 +1700,652 @@
         flex-basis: min(280px, 84vw);
       }
     }
+    .editor-card {
+      background: linear-gradient(180deg, rgba(12, 21, 27, 0.985), rgba(8, 15, 20, 0.995)) !important;
+      border: 1px solid rgba(146, 193, 208, 0.11) !important;
+      box-shadow: 0 16px 42px rgba(0,0,0,.28) !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    .editor-shell {
+      width: 100%;
+      min-height: min(620px, calc(100vh - 56px));
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .editor-workspace {
+      display: flex;
+      flex-direction: column;
+      min-height: inherit;
+      background:
+        linear-gradient(180deg, rgba(15, 25, 31, 0.92), rgba(8, 14, 19, 0.96)),
+        linear-gradient(90deg, rgba(142,216,255,.03), rgba(0,0,0,0));
+    }
+    .editor-topbar,
+    .editor-transportbar,
+    .editor-tool-rail,
+    .editor-inspector,
+    .editor-ruler,
+    .editor-track-gutter {
+      background: rgba(10, 17, 22, 0.92);
+    }
+    .editor-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .editor-titlebar {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .editor-titlebar-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: rgba(244,249,252,.96);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .editor-titlebar-meta {
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: rgba(188,208,218,.62);
+    }
+    .editor-topbar-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .editor-command-btn,
+    .editor-tool-btn {
+      min-width: 28px;
+      height: 28px;
+      padding: 0 9px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.045);
+      color: rgba(238,247,252,.92);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      transition: background .16s ease, border-color .16s ease, color .16s ease;
+      box-shadow: none;
+    }
+    .editor-command-btn:hover,
+    .editor-tool-btn:hover {
+      transform: none;
+      background: rgba(255,255,255,.09);
+      border-color: rgba(255,255,255,.18);
+      box-shadow: none;
+    }
+    .editor-command-btn.is-primary {
+      background: rgba(233,246,252,.96);
+      color: #091218;
+      border-color: rgba(233,246,252,.9);
+    }
+    .editor-command-btn.is-quiet {
+      background: rgba(255,255,255,.025);
+      border-color: rgba(255,255,255,.05);
+      color: rgba(194,214,224,.68);
+    }
+    .editor-command-btn.is-active,
+    .editor-tool-btn.is-active {
+      background: rgba(89, 191, 219, 0.18);
+      border-color: rgba(113, 220, 247, 0.36);
+      color: rgba(244,252,255,.98);
+      box-shadow: none;
+    }
+    .editor-command-btn:disabled,
+    .editor-tool-btn:disabled {
+      opacity: .34;
+      cursor: default;
+    }
+    .editor-tool-btn[data-compact="true"] {
+      width: 30px;
+      padding: 0;
+    }
+    .editor-tool-btn--label {
+      min-width: 30px;
+      font-size: 11px;
+      letter-spacing: .12em;
+    }
+    .editor-tool-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+    .editor-workspace-main {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 188px;
+    }
+    .editor-workspace-center {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: linear-gradient(180deg, rgba(8, 14, 18, 0.92), rgba(9, 16, 21, 0.96));
+    }
+    .editor-transportbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .editor-transport-group,
+    .editor-transport-readouts {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .editor-transport-readout {
+      min-height: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: rgba(196,216,226,.74);
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-variant-numeric: tabular-nums;
+    }
+    .editor-transport-readouts {
+      margin-left: auto;
+      gap: 10px;
+    }
+    .editor-timeline-shell {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(7, 12, 16, 0.76), rgba(9, 15, 19, 0.88)),
+        repeating-linear-gradient(to bottom, rgba(255,255,255,.01) 0, rgba(255,255,255,.01) 1px, transparent 1px, transparent 30px);
+    }
+    .editor-ruler {
+      display: grid;
+      grid-template-columns: 60px minmax(0, 1fr);
+      min-height: 32px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .editor-ruler-gutter {
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      border-right: 1px solid rgba(255,255,255,.08);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: rgba(182,202,212,.56);
+    }
+    .editor-ruler-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .editor-ruler-scroll::-webkit-scrollbar {
+      display: none;
+    }
+    .editor-ruler-scale {
+      position: relative;
+      min-width: 100%;
+      height: 32px;
+    }
+    .editor-ruler-canvas {
+      width: 100%;
+      height: 32px;
+      display: block;
+    }
+    .editor-lane-host {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+    }
+    .editor-timeline-tracks {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+      align-content: start;
+    }
+    .editor-track {
+      display: grid;
+      grid-template-columns: 60px minmax(0, 1fr);
+      min-height: 46px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .editor-track {
+      border-radius: 0;
+      border-left: 0;
+      border-right: 0;
+      border-top: 0;
+      background: transparent;
+      padding: 0;
+      opacity: 1;
+      box-shadow: none;
+    }
+    .editor-track.is-active {
+      background: linear-gradient(90deg, rgba(89,191,219,.06), rgba(89,191,219,0) 22%);
+      border-color: rgba(255,255,255,.06);
+      box-shadow: none;
+      padding: 0;
+    }
+    .editor-track--source {
+      flex: 1;
+      min-height: 0;
+    }
+    .editor-track--placeholder .editor-track-gutter,
+    .editor-track--placeholder .editor-wave-shell {
+      opacity: .72;
+    }
+    .editor-track-gutter {
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+      min-width: 0;
+      padding: 7px 6px;
+      border-right: 1px solid rgba(255,255,255,.08);
+    }
+    .editor-track-gutter-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .editor-track-title {
+      font-size: 9px;
+      line-height: 1.1;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: rgba(236,247,252,.82);
+    }
+    .editor-track-subtitle {
+      display: none;
+    }
+    .editor-track-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .editor-track-chip {
+      width: 6px;
+      height: 6px;
+      border-radius: 2px;
+      flex: 0 0 auto;
+      box-shadow: none;
+    }
+    .editor-track-body,
+    .editor-marker-body {
+      min-width: 0;
+      padding: 3px 8px;
+      display: flex;
+      align-items: center;
+    }
+    .editor-track--source .editor-track-body {
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
+    .editor-wave-zoom-wrap {
+      width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      border-radius: 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .editor-wave-zoom-wrap::-webkit-scrollbar {
+      display: none;
+    }
+    .editor-wave-shell {
+      position: relative;
+      min-width: 100%;
+      border-radius: 0;
+      border: 0;
+      background:
+        linear-gradient(180deg, rgba(10,17,22,.96), rgba(8,13,17,.98)),
+        repeating-linear-gradient(to right, rgba(255,255,255,.01) 0, rgba(255,255,255,.01) 1px, transparent 1px, transparent 96px);
+      padding: 0;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      will-change: auto;
+    }
+    .editor-track--source .editor-wave-shell {
+      min-height: 194px;
+      height: 100%;
+    }
+    .editor-wave-shell--placeholder {
+      min-height: 30px;
+      cursor: default;
+      background:
+        repeating-linear-gradient(to right, rgba(255,255,255,.018) 0, rgba(255,255,255,.018) 1px, transparent 1px, transparent 96px),
+        rgba(255,255,255,.01);
+    }
+    .editor-placeholder-grid {
+      height: 30px;
+      background:
+        repeating-linear-gradient(to right, rgba(255,255,255,.02) 0, rgba(255,255,255,.02) 1px, transparent 1px, transparent 96px);
+      opacity: .2;
+    }
+    .editor-wave-canvas {
+      width: 100%;
+      height: 34px;
+      display: block;
+      background: transparent;
+    }
+    .editor-track.is-active .editor-wave-canvas {
+      height: 42px;
+    }
+    .editor-track--source .editor-wave-canvas {
+      height: 194px;
+    }
+    .editor-track--source.is-active .editor-wave-canvas {
+      height: 210px;
+    }
+    .editor-wave-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: auto;
+    }
+    .editor-wave-dim {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: rgba(2, 7, 10, 0.28);
+      pointer-events: none;
+      transition: width .12s ease, opacity .12s ease;
+      z-index: 0;
+    }
+    .editor-wave-dim--before {
+      left: 0;
+    }
+    .editor-wave-dim--after {
+      right: 0;
+    }
+    .editor-wave-overlay .is-hidden {
+      opacity: 0;
+    }
+    .editor-wave-selection {
+      top: 0;
+      bottom: 0;
+      border-radius: 0;
+      background: rgba(79, 184, 210, 0.14);
+      border: 0;
+      box-shadow: none;
+    }
+    .editor-marker {
+      top: -1px;
+      bottom: -1px;
+    }
+    .editor-marker-line {
+      width: 1px;
+      background: rgba(240,248,252,.88);
+      box-shadow: none;
+    }
+    .editor-marker-cap {
+      top: -10px;
+      filter: none;
+      background: rgba(240,248,252,.94);
+    }
+    .editor-marker-playhead .editor-marker-line {
+      width: 2px;
+      background: rgba(134, 236, 255, 1);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.32), 0 0 12px rgba(134,236,255,.22);
+    }
+    .editor-marker-playhead .editor-marker-cap {
+      background: rgba(134, 236, 255, 1);
+    }
+    .editor-ruler-markers {
+      position: relative;
+      min-width: 100%;
+      height: 100%;
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .editor-timeline-playhead {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      transform: translateX(-1px);
+      background: rgba(138, 236, 255, 1);
+      pointer-events: none;
+      z-index: 3;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.24), 0 0 12px rgba(138,236,255,.18);
+    }
+    .editor-timeline-playhead::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 9px;
+      height: 7px;
+      transform: translateX(-50%);
+      background: rgba(138, 236, 255, 1);
+      clip-path: polygon(50% 100%, 0 0, 100% 0);
+    }
+    .editor-timeline-marker {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      transform: translateX(-50%);
+      width: 1px;
+      min-width: 1px;
+      padding: 0;
+      border-radius: 0;
+      border: 0;
+      background: rgba(248,184,76,.62);
+      color: transparent;
+      display: block;
+    }
+    .editor-timeline-marker::after {
+      content: attr(data-label);
+      position: absolute;
+      top: 2px;
+      left: 4px;
+      color: rgba(248,227,188,.78);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .editor-timeline-marker.is-boundary {
+      background: rgba(124,221,245,.84);
+    }
+    .editor-timeline-marker.is-boundary::after {
+      color: rgba(221,246,252,.82);
+    }
+    .editor-inspector {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid rgba(255,255,255,.08);
+      background: rgba(9,15,19,.96);
+    }
+    .editor-inspector-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 10px 8px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: rgba(201,218,226,.68);
+    }
+    .editor-inspector-head-meta {
+      font-size: 10px;
+      letter-spacing: .08em;
+      color: rgba(180,199,208,.5);
+      text-transform: none;
+      max-width: 120px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .editor-inspector-summary {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .editor-meta-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2px;
+    }
+    .editor-meta-chip {
+      border-radius: 0;
+      border: 0;
+      background: transparent;
+      padding: 5px 0;
+    }
+    .editor-inspector-tracks {
+      flex: 1;
+      overflow: auto;
+      padding: 6px 10px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .editor-inspector-track-row {
+      display: grid;
+      grid-template-columns: 7px minmax(0, 1fr) 22px 22px;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 0;
+      border-radius: 0;
+      border: 0;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      background: transparent;
+    }
+    .editor-inspector-track-row.is-active {
+      background: transparent;
+    }
+    .editor-inspector-track-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .editor-inspector-track-name {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: rgba(239,247,251,.84);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .editor-inspector-track-sub {
+      display: none;
+    }
+    .editor-mini-toggle {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,.06);
+      background: transparent;
+      color: rgba(234,246,251,.82);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .editor-mini-toggle--lane {
+      width: 18px;
+      height: 18px;
+      border-radius: 3px;
+      font-size: 8px;
+      letter-spacing: .06em;
+      color: rgba(210,227,235,.72);
+    }
+    .editor-mini-toggle.is-active {
+      border-color: rgba(124,221,245,.18);
+      background: rgba(79,184,210,.10);
+      color: rgba(244,252,255,.96);
+    }
+    .editor-mini-toggle:disabled {
+      opacity: .32;
+    }
+    .editor-wave-context {
+      border-radius: 6px;
+      border-color: rgba(255,255,255,.06);
+      background: rgba(11,19,24,.98);
+      box-shadow: 0 10px 24px rgba(0,0,0,.28);
+    }
+    .editor-wave-context button {
+      border-radius: 4px;
+      font-size: 10px;
+    }
+    @media (max-width: 1180px) {
+      .editor-workspace-main {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .editor-inspector {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid rgba(255,255,255,.08);
+      }
+    }
+    @media (max-width: 820px) {
+      .editor-track,
+      .editor-ruler {
+        grid-template-columns: 52px minmax(0, 1fr);
+      }
+      .editor-track-gutter,
+      .editor-ruler-gutter {
+        padding-left: 6px;
+        padding-right: 6px;
+      }
+      .editor-topbar,
+      .editor-transportbar {
+        padding-left: 10px;
+        padding-right: 10px;
+      }
+      .editor-titlebar-meta {
+        display: none;
+      }
+      .editor-transport-readouts {
+        width: 100%;
+        margin-left: 0;
+      }
+    }
     .queue-group-shell {
       display: flex;
       flex-direction: column;
@@ -2854,7 +3511,6 @@
     const EDITOR_TRIM_CLIPBOARD_KEY = 'stemsplat.editorTrimClipboard';
     const EDITOR_SNAP_ENABLED_KEY = 'stemsplat.editorSnapEnabled';
     const EDITOR_TRACK_DRAFTS_KEY = 'stemsplat.editorTrackDrafts';
-    const EDITOR_LAYOUT_VARIANT_KEY = 'stemsplat.editorLayoutVariant';
     const isLanClient = !['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
 
     let startPressed = false;
@@ -4759,6 +5415,18 @@
       return `${minutes}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(2, '0')}`;
     }
 
+    function editorRulerLabel(ms){
+      const safe = Math.max(0, Math.round(Number(ms) || 0));
+      const totalSeconds = Math.floor(safe / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if(hours > 0){
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      }
+      return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
     function editorTaskStorageKey(task){
       return String((task && (task.id || task.tempKey || task.name)) || 'editor-task');
     }
@@ -4845,23 +5513,6 @@
       }catch(_){}
     }
 
-    function editorReadLayoutVariant(){
-      try{
-        const raw = Number.parseInt(localStorage.getItem(EDITOR_LAYOUT_VARIANT_KEY) || '1', 10);
-        if(Number.isFinite(raw) && raw >= 1 && raw <= 10){
-          return raw;
-        }
-      }catch(_){}
-      return 1;
-    }
-
-    function editorSetLayoutVariant(index){
-      const safeIndex = Math.max(1, Math.min(10, Number.parseInt(String(index || '1'), 10) || 1));
-      try{
-        localStorage.setItem(EDITOR_LAYOUT_VARIANT_KEY, String(safeIndex));
-      }catch(_){}
-    }
-
     function editorWaveformCacheKey(taskId, output){
       return `${String(taskId || '')}::${String(output || 'source')}`;
     }
@@ -4930,37 +5581,27 @@
       const pending = taskPendingEntry(task);
       const { overlay, card } = createOverlayCard('editor');
       card.classList.add('editor-card', 'editor-nle-card');
-      card.style.maxWidth = '1240px';
+      card.style.maxWidth = '1560px';
+      card.style.width = 'min(1560px, calc(100vw - 48px))';
+      card.style.minHeight = 'min(760px, calc(100vh - 56px))';
+      card.style.padding = '0';
+      card.style.borderRadius = '16px';
 
       const titleEl = card.querySelector('h3');
       titleEl.className = 'editor-title';
       titleEl.textContent = '';
-      const titleStrong = document.createElement('strong');
-      titleStrong.textContent = 'editor';
-      const titleName = document.createElement('span');
-      titleName.textContent = String(task.name || 'untitled');
-      titleEl.append(titleStrong, titleName);
+      titleEl.hidden = true;
 
       const editorShell = document.createElement('div');
-      editorShell.className = 'editor-shell flex flex-col gap-4 min-h-0 w-full';
+      editorShell.className = 'editor-shell';
       card.appendChild(editorShell);
 
-      const actions = document.createElement('div');
-      actions.className = 'flex gap-2 justify-end';
       const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
       const saveBtn = makeActionButton('save', 'bg-white text-black');
-      actions.append(cancelBtn, saveBtn);
-      card.appendChild(actions);
 
       const sourceOriginalClip = cloneClipState(taskClipState(task));
       const originalTrackDrafts = editorLoadTrackDrafts(task);
       const snapDistanceMs = () => Math.max(0, Math.min(2000, Number(settingsState.editor_snap_distance_ms) || 0));
-      const variantShortcutMap = {
-        Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5,
-        Digit6: 6, Digit7: 7, Digit8: 8, Digit9: 9, Digit0: 10,
-        Numpad1: 1, Numpad2: 2, Numpad3: 3, Numpad4: 4, Numpad5: 5,
-        Numpad6: 6, Numpad7: 7, Numpad8: 8, Numpad9: 9, Numpad0: 10,
-      };
 
       let snapEnabled = editorSnapEnabled();
       let playheadMs = sourceOriginalClip.startMs || 0;
@@ -4976,7 +5617,7 @@
       let editorToolMode = 'select';
       let waveZoom = 1;
       let currentVariant = null;
-      let layoutRefs = { primaryHost: null, secondaryHost: null, secondaryPanels: [] };
+      let layoutRefs = {};
 
       const editorVariants = [
         {
@@ -5367,7 +6008,40 @@
         },
       ];
 
-      const byNumber = new Map(editorVariants.map((variant) => [variant.number, variant]));
+      currentVariant = editorVariants[0];
+      const HISTORY_LIMIT = 20;
+      const WAVE_ZOOM_MIN = 1;
+      const WAVE_ZOOM_MAX = 6;
+      const TIMELINE_BASE_WIDTH = 1600;
+      const RULER_HEIGHT = 32;
+
+      const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
+      const timelineRenderWidth = (zoomValue = waveZoom) => {
+        const numericZoom = Number.isFinite(Number(zoomValue)) ? Number(zoomValue) : 1;
+        return Math.max(TIMELINE_BASE_WIDTH, Math.round(TIMELINE_BASE_WIDTH * numericZoom));
+      };
+      const resizeHiDPICanvas = (canvas, cssWidth, cssHeight) => {
+        if(!canvas) return null;
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
+        const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
+        if(canvas.width !== targetWidth){
+          canvas.width = targetWidth;
+        }
+        if(canvas.height !== targetHeight){
+          canvas.height = targetHeight;
+        }
+        if(canvas.style.width !== `${Math.round(cssWidth)}px`){
+          canvas.style.width = `${Math.round(cssWidth)}px`;
+        }
+        if(canvas.style.height !== `${Math.round(cssHeight)}px`){
+          canvas.style.height = `${Math.round(cssHeight)}px`;
+        }
+        const ctx = canvas.getContext('2d');
+        if(!ctx) return null;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return ctx;
+      };
 
       const appendChildren = (parent, children) => {
         (Array.isArray(children) ? children : []).filter(Boolean).forEach((child) => parent.appendChild(child));
@@ -5383,10 +6057,9 @@
 
       const setTooltip = (target, message) => {
         if(!target) return;
-        if(message){
-          target.dataset.tooltip = message;
-          bindDelayedTooltip(target);
-        }
+        delete target.dataset.tooltip;
+        target.removeAttribute('title');
+        if(message) target.setAttribute('aria-label', message);
       };
 
       const svgIcon = (kind, pack = currentVariant ? currentVariant.pack : 'wire') => {
@@ -5475,26 +6148,32 @@
         return '';
       };
 
-      const makeToolButton = ({ iconKind, compact = true, active = false, title = '', tooltip = '', dataset = null } = {}) => {
+      const makeToolButton = ({ iconKind, label = '', compact = true, active = false, title = '', tooltip = '', dataset = null } = {}) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = `editor-tool-btn ${active ? 'is-active' : ''}`.trim();
         if(compact) btn.dataset.compact = 'true';
-        if(title) btn.title = title;
+        if(title || tooltip || label) btn.setAttribute('aria-label', tooltip || title || label);
         if(dataset && typeof dataset === 'object'){
           Object.keys(dataset).forEach((key) => {
             btn.dataset[key] = String(dataset[key]);
           });
         }
         btn.dataset.iconKind = iconKind || '';
+        if(label){
+          btn.dataset.label = label;
+          btn.classList.add('editor-tool-btn--label');
+          btn.textContent = label;
+        }
         if(tooltip) setTooltip(btn, tooltip);
         return btn;
       };
 
       const buttons = {
         select: makeToolButton({ iconKind: 'select', active: true, title: 'selection', tooltip: 'selection tool', dataset: { editorTool: 'select' } }),
+        range: makeToolButton({ label: 'R', title: 'range select', tooltip: 'range select tool', dataset: { editorTool: 'range' } }),
         razor: makeToolButton({ iconKind: 'razor', title: 'razor', tooltip: 'razor tool', dataset: { editorTool: 'razor' } }),
-        slip: makeToolButton({ iconKind: 'slip', title: 'slip', tooltip: 'slip tool', dataset: { editorTool: 'slip' } }),
+        slip: makeToolButton({ iconKind: 'slip', title: 'trim or slip', tooltip: 'trim or slip tool', dataset: { editorTool: 'slip' } }),
         slide: makeToolButton({ iconKind: 'slide', title: 'slide', tooltip: 'slide tool', dataset: { editorTool: 'slide' } }),
         magnet: makeToolButton({ iconKind: 'magnet', active: snapEnabled, title: snapEnabled ? 'snapping on' : 'snapping off', tooltip: 'toggle trim snapping' }),
         start: makeToolButton({ iconKind: 'start', title: 'skip to beginning', tooltip: 'jump to beginning' }),
@@ -5507,10 +6186,15 @@
         clear: makeToolButton({ iconKind: 'clear', title: 'clear trim', tooltip: 'clear trim' }),
         zoomOut: makeToolButton({ iconKind: 'zoom-out', title: 'zoom out', tooltip: 'zoom out' }),
         zoomIn: makeToolButton({ iconKind: 'zoom-in', title: 'zoom in', tooltip: 'zoom in' }),
+        fit: makeToolButton({ label: 'fit', compact: false, title: 'fit timeline', tooltip: 'fit timeline to view' }),
       };
 
       const refreshButtonIcons = () => {
         Object.values(buttons).forEach((button) => {
+          if(button.dataset.label){
+            button.textContent = button.dataset.label;
+            return;
+          }
           const kind = button.dataset.iconKind || '';
           button.innerHTML = svgIcon(kind, currentVariant ? currentVariant.pack : 'wire');
         });
@@ -5553,6 +6237,42 @@
           waveformLoaded: false,
           previewLoaded: false,
         };
+      });
+
+      const timelineTracks = tracks.filter((trackItem) => trackItem.key === 'source');
+      const markerState = { nextId: 1, items: [] };
+      const clipHistoryPast = [];
+      const clipHistoryFuture = [];
+      const inspectorState = new Map();
+      const trackColorFor = (trackItem, index = 0) => {
+        const name = String(trackItem && trackItem.label || '').toLowerCase();
+        if(name.includes('voc')) return '#74e0ff';
+        if(name.includes('inst') || name.includes('other')) return '#61ccb9';
+        if(name.includes('bass')) return '#7dd9c8';
+        if(name.includes('drum')) return '#8ab4ff';
+        return index === 0 ? '#b5c4d1' : '#8ed8ff';
+      };
+      const compactTrackLabel = (trackItem) => {
+        const name = String(trackItem && trackItem.label || '').toLowerCase();
+        if(trackItem && trackItem.key === 'source') return 'SRC';
+        if(name.includes('voc')) return 'VOC';
+        if(name.includes('inst') || name.includes('other')) return 'INST';
+        if(name.includes('bass')) return 'BASS';
+        if(name.includes('drum')) return 'DRM';
+        return String(trackItem && trackItem.label || 'TRK').slice(0, 4).toUpperCase();
+      };
+      const displayTrackName = (trackItem) => {
+        if(trackItem && trackItem.key === 'source') return 'source';
+        return String(trackItem && trackItem.label || 'track').replace(/\.[^.]+$/, '');
+      };
+      tracks.forEach((trackItem, index) => {
+        inspectorState.set(trackItem.key, {
+          mute: false,
+          solo: false,
+          exportEnabled: true,
+          levelDb: index === 0 ? 0 : Math.max(-12, -(index * 1.5)),
+          color: trackColorFor(trackItem, index),
+        });
       });
 
       const activeTrack = () => tracks.find((trackItem) => trackItem.key === activeTrackKey) || tracks[0];
@@ -5610,244 +6330,339 @@
         return Math.round(pct * Math.max(0, trackItem.durationMs || 0));
       };
 
-      const makeSectionLabel = (label, iconKind) => {
-        const wrap = makeElement('div', 'editor-section-kicker');
-        wrap.innerHTML = `${svgIcon(iconKind, currentVariant ? currentVariant.pack : 'wire')}<span>${label}</span>`;
-        return wrap;
-      };
+      const snapshotClips = () => tracks.map((trackItem) => ({
+        key: trackItem.key,
+        clip: cloneClipState(trackItem.clip),
+      }));
 
-      const makePanel = ({ label = '', icon = 'timeline', classes = '', tight = false, ghost = false } = {}) => {
-        const panel = makeElement('div', `editor-panel-surface ${classes}`.trim());
-        if(tight) panel.dataset.tight = 'true';
-        if(ghost) panel.dataset.ghost = 'true';
-        if(label){
-          panel.appendChild(makeSectionLabel(label, icon));
-        }
-        return panel;
-      };
+      const snapshotEditorState = () => ({
+        clips: snapshotClips(),
+        markers: markerState.items.map((marker) => ({ ...marker })),
+        nextMarkerId: markerState.nextId,
+        inspector: Array.from(inspectorState.entries()).map(([key, state]) => [key, { ...state }]),
+        editorToolMode,
+        snapEnabled,
+      });
 
-      const makeControlPanel = ({ label, icon, children, classes = '', tight = false } = {}) => {
-        const panel = makePanel({ label, icon, classes: `p-3 flex flex-col gap-3 ${classes}`.trim(), tight });
-        const body = makeElement('div', 'flex flex-wrap gap-2');
-        appendChildren(body, children);
-        panel.appendChild(body);
-        return panel;
-      };
-
-      const makeMetaPanel = ({ label = 'readout', icon = 'monitor', classes = '' } = {}) => {
-        const panel = makePanel({ label, icon, classes: `p-3 flex flex-col gap-3 ${classes}`.trim(), tight: true });
-        panel.appendChild(meta);
-        return panel;
-      };
-
-      const makeTrackPanel = ({ label, icon, classes = '', secondary = false, horizontal = false, grid = false } = {}) => {
-        const panel = makePanel({ label, icon, classes: `p-3 flex flex-col gap-3 min-h-0 ${classes}`.trim() });
-        const host = makeElement('div', `editor-secondary-host ${horizontal ? 'is-horizontal' : ''} ${grid ? 'is-grid' : ''}`.trim());
-        if(!secondary){
-          host.classList.remove('editor-secondary-host');
-          host.className = 'flex flex-col gap-3 min-h-0';
-        }
-        panel.appendChild(host);
-        return { panel, host };
-      };
-
-      const renderTrackPlacement = () => {
-        if(!layoutRefs || !layoutRefs.primaryHost) return;
-        const active = activeTrack();
+      const applyEditorSnapshot = (snapshot) => {
+        const map = new Map((((snapshot && snapshot.clips) || []).map((entry) => [entry.key, cloneClipState(entry.clip)])));
         tracks.forEach((trackItem) => {
-          if(trackItem.dom && trackItem.dom.track.parentNode){
-            trackItem.dom.track.remove();
+          if(map.has(trackItem.key)){
+            trackItem.clip = cloneClipState(map.get(trackItem.key));
+            normalizeTrackClip(trackItem);
           }
         });
-        if(active && active.dom && active.dom.track){
-          layoutRefs.primaryHost.appendChild(active.dom.track);
-        }
-        const secondaryTracks = tracks.filter((trackItem) => trackItem.key !== activeTrackKey && trackItem.dom && trackItem.dom.track);
-        if(layoutRefs.secondaryHost){
-          secondaryTracks.forEach((trackItem) => layoutRefs.secondaryHost.appendChild(trackItem.dom.track));
-        }
-        (layoutRefs.secondaryPanels || []).forEach((panel) => {
-          panel.hidden = secondaryTracks.length === 0;
+        markerState.items = Array.isArray(snapshot && snapshot.markers)
+          ? snapshot.markers.map((marker) => ({ ...marker }))
+          : [];
+        markerState.nextId = Math.max(1, Number(snapshot && snapshot.nextMarkerId) || (markerState.items.length + 1));
+        const inspectorEntries = new Map(Array.isArray(snapshot && snapshot.inspector) ? snapshot.inspector.map(([key, state]) => [key, { ...state }]) : []);
+        inspectorState.clear();
+        tracks.forEach((trackItem, index) => {
+          inspectorState.set(trackItem.key, inspectorEntries.get(trackItem.key) || {
+            mute: false,
+            solo: false,
+            exportEnabled: true,
+            levelDb: index === 0 ? 0 : Math.max(-12, -(index * 1.5)),
+            color: trackColorFor(trackItem, index),
+          });
         });
+        editorToolMode = String((snapshot && snapshot.editorToolMode) || editorToolMode || 'select');
+        snapEnabled = !!(snapshot && snapshot.snapEnabled);
+        editorSetSnapEnabled(snapEnabled);
+        syncUi();
+      };
+
+      const commitHistory = (beforeSnapshot) => {
+        const before = beforeSnapshot && typeof beforeSnapshot === 'object' ? beforeSnapshot : snapshotEditorState();
+        const after = snapshotEditorState();
+        if(JSON.stringify(before) === JSON.stringify(after)) return;
+        clipHistoryPast.push(before);
+        if(clipHistoryPast.length > HISTORY_LIMIT){
+          clipHistoryPast.shift();
+        }
+        clipHistoryFuture.length = 0;
+      };
+
+      const runUndo = () => {
+        if(!clipHistoryPast.length) return;
+        const current = snapshotEditorState();
+        const previous = clipHistoryPast.pop();
+        clipHistoryFuture.push(current);
+        applyEditorSnapshot(previous);
+      };
+
+      const runRedo = () => {
+        if(!clipHistoryFuture.length) return;
+        const current = snapshotEditorState();
+        const next = clipHistoryFuture.pop();
+        clipHistoryPast.push(current);
+        applyEditorSnapshot(next);
+      };
+
+      const makeCommandButton = ({ label = '', title = '', tooltip = '', tone = 'default' } = {}) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `editor-command-btn ${tone === 'primary' ? 'is-primary' : ''}`.trim();
+        btn.textContent = label;
+        if(title || tooltip || label) btn.setAttribute('aria-label', tooltip || title || label);
+        if(tooltip) setTooltip(btn, tooltip);
+        return btn;
+      };
+
+      const commandButtons = {
+        undo: makeCommandButton({ label: 'undo', title: 'undo trim change', tooltip: 'undo trim change' }),
+        redo: makeCommandButton({ label: 'redo', title: 'redo trim change', tooltip: 'redo trim change' }),
+        split: makeCommandButton({ label: 'split', title: 'activate razor tool', tooltip: 'activate razor tool' }),
+        marker: makeCommandButton({ label: 'marker', title: 'drop timeline marker', tooltip: 'drop marker at playhead' }),
+      };
+      commandButtons.undo.classList.add('is-quiet');
+      commandButtons.redo.classList.add('is-quiet');
+      saveBtn.className = 'editor-command-btn is-primary';
+      cancelBtn.className = 'editor-command-btn';
+
+      const transportPlayhead = makeElement('div', 'editor-transport-readout');
+      const transportSelection = makeElement('div', 'editor-transport-readout');
+      const transportZoom = makeElement('div', 'editor-transport-readout');
+
+      const renderInspector = () => {
+        if(layoutRefs.inspectorTracks){
+          layoutRefs.inspectorTracks.innerHTML = '';
+        }
+      };
+
+      const syncTimelineScroll = (scrollLeft, source = null) => {
+        if(layoutRefs.syncingScroll) return;
+        layoutRefs.syncingScroll = true;
+        const nextScrollLeft = Math.max(0, Math.round(Number(scrollLeft) || 0));
+        if(layoutRefs.rulerWrap && layoutRefs.rulerWrap !== source){
+          layoutRefs.rulerWrap.scrollLeft = nextScrollLeft;
+        }
+        timelineTracks.forEach((trackItem) => {
+          if(trackItem.dom && trackItem.dom.zoomWrap && trackItem.dom.zoomWrap !== source){
+            trackItem.dom.zoomWrap.scrollLeft = nextScrollLeft;
+          }
+        });
+        layoutRefs.syncingScroll = false;
+      };
+
+      const drawRuler = () => {
+        if(!layoutRefs.rulerCanvas) return;
+        const durationMs = Math.max(1000, ...tracks.map((trackItem) => Math.max(0, Number(trackItem.durationMs) || 0)));
+        const canvas = layoutRefs.rulerCanvas;
+        const width = timelineRenderWidth();
+        const height = RULER_HEIGHT;
+        if(layoutRefs.rulerScale){
+          layoutRefs.rulerScale.style.width = `${width}px`;
+        }
+        if(layoutRefs.markerScale){
+          layoutRefs.markerScale.style.width = `${width}px`;
+        }
+        const drawKey = `${durationMs}:${width}`;
+        if(layoutRefs.rulerDrawKey === drawKey) return;
+        layoutRefs.rulerDrawKey = drawKey;
+        const ctx = resizeHiDPICanvas(canvas, width, height);
+        if(!ctx) return;
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = 'rgba(11, 18, 23, 0.96)';
+        ctx.fillRect(0, 0, width, height);
+        ctx.strokeStyle = 'rgba(255,255,255,.11)';
+        ctx.beginPath();
+        ctx.moveTo(0, height - 0.5);
+        ctx.lineTo(width, height - 0.5);
+        ctx.stroke();
+        const candidates = [250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
+        const majorMs = candidates.find((value) => ((value / durationMs) * width) >= 96) || candidates[candidates.length - 1];
+        const minorMs = Math.max(100, Math.round(majorMs / 5));
+        ctx.font = '11px "Nunito Sans", sans-serif';
+        ctx.textBaseline = 'top';
+        for(let ms = 0; ms <= durationMs; ms += minorMs){
+          const x = (ms / durationMs) * width;
+          const isMajor = ms % majorMs === 0;
+          ctx.strokeStyle = isMajor ? 'rgba(236,247,252,.38)' : 'rgba(255,255,255,.05)';
+          ctx.beginPath();
+          ctx.moveTo(Math.round(x) + 0.5, height - (isMajor ? 20 : 9));
+          ctx.lineTo(Math.round(x) + 0.5, height);
+          ctx.stroke();
+          if(isMajor){
+            ctx.fillStyle = 'rgba(228,241,247,.9)';
+            ctx.fillText(editorRulerLabel(ms), Math.min(width - 52, x + 6), 4);
+          }
+        }
+      };
+
+      const renderMarkerLane = () => {
+        if(!layoutRefs.markerScale) return;
+        const durationMs = Math.max(1000, ...tracks.map((trackItem) => Math.max(0, Number(trackItem.durationMs) || 0)));
+        const active = activeTrack();
+        const activeOut = active ? (Number.isFinite(Number(active.clip.endMs)) ? Number(active.clip.endMs) : durationMs) : 0;
+        const markerKey = JSON.stringify({
+          durationMs,
+          activeKey: active ? active.key : '',
+          inMs: active ? active.clip.startMs : 0,
+          outMs: activeOut,
+          markers: markerState.items.map((marker) => [marker.id, marker.timeMs, marker.label]),
+        });
+        if(layoutRefs.markerScale.dataset.renderKey === markerKey) return;
+        layoutRefs.markerScale.dataset.renderKey = markerKey;
+        Array.from(layoutRefs.markerScale.querySelectorAll('.editor-timeline-marker')).forEach((node) => node.remove());
+        if(active){
+          const inCue = makeElement('div', 'editor-timeline-marker is-boundary');
+          inCue.dataset.label = 'in';
+          inCue.style.left = `${(Math.max(0, active.clip.startMs) / durationMs) * 100}%`;
+          layoutRefs.markerScale.appendChild(inCue);
+          const outCue = makeElement('div', 'editor-timeline-marker is-boundary');
+          outCue.dataset.label = 'out';
+          outCue.style.left = `${(Math.max(0, activeOut) / durationMs) * 100}%`;
+          layoutRefs.markerScale.appendChild(outCue);
+        }
+        markerState.items.forEach((marker) => {
+          const markerEl = makeElement('div', 'editor-timeline-marker');
+          markerEl.dataset.label = marker.label;
+          markerEl.style.left = `${(Math.max(0, marker.timeMs) / durationMs) * 100}%`;
+          layoutRefs.markerScale.appendChild(markerEl);
+        });
+      };
+
+      const syncHistoryUi = () => {
+        commandButtons.undo.disabled = clipHistoryPast.length === 0;
+        commandButtons.redo.disabled = clipHistoryFuture.length === 0;
       };
 
       const buildLayout = () => {
-        const variant = currentVariant || editorVariants[0];
-        const toolPanel = makeControlPanel({
-          label: variant.layout === 'deck' ? 'rack' : 'tools',
-          icon: 'select',
-          classes: variant.layout === 'console' ? 'h-full' : '',
-          children: [buttons.select, buttons.razor, buttons.slip, buttons.slide],
-        });
-        const transportPanel = makeControlPanel({
-          label: variant.layout === 'broadcast' ? 'transport' : 'deck',
-          icon: 'play',
-          children: [buttons.magnet, buttons.start, buttons.jumpIn, buttons.play, buttons.jumpOut, buttons.end],
-        });
-        const trimPanel = makeControlPanel({
-          label: variant.layout === 'story' ? 'marks' : 'trim',
-          icon: 'in',
-          children: [buttons.setIn, buttons.setOut, buttons.clear, buttons.zoomOut, buttons.zoomIn],
-        });
-        const metaPanel = makeMetaPanel({
-          label: variant.layout === 'focus' ? 'meters' : 'readout',
-          icon: variant.layout === 'focus' ? 'timeline' : 'monitor',
-        });
-        const primaryTrack = makeTrackPanel({
-          label: variant.layout === 'broadcast' ? 'program' : (variant.layout === 'grid' ? 'hero' : 'focus'),
-          icon: 'monitor',
-          classes: variant.layout === 'focus' ? 'grow' : '',
-        });
-        const secondaryTrack = makeTrackPanel({
-          label: variant.layout === 'deck' ? 'cassettes' : (variant.layout === 'story' ? 'storyline' : (variant.layout === 'console' ? 'banks' : 'stems')),
-          icon: 'timeline',
-          secondary: true,
-          horizontal: ['focus', 'story'].includes(variant.layout),
-          grid: variant.layout === 'grid',
-        });
+        const root = makeElement('div', 'editor-workspace');
+        const topbar = makeElement('div', 'editor-topbar');
+        const titleWrap = makeElement('div', 'editor-titlebar');
+        const titlePrimary = makeElement('div', 'editor-titlebar-name', songDisplayTitle(task.name || 'untitled'));
+        const titleSecondary = makeElement('div', 'editor-titlebar-meta', 'trim and preview');
+        titleWrap.append(titlePrimary, titleSecondary);
+        const topbarActions = makeElement('div', 'editor-topbar-actions');
+        appendChildren(topbarActions, [
+          commandButtons.undo,
+          commandButtons.redo,
+          commandButtons.split,
+          commandButtons.marker,
+          saveBtn,
+          cancelBtn,
+        ]);
+        topbar.append(titleWrap, topbarActions);
 
-        const root = makeElement('div', 'flex flex-col gap-3 min-h-0');
+        const main = makeElement('div', 'editor-workspace-main');
+        const center = makeElement('div', 'editor-workspace-center');
+        const transport = makeElement('div', 'editor-transportbar');
+        const transportGroup = makeElement('div', 'editor-transport-group');
+        appendChildren(transportGroup, [
+          buttons.jumpIn,
+          buttons.play,
+          buttons.jumpOut,
+        ]);
+        const zoomGroup = makeElement('div', 'editor-transport-group');
+        appendChildren(zoomGroup, [
+          buttons.zoomOut,
+          buttons.zoomIn,
+          buttons.fit,
+        ]);
+        const transportReadouts = makeElement('div', 'editor-transport-readouts');
+        transportReadouts.append(transportPlayhead, transportSelection, transportZoom);
+        transport.append(transportGroup, zoomGroup, transportReadouts);
 
-        if(variant.layout === 'stacked'){
-          const grid = makeElement('div', 'grid gap-3 xl:grid-cols-[240px_minmax(0,1fr)] min-h-0');
-          const dock = makeElement('div', 'flex flex-col gap-3');
-          dock.append(toolPanel, transportPanel, trimPanel);
-          const main = makeElement('div', 'flex flex-col gap-3 min-w-0 min-h-0');
-          main.append(metaPanel, primaryTrack.panel, secondaryTrack.panel);
-          grid.append(dock, main);
-          root.appendChild(grid);
-        }else if(variant.layout === 'duo'){
-          const top = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_340px] min-h-0');
-          const left = makeElement('div', 'flex flex-col gap-3 min-w-0 min-h-0');
-          const right = makeElement('div', 'flex flex-col gap-3');
-          left.append(primaryTrack.panel, secondaryTrack.panel);
-          right.append(metaPanel, toolPanel, transportPanel, trimPanel);
-          top.append(left, right);
-          root.appendChild(top);
-        }else if(variant.layout === 'deck'){
-          const grid = makeElement('div', 'grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)_280px] min-h-0');
-          const left = makeElement('div', 'flex flex-col gap-3');
-          const center = makeElement('div', 'flex flex-col gap-3 min-w-0 min-h-0');
-          const right = makeElement('div', 'flex flex-col gap-3');
-          left.append(toolPanel, trimPanel);
-          center.append(metaPanel, primaryTrack.panel);
-          right.append(secondaryTrack.panel, transportPanel);
-          grid.append(left, center, right);
-          root.appendChild(grid);
-        }else if(variant.layout === 'focus'){
-          const top = makeElement('div', 'flex flex-col gap-3 min-h-0');
-          const headerRow = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]');
-          const rail = makeElement('div', 'flex flex-wrap gap-3 justify-end');
-          rail.append(toolPanel, transportPanel, trimPanel);
-          headerRow.append(metaPanel, rail);
-          top.append(headerRow, secondaryTrack.panel, primaryTrack.panel);
-          root.appendChild(top);
-        }else if(variant.layout === 'grid'){
-          const headerRow = makeElement('div', 'grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]');
-          headerRow.append(metaPanel, toolPanel, transportPanel, trimPanel);
-          const body = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,.8fr)] min-h-0');
-          body.append(primaryTrack.panel, secondaryTrack.panel);
-          root.append(headerRow, body);
-        }else if(variant.layout === 'console'){
-          const body = makeElement('div', 'grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)_320px] min-h-0');
-          const left = makeElement('div', 'flex flex-col gap-3');
-          const right = makeElement('div', 'flex flex-col gap-3');
-          left.append(toolPanel, transportPanel);
-          right.append(metaPanel, trimPanel, secondaryTrack.panel);
-          body.append(left, primaryTrack.panel, right);
-          root.appendChild(body);
-        }else if(variant.layout === 'story'){
-          const top = makeElement('div', 'flex flex-col gap-3 min-h-0');
-          const bottom = makeElement('div', 'grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]');
-          bottom.append(metaPanel, toolPanel, transportPanel);
-          top.append(secondaryTrack.panel, primaryTrack.panel, bottom, trimPanel);
-          root.appendChild(top);
-        }else if(variant.layout === 'splitStack'){
-          const top = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(280px,.85fr)] min-h-0');
-          const left = makeElement('div', 'flex flex-col gap-3 min-h-0');
-          const right = makeElement('div', 'flex flex-col gap-3');
-          left.append(primaryTrack.panel, transportPanel);
-          right.append(metaPanel, secondaryTrack.panel, trimPanel);
-          top.append(left, right);
-          root.append(toolPanel, top);
-        }else if(variant.layout === 'cockpit'){
-          const top = makeElement('div', 'grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto]');
-          top.append(toolPanel, transportPanel, trimPanel);
-          const lower = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px] min-h-0');
-          lower.append(primaryTrack.panel, makeElement('div', 'flex flex-col gap-3'));
-          lower.lastChild.append(metaPanel, secondaryTrack.panel);
-          root.append(top, lower);
-        }else{
-          const top = makeElement('div', 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]');
-          const left = makeElement('div', 'flex flex-col gap-3 min-h-0');
-          const right = makeElement('div', 'flex flex-col gap-3');
-          const footer = makeElement('div', 'grid gap-3 lg:grid-cols-[auto_auto_minmax(0,1fr)]');
-          footer.append(toolPanel, trimPanel, transportPanel);
-          left.append(metaPanel, primaryTrack.panel, footer);
-          right.append(secondaryTrack.panel);
-          top.append(left, right);
-          root.appendChild(top);
-        }
+        const timelineShell = makeElement('div', 'editor-timeline-shell');
+        const ruler = makeElement('div', 'editor-ruler');
+        const rulerLabel = makeElement('div', 'editor-ruler-gutter', 'time');
+        const rulerWrap = makeElement('div', 'editor-ruler-scroll');
+        const rulerScale = makeElement('div', 'editor-ruler-scale');
+        const rulerCanvas = document.createElement('canvas');
+        rulerCanvas.className = 'editor-ruler-canvas';
+        rulerCanvas.width = 1600;
+        rulerCanvas.height = 34;
+        const markerScale = makeElement('div', 'editor-ruler-markers');
+        const rulerPlayhead = makeElement('div', 'editor-timeline-playhead editor-timeline-playhead--ruler');
+        rulerScale.append(rulerCanvas, markerScale, rulerPlayhead);
+        rulerWrap.appendChild(rulerScale);
+        ruler.append(rulerLabel, rulerWrap);
+
+        const laneHost = makeElement('div', 'editor-lane-host');
+        const tracksHost = makeElement('div', 'editor-timeline-tracks');
+        laneHost.append(tracksHost);
+        timelineShell.append(ruler, laneHost);
+        center.append(transport, timelineShell);
+
+        const inspector = makeElement('aside', 'editor-inspector');
+        const inspectorHead = makeElement('div', 'editor-inspector-head');
+        inspectorHead.innerHTML = `<span>trim readout</span><span class="editor-inspector-head-meta">${songDisplayTitle(task.name || 'untitled')}</span>`;
+        const inspectorSummary = makeElement('div', 'editor-inspector-summary');
+        inspectorSummary.appendChild(meta);
+        inspector.append(inspectorHead, inspectorSummary);
+
+        main.append(center, inspector);
+        root.append(topbar, main);
+
+        const onSharedScroll = (event) => {
+          syncTimelineScroll(event.currentTarget.scrollLeft, event.currentTarget);
+        };
+        rulerWrap.addEventListener('scroll', onSharedScroll);
+        rulerWrap.addEventListener('wheel', (event) => {
+          if(!event.altKey) return;
+          event.preventDefault();
+          const step = Math.exp(-event.deltaY * 0.0025);
+          updateWaveZoom(waveZoom * step, { anchorClientX: event.clientX, sourceWrap: event.currentTarget });
+        }, { passive: false });
 
         return {
           root,
-          primaryHost: primaryTrack.host,
-          secondaryHost: secondaryTrack.host,
-          secondaryPanels: [secondaryTrack.panel],
+          tracksHost,
+          inspectorTracks: null,
+          rulerCanvas,
+          rulerPlayhead,
+          rulerWrap,
+          rulerScale,
+          markerScale,
+          transportPlayhead,
+          transportSelection,
+          transportZoom,
+          syncingScroll: false,
         };
       };
 
+      const renderTrackPlacement = () => {
+        if(!layoutRefs || !layoutRefs.tracksHost) return;
+        layoutRefs.tracksHost.innerHTML = '';
+        timelineTracks.forEach((trackItem) => {
+          if(trackItem.dom && trackItem.dom.track.parentNode){
+            trackItem.dom.track.remove();
+          }
+          if(trackItem.dom && trackItem.dom.track){
+            layoutRefs.tracksHost.appendChild(trackItem.dom.track);
+          }
+        });
+        renderInspector();
+        renderMarkerLane();
+        drawRuler();
+      };
+
       const applyVariantTheme = (variant) => {
-        card.style.maxWidth = variant.maxWidth || '1240px';
+        card.style.maxWidth = variant.maxWidth || '1560px';
         Object.entries(variant.theme || {}).forEach(([key, value]) => {
           card.style.setProperty(key, value);
           editorShell.style.setProperty(key, value);
         });
-        editorShell.dataset.buttonShape = variant.buttonShape || 'tile';
-        editorShell.dataset.trackStyle = variant.trackStyle || 'glass';
-        setTooltip(titleEl, `${variant.name} layout - press 1-0 to switch`);
-      };
-
-      const setVariant = (variantNumber, { persist = true } = {}) => {
-        const next = byNumber.get(variantNumber) || editorVariants[0];
-        currentVariant = next;
-        if(persist){
-          editorSetLayoutVariant(next.number);
-        }
-        applyVariantTheme(next);
-        refreshButtonIcons();
-        editorShell.innerHTML = '';
-        layoutRefs = buildLayout();
-        editorShell.appendChild(layoutRefs.root);
-        renderTrackPlacement();
-        syncUi();
+        editorShell.dataset.buttonShape = variant.buttonShape || 'rail';
+        editorShell.dataset.trackStyle = variant.trackStyle || 'console';
+        editorShell.dataset.layoutVariant = String(variant.number || '');
+        setTooltip(editorShell, `${variant.name} editor workspace`);
       };
 
       const syncPlayButton = () => {
         const paused = audio.paused;
         buttons.play.innerHTML = paused ? svgIcon('play') : svgIcon('pause');
-        buttons.play.title = paused ? 'play' : 'pause';
+        buttons.play.setAttribute('aria-label', paused ? 'play' : 'pause');
         buttons.play.classList.toggle('is-active', !paused);
-        buttons.play.dataset.tooltip = paused ? 'play or pause - space' : 'pause playback - space';
       };
 
       const syncPlaybackFrame = () => {
         playbackFrame = 0;
         if(audio.paused) return;
         playheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        const trackItem = activeTrack();
-        if(trackItem){
-          const outMs = trackItem.clip.enabled
-            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
-            : trackItem.durationMs;
-          if(outMs > 0 && playheadMs >= outMs){
-            audio.pause();
-            playheadMs = outMs;
-            try { audio.currentTime = outMs / 1000; } catch(_) {}
-            syncUi();
-            return;
-          }
-        }
         syncUi();
         playbackFrame = requestAnimationFrame(syncPlaybackFrame);
       };
@@ -5865,24 +6680,49 @@
 
       const drawTrackWaveform = (trackItem) => {
         if(!trackItem || !trackItem.dom || !trackItem.dom.ctx) return;
-        const { canvas, ctx } = trackItem.dom;
-        const width = canvas.width;
-        const height = canvas.height;
+        const { canvas } = trackItem.dom;
+        const cssHeight = Math.max(34, Math.round(canvas.getBoundingClientRect().height || (trackItem.key === 'source' ? 194 : 34)));
+        const width = timelineRenderWidth();
+        const height = cssHeight;
+        const drawKey = `${width}:${height}:${trackItem.key === activeTrackKey ? 1 : 0}:${trackItem.waveformRevision || 0}`;
+        if(trackItem.dom.waveformDrawKey === drawKey) return;
+        trackItem.dom.waveformDrawKey = drawKey;
+        const ctx = resizeHiDPICanvas(canvas, width, height);
+        if(!ctx) return;
         ctx.clearRect(0, 0, width, height);
         ctx.fillStyle = currentVariant ? currentVariant.waveBg : 'rgba(12, 24, 31, 0.96)';
         ctx.fillRect(0, 0, width, height);
         const values = Array.isArray(trackItem.points) && trackItem.points.length ? trackItem.points : new Array(220).fill(0.12);
-        const step = width / values.length;
-        ctx.fillStyle = trackItem.key === activeTrackKey
-          ? (currentVariant ? currentVariant.waveFill : 'rgba(142, 216, 255, 0.78)')
-          : (currentVariant ? currentVariant.waveFillDim : 'rgba(142, 216, 255, 0.54)');
-        values.forEach((value, index) => {
-          const amp = Math.max(0.035, Math.min(1, Number(value) || 0));
-          const barHeight = amp * (height * 0.86);
-          const x = index * step;
-          const y = (height - barHeight) / 2;
-          ctx.fillRect(x, y, Math.max(1, step - 1), barHeight);
-        });
+        const active = trackItem.key === activeTrackKey;
+        const centerY = height / 2;
+        const lineColor = active
+          ? (currentVariant ? currentVariant.waveFill : 'rgba(142, 216, 255, 0.82)')
+          : (currentVariant ? currentVariant.waveFillDim : 'rgba(142, 216, 255, 0.58)');
+        const glowColor = active ? 'rgba(174, 230, 248, 0.08)' : 'rgba(142, 216, 255, 0.04)';
+        const strokeWidth = trackItem.key === 'source' ? 1.4 : 1.1;
+        const amplitudeScale = height * (trackItem.key === 'source' ? 0.45 : 0.38);
+        ctx.fillStyle = glowColor;
+        ctx.fillRect(0, centerY - 1, width, 2);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = strokeWidth;
+        ctx.lineCap = 'round';
+        for(let x = 0; x < width; x += 2){
+          const startIndex = Math.floor((x / width) * values.length);
+          const endIndex = Math.min(values.length, Math.ceil(((x + 2) / width) * values.length) + 1);
+          let peak = 0;
+          for(let index = startIndex; index < endIndex; index += 1){
+            const value = Number(values[index]) || 0;
+            const left = Number(values[index - 1] ?? value);
+            const right = Number(values[index + 1] ?? value);
+            peak = Math.max(peak, (left + value + right) / 3);
+          }
+          const amp = Math.max(0.028, Math.min(1, peak));
+          const extent = amp * amplitudeScale;
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, centerY - extent);
+          ctx.lineTo(x + 0.5, centerY + extent);
+          ctx.stroke();
+        }
       };
 
       const syncTrackUi = (trackItem) => {
@@ -5895,12 +6735,31 @@
         const startPct = (trackItem.clip.startMs / safeDuration) * 100;
         const endPct = (endValue / safeDuration) * 100;
         const headPct = (currentPlayhead / safeDuration) * 100;
+        const trimActive = !!trackItem.clip.enabled;
         trackItem.dom.selection.style.left = `${startPct}%`;
         trackItem.dom.selection.style.width = `${Math.max(0, endPct - startPct)}%`;
+        trackItem.dom.selection.classList.toggle('is-hidden', !trimActive);
+        if(trackItem.dom.dimBefore){
+          trackItem.dom.dimBefore.style.width = trimActive ? `${Math.max(0, startPct)}%` : '0%';
+          trackItem.dom.dimBefore.classList.toggle('is-hidden', !trimActive || startPct <= 0.05);
+        }
+        if(trackItem.dom.dimAfter){
+          trackItem.dom.dimAfter.style.width = trimActive ? `${Math.max(0, 100 - endPct)}%` : '0%';
+          trackItem.dom.dimAfter.classList.toggle('is-hidden', !trimActive || endPct >= 99.95);
+        }
         trackItem.dom.inMarker.style.left = `${startPct}%`;
         trackItem.dom.outMarker.style.left = `${endPct}%`;
         trackItem.dom.playhead.style.left = `${headPct}%`;
         trackItem.dom.track.classList.toggle('is-active', trackItem.key === activeTrackKey);
+        if(trackItem.dom.muteBtn || trackItem.dom.soloBtn){
+          const state = inspectorState.get(trackItem.key) || { mute: false, solo: false };
+          if(trackItem.dom.muteBtn){
+            trackItem.dom.muteBtn.classList.toggle('is-active', !!state.mute);
+          }
+          if(trackItem.dom.soloBtn){
+            trackItem.dom.soloBtn.classList.toggle('is-active', !!state.solo);
+          }
+        }
       };
 
       const syncMetaUi = () => {
@@ -5910,38 +6769,83 @@
         inLabel.textContent = editorTimeLabel(trackItem ? trackItem.clip.startMs : 0);
         outLabel.textContent = editorTimeLabel(trackItem ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : safeDuration) : 0);
         cursorLabel.textContent = editorTimeLabel(playheadMs);
+        if(layoutRefs.transportPlayhead){
+          layoutRefs.transportPlayhead.textContent = `P ${editorTimeLabel(playheadMs)}`;
+        }
+        if(layoutRefs.transportSelection){
+          const outValue = trackItem ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : safeDuration) : 0;
+          const selectionMs = Math.max(0, outValue - (trackItem ? trackItem.clip.startMs : 0));
+          layoutRefs.transportSelection.textContent = `SEL ${editorTimeLabel(selectionMs)}`;
+        }
+        if(layoutRefs.transportZoom){
+          layoutRefs.transportZoom.textContent = `${waveZoom.toFixed(2)}x`;
+        }
+        const maxDuration = Math.max(1, ...tracks.map((entry) => Math.max(0, Number(entry.durationMs) || 0)));
+        const playheadPct = `${(Math.max(0, Math.min(maxDuration, playheadMs)) / maxDuration) * 100}%`;
+        if(layoutRefs.rulerPlayhead){
+          layoutRefs.rulerPlayhead.style.left = playheadPct;
+        }
       };
 
       const applyWaveZoom = () => {
-        tracks.forEach((trackItem) => {
+        const renderWidth = timelineRenderWidth();
+        timelineTracks.forEach((trackItem) => {
           if(!trackItem.dom || !trackItem.dom.waveShell || !trackItem.dom.zoomWrap) return;
-          if(trackItem.key === activeTrackKey){
-            trackItem.dom.waveShell.style.transformOrigin = 'left center';
-            trackItem.dom.waveShell.style.transform = waveZoom > 1 ? `scaleX(${waveZoom})` : '';
-            trackItem.dom.zoomWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
-          }else{
-            trackItem.dom.waveShell.style.transform = '';
-            trackItem.dom.zoomWrap.style.overflowX = 'hidden';
+          trackItem.dom.waveShell.style.width = `${renderWidth}px`;
+          trackItem.dom.zoomWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
+          if(waveZoom <= 1){
+            trackItem.dom.zoomWrap.scrollLeft = 0;
           }
         });
+        if(layoutRefs.rulerWrap){
+          layoutRefs.rulerWrap.style.overflowX = waveZoom > 1 ? 'auto' : 'hidden';
+          if(waveZoom <= 1){
+            layoutRefs.rulerWrap.scrollLeft = 0;
+          }
+        }
+      };
+
+      const updateWaveZoom = (nextZoom, { anchorClientX = null, sourceWrap = null } = {}) => {
+        const clampedZoom = clampNumber(Math.round(Number(nextZoom || 1) * 100) / 100, WAVE_ZOOM_MIN, WAVE_ZOOM_MAX);
+        if(Math.abs(clampedZoom - waveZoom) < 0.001) return;
+        const wrap = sourceWrap || (timelineTracks[0] && timelineTracks[0].dom ? timelineTracks[0].dom.zoomWrap : null) || layoutRefs.rulerWrap;
+        let offsetX = 0;
+        let progress = 0;
+        if(wrap && Number.isFinite(Number(anchorClientX))){
+          const rect = wrap.getBoundingClientRect();
+          offsetX = clampNumber((Number(anchorClientX) || 0) - rect.left, 0, rect.width);
+          const priorWidth = timelineRenderWidth(waveZoom);
+          progress = priorWidth > 0 ? (wrap.scrollLeft + offsetX) / priorWidth : 0;
+        }
+        waveZoom = clampedZoom;
+        syncUi();
+        if(wrap && Number.isFinite(Number(anchorClientX))){
+          const nextWidth = timelineRenderWidth(waveZoom);
+          const maxScroll = Math.max(0, nextWidth - wrap.clientWidth);
+          syncTimelineScroll(clampNumber((progress * nextWidth) - offsetX, 0, maxScroll));
+        }
       };
 
       const syncEditorToolUi = () => {
-        [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((button) => {
+        [buttons.select, buttons.range, buttons.razor, buttons.slip].forEach((button) => {
           const mode = button.dataset.editorTool;
           if(!mode) return;
           button.classList.toggle('is-active', editorToolMode === mode);
         });
+        commandButtons.split.classList.toggle('is-active', editorToolMode === 'razor');
       };
 
       const syncUi = () => {
+        applyWaveZoom();
         tracks.forEach(syncTrackUi);
         syncMetaUi();
-        applyWaveZoom();
         syncEditorToolUi();
         buttons.magnet.classList.toggle('is-active', snapEnabled);
-        buttons.magnet.title = snapEnabled ? 'snapping on' : 'snapping off';
-        buttons.magnet.dataset.tooltip = snapEnabled ? 'snapping on' : 'snapping off';
+        buttons.magnet.setAttribute('aria-label', snapEnabled ? 'snapping on' : 'snapping off');
+        renderInspector();
+        renderMarkerLane();
+        drawRuler();
+        syncHistoryUi();
         syncPlayButton();
       };
 
@@ -5990,6 +6894,7 @@
             if(payload){
               trackItem.points = Array.isArray(payload.points) ? payload.points : [];
               trackItem.durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
+              trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
               if(trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){
                 trackItem.clip = {
                   startMs: Math.max(0, Math.round(Number(payload.clip_start_ms) || 0)),
@@ -6041,12 +6946,6 @@
         const trackItem = activeTrack();
         await loadPreviewForTrack(trackItem);
         if(audio.paused){
-          const outMs = trackItem.clip.enabled
-            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
-            : trackItem.durationMs;
-          if(outMs > 0 && playheadMs >= outMs){
-            playheadMs = trackItem.clip.startMs;
-          }
           try { audio.currentTime = playheadMs / 1000; } catch(_) {}
           try { await audio.play(); } catch(_) {}
           startPlaybackLoop();
@@ -6080,8 +6979,10 @@
           event.preventDefault();
           const nextClip = editorReadClipboard();
           if(!nextClip) return;
+          const beforeSnapshot = snapshotEditorState();
           trackItem.clip = cloneClipState(nextClip);
           normalizeTrackClip(trackItem);
+          commitHistory(beforeSnapshot);
           syncUi();
           closeContextMenu();
         }, 150);
@@ -6097,30 +6998,102 @@
 
       const createTrackUi = (trackItem) => {
         const trackEl = document.createElement('div');
-        trackEl.className = 'editor-track';
-        const head = document.createElement('div');
-        head.className = 'editor-track-head';
-        head.style.cursor = 'pointer';
+        trackEl.className = `editor-track ${trackItem.placeholder ? 'editor-track--placeholder' : ''}`.trim();
+        if(trackItem.key === 'source'){
+          trackEl.classList.add('editor-track--source');
+        }
+        const gutter = document.createElement('div');
+        gutter.className = 'editor-track-gutter';
+        gutter.style.cursor = trackItem.placeholder ? 'default' : 'pointer';
+        const chip = document.createElement('span');
+        chip.className = 'editor-track-chip';
+        chip.style.background = trackItem.color || (inspectorState.get(trackItem.key) || {}).color || '#8ed8ff';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'editor-track-gutter-copy';
         const title = document.createElement('div');
         title.className = 'editor-track-title';
-        title.textContent = trackItem.label;
-        head.appendChild(title);
-        setTooltip(head, trackItem.key === 'source' ? 'focus source track' : `focus ${trackItem.label}`);
-        head.addEventListener('click', async (event) => {
+        title.textContent = compactTrackLabel(trackItem);
+        const subtitle = document.createElement('div');
+        subtitle.className = 'editor-track-subtitle';
+        subtitle.textContent = displayTrackName(trackItem);
+        titleWrap.append(title, subtitle);
+        if(trackItem.key === 'source'){
+          const state = inspectorState.get(trackItem.key) || { mute: false, solo: false };
+          const laneControls = document.createElement('div');
+          laneControls.className = 'editor-track-controls';
+          const muteBtn = document.createElement('button');
+          muteBtn.type = 'button';
+          muteBtn.className = `editor-mini-toggle editor-mini-toggle--lane ${state.mute ? 'is-active' : ''}`.trim();
+          muteBtn.textContent = 'M';
+          const soloBtn = document.createElement('button');
+          soloBtn.type = 'button';
+          soloBtn.className = `editor-mini-toggle editor-mini-toggle--lane ${state.solo ? 'is-active' : ''}`.trim();
+          soloBtn.textContent = 'S';
+          setTooltip(muteBtn, 'mute source lane');
+          setTooltip(soloBtn, 'solo source lane');
+          guardClick(muteBtn, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const beforeSnapshot = snapshotEditorState();
+            const nextState = inspectorState.get(trackItem.key) || { mute: false, solo: false, exportEnabled: true, levelDb: 0, color: trackColorFor(trackItem, 0) };
+            nextState.mute = !nextState.mute;
+            inspectorState.set(trackItem.key, nextState);
+            commitHistory(beforeSnapshot);
+            syncUi();
+          }, 120);
+          guardClick(soloBtn, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const beforeSnapshot = snapshotEditorState();
+            const nextState = inspectorState.get(trackItem.key) || { mute: false, solo: false, exportEnabled: true, levelDb: 0, color: trackColorFor(trackItem, 0) };
+            nextState.solo = !nextState.solo;
+            inspectorState.set(trackItem.key, nextState);
+            commitHistory(beforeSnapshot);
+            syncUi();
+          }, 120);
+          laneControls.append(muteBtn, soloBtn);
+          titleWrap.appendChild(laneControls);
+          trackEl.dataset.hasLaneControls = 'true';
+          trackItem.dom = trackItem.dom || {};
+          trackItem.dom.muteBtn = muteBtn;
+          trackItem.dom.soloBtn = soloBtn;
+        }
+        gutter.append(chip, titleWrap);
+        trackEl.appendChild(gutter);
+
+        const body = document.createElement('div');
+        body.className = 'editor-track-body';
+        const zoomWrap = document.createElement('div');
+        zoomWrap.className = 'editor-wave-zoom-wrap';
+        body.appendChild(zoomWrap);
+        trackEl.appendChild(body);
+
+        if(trackItem.placeholder){
+          const placeholderShell = document.createElement('div');
+          placeholderShell.className = 'editor-wave-shell editor-wave-shell--placeholder';
+          placeholderShell.innerHTML = '<div class="editor-placeholder-grid"></div>';
+          zoomWrap.appendChild(placeholderShell);
+          trackItem.dom = {
+            track: trackEl,
+            waveShell: placeholderShell,
+            zoomWrap,
+          };
+          return;
+        }
+
+        gutter.addEventListener('click', async (event) => {
           event.preventDefault();
           event.stopPropagation();
           await setActiveTrack(trackItem.key);
         });
-        trackEl.appendChild(head);
 
-        const zoomWrap = document.createElement('div');
-        zoomWrap.className = 'editor-wave-zoom-wrap';
         const waveShell = document.createElement('div');
         waveShell.className = 'editor-wave-shell';
-        setTooltip(waveShell, 'drag handles to trim - right-click for trim clipboard');
         waveShell.innerHTML = `
           <canvas class="editor-wave-canvas" width="1600" height="260"></canvas>
           <div class="editor-wave-overlay">
+            <div class="editor-wave-dim editor-wave-dim--before"></div>
+            <div class="editor-wave-dim editor-wave-dim--after"></div>
             <div class="editor-wave-selection"></div>
             <div class="editor-marker editor-marker-in">
               <div class="editor-marker-cap"></div>
@@ -6140,11 +7113,12 @@
           </div>
         `;
         zoomWrap.appendChild(waveShell);
-        trackEl.appendChild(zoomWrap);
 
         const canvas = waveShell.querySelector('.editor-wave-canvas');
         const ctx = canvas.getContext('2d');
         const overlayEl = waveShell.querySelector('.editor-wave-overlay');
+        const dimBefore = waveShell.querySelector('.editor-wave-dim--before');
+        const dimAfter = waveShell.querySelector('.editor-wave-dim--after');
         const selectionEl = waveShell.querySelector('.editor-wave-selection');
         const inMarker = waveShell.querySelector('.editor-marker-in');
         const playheadMarker = waveShell.querySelector('.editor-marker-playhead');
@@ -6155,13 +7129,27 @@
           canvas,
           ctx,
           overlay: overlayEl,
+          dimBefore,
+          dimAfter,
           selection: selectionEl,
           inMarker,
           playhead: playheadMarker,
           outMarker,
           waveShell,
           zoomWrap,
+          muteBtn: trackItem.dom && trackItem.dom.muteBtn ? trackItem.dom.muteBtn : null,
+          soloBtn: trackItem.dom && trackItem.dom.soloBtn ? trackItem.dom.soloBtn : null,
         };
+
+        zoomWrap.addEventListener('scroll', (event) => {
+          syncTimelineScroll(event.currentTarget.scrollLeft, event.currentTarget);
+        });
+        zoomWrap.addEventListener('wheel', (event) => {
+          if(!event.altKey) return;
+          event.preventDefault();
+          const step = Math.exp(-event.deltaY * 0.0025);
+          updateWaveZoom(waveZoom * step, { anchorClientX: event.clientX, sourceWrap: event.currentTarget });
+        }, { passive: false });
 
         overlayEl.querySelectorAll('.editor-marker-handle').forEach((handle) => {
           handle.addEventListener('pointerdown', async (event) => {
@@ -6175,6 +7163,7 @@
               kind: role,
               trackKey: trackItem.key,
               moved: false,
+              beforeSnapshot: role === 'playhead' ? null : snapshotEditorState(),
             };
             await setActiveTrack(trackItem.key);
             if(role === 'playhead'){
@@ -6197,6 +7186,7 @@
             kind: 'playhead',
             trackKey: trackItem.key,
             moved: false,
+            beforeSnapshot: null,
           };
           playheadMarker.classList.add('is-dragging');
         });
@@ -6209,7 +7199,7 @@
         });
       };
 
-      tracks.forEach(createTrackUi);
+      timelineTracks.forEach(createTrackUi);
 
       const saveEditorChanges = async (reason) => {
         if(reason === 'cancel'){
@@ -6288,6 +7278,9 @@
         if(dragState.moved){
           clickLockUntil = Date.now() + 140;
         }
+        if(dragState.moved && dragState.beforeSnapshot){
+          commitHistory(dragState.beforeSnapshot);
+        }
         dragState = null;
         syncUi();
       };
@@ -6304,13 +7297,14 @@
         if(!overlay.isConnected) return;
         const target = event.target;
         if(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
-        const variantNumber = variantShortcutMap[event.code];
-        if(variantNumber){
+        const modifierPressed = event.metaKey || event.ctrlKey;
+        if(modifierPressed && event.code === 'KeyZ'){
           event.preventDefault();
           event.stopPropagation();
-          if(!currentVariant || currentVariant.number !== variantNumber){
-            closeContextMenu();
-            setVariant(variantNumber);
+          if(event.shiftKey){
+            runRedo();
+          }else{
+            runUndo();
           }
           return;
         }
@@ -6324,13 +7318,17 @@
         if(event.code === 'KeyI'){
           event.preventDefault();
           event.stopPropagation();
+          const beforeSnapshot = snapshotEditorState();
           setInPoint();
+          commitHistory(beforeSnapshot);
           return;
         }
         if(event.code === 'KeyO'){
           event.preventDefault();
           event.stopPropagation();
+          const beforeSnapshot = snapshotEditorState();
           setOutPoint();
+          commitHistory(beforeSnapshot);
         }
       };
       document.addEventListener('keydown', handleEditorKeydown, true);
@@ -6383,24 +7381,13 @@
       });
       audio.addEventListener('timeupdate', () => {
         playheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        const trackItem = activeTrack();
-        if(trackItem){
-          const outMs = trackItem.clip.enabled
-            ? (Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs)
-            : trackItem.durationMs;
-          if(outMs > 0 && playheadMs >= outMs){
-            audio.pause();
-            playheadMs = outMs;
-            try { audio.currentTime = outMs / 1000; } catch(_) {}
-          }
-        }
         syncUi();
       });
       audio.addEventListener('pause', () => { stopPlaybackLoop(); syncUi(); });
       audio.addEventListener('play', () => { startPlaybackLoop(); syncUi(); });
       audio.addEventListener('ended', () => { stopPlaybackLoop(); syncUi(); });
 
-      [buttons.select, buttons.razor, buttons.slip, buttons.slide].forEach((button) => {
+      [buttons.select, buttons.range, buttons.razor, buttons.slip].forEach((button) => {
         guardClick(button, (event) => {
           event.preventDefault();
           const mode = button.dataset.editorTool;
@@ -6411,19 +7398,24 @@
       });
       guardClick(buttons.zoomIn, (event) => {
         event.preventDefault();
-        waveZoom = Math.min(2.5, Math.round((waveZoom + 0.25) * 100) / 100);
-        syncUi();
+        updateWaveZoom(waveZoom + 0.25);
       }, 120);
       guardClick(buttons.zoomOut, (event) => {
         event.preventDefault();
-        waveZoom = Math.max(1, Math.round((waveZoom - 0.25) * 100) / 100);
-        syncUi();
+        updateWaveZoom(waveZoom - 0.25);
       }, 120);
       guardClick(buttons.magnet, (event) => {
         event.preventDefault();
+        const beforeSnapshot = snapshotEditorState();
         snapEnabled = !snapEnabled;
         editorSetSnapEnabled(snapEnabled);
+        commitHistory(beforeSnapshot);
         syncUi();
+      }, 120);
+      guardClick(buttons.fit, (event) => {
+        event.preventDefault();
+        updateWaveZoom(1);
+        syncTimelineScroll(0);
       }, 120);
       guardClick(buttons.start, (event) => {
         event.preventDefault();
@@ -6456,18 +7448,51 @@
       }, 120);
       guardClick(buttons.setIn, (event) => {
         event.preventDefault();
+        const beforeSnapshot = snapshotEditorState();
         setInPoint();
+        commitHistory(beforeSnapshot);
       }, 120);
       guardClick(buttons.setOut, (event) => {
         event.preventDefault();
+        const beforeSnapshot = snapshotEditorState();
         setOutPoint();
+        commitHistory(beforeSnapshot);
       }, 120);
       guardClick(buttons.clear, (event) => {
         event.preventDefault();
         const trackItem = activeTrack();
+        const beforeSnapshot = snapshotEditorState();
         trackItem.clip.startMs = 0;
         trackItem.clip.endMs = trackItem.durationMs || null;
         trackItem.clip.enabled = false;
+        commitHistory(beforeSnapshot);
+        syncUi();
+      }, 120);
+      guardClick(commandButtons.undo, (event) => {
+        event.preventDefault();
+        runUndo();
+      }, 120);
+      guardClick(commandButtons.redo, (event) => {
+        event.preventDefault();
+        runRedo();
+      }, 120);
+      guardClick(commandButtons.split, (event) => {
+        event.preventDefault();
+        const beforeSnapshot = snapshotEditorState();
+        editorToolMode = 'razor';
+        commitHistory(beforeSnapshot);
+        syncUi();
+      }, 120);
+      guardClick(commandButtons.marker, (event) => {
+        event.preventDefault();
+        const beforeSnapshot = snapshotEditorState();
+        markerState.items.push({
+          id: markerState.nextId,
+          label: `M${markerState.nextId}`,
+          timeMs: playheadMs,
+        });
+        markerState.nextId += 1;
+        commitHistory(beforeSnapshot);
         syncUi();
       }, 120);
 
@@ -6483,7 +7508,13 @@
       setTooltip(cancelBtn, 'close without saving');
       setTooltip(saveBtn, 'save trim changes');
 
-      setVariant(editorReadLayoutVariant(), { persist: false });
+      applyVariantTheme(currentVariant);
+      refreshButtonIcons();
+      editorShell.innerHTML = '';
+      layoutRefs = buildLayout();
+      editorShell.appendChild(layoutRefs.root);
+      renderTrackPlacement();
+      syncHistoryUi();
       syncUi();
       void Promise.all(tracks.map((trackItem) => loadWaveformForTrack(trackItem)));
       await setActiveTrack('source', { preservePlayhead: false });
