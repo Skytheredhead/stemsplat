@@ -290,6 +290,31 @@
     .card:hover { box-shadow: 0 8px 26px rgba(0,0,0,.28); }
     .card:has(.dl-pad:hover):hover { box-shadow: 0 12px 40px rgba(0,0,0,.35); }
     .card.done { background: var(--card-done); }
+    .item-row .card,
+    .queue-group-parent-row .card {
+      background:
+        radial-gradient(circle at top right, rgba(142,216,255,.10), rgba(142,216,255,0) 42%),
+        linear-gradient(180deg, rgba(21, 36, 43, 0.86), rgba(14, 26, 33, 0.94));
+      border: 1px solid rgba(214, 236, 245, 0.10);
+      box-shadow:
+        0 16px 34px rgba(0,0,0,.24),
+        inset 0 1px 0 rgba(255,255,255,.06),
+        inset 0 0 0 1px rgba(255,255,255,.02);
+    }
+    .item-row .card:hover,
+    .queue-group-parent-row .card:hover {
+      box-shadow:
+        0 20px 42px rgba(0,0,0,.28),
+        inset 0 1px 0 rgba(255,255,255,.08),
+        inset 0 0 0 1px rgba(255,255,255,.025);
+    }
+    .item-row .card.done,
+    .queue-group-parent-row .card.done {
+      background:
+        radial-gradient(circle at top right, rgba(142,216,255,.12), rgba(142,216,255,0) 44%),
+        linear-gradient(180deg, rgba(30, 52, 61, 0.90), rgba(20, 37, 45, 0.96));
+      border-color: rgba(214, 236, 245, 0.14);
+    }
     .card-body { display:flex; align-items:center; gap:14px; min-width:0; }
     .card-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:12px; }
     .filename-wrap { min-width:0; }
@@ -1674,9 +1699,73 @@
       align-items: center;
       gap: 12px;
       cursor: pointer;
+      padding-bottom: 0;
+      transition: padding-bottom .28s cubic-bezier(.22,.61,.36,1);
+      --queue-stack-space: 0px;
+    }
+    .queue-group-shell.is-collapsed > .queue-group-parent-row {
+      padding-bottom: var(--queue-stack-space);
     }
     .queue-group-parent-row .card {
       position: relative;
+      contain: none;
+      isolation: isolate;
+    }
+    .queue-card-stack {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      top: calc(100% - 2px);
+      height: calc(var(--queue-stack-space) + 18px);
+      pointer-events: none;
+      z-index: -1;
+      opacity: 0;
+      transform: translateY(-6px) scaleY(.92);
+      transform-origin: top center;
+      transition: opacity .26s ease, transform .34s cubic-bezier(.22,.61,.36,1);
+    }
+    .queue-card-stack-layer {
+      position: absolute;
+      height: 14px;
+      border-radius: 0 0 16px 16px;
+      background:
+        radial-gradient(circle at top right, rgba(142,216,255,.08), rgba(142,216,255,0) 56%),
+        linear-gradient(180deg, rgba(21, 36, 43, 0.84), rgba(14, 26, 33, 0.94));
+      border: 1px solid rgba(214, 236, 245, 0.08);
+      box-shadow:
+        0 10px 22px rgba(0,0,0,.18),
+        inset 0 1px 0 rgba(255,255,255,.05);
+    }
+    .queue-card-stack-layer:nth-child(1) {
+      left: 8px;
+      right: 8px;
+      top: 0;
+      opacity: .92;
+    }
+    .queue-card-stack-layer:nth-child(2) {
+      left: 16px;
+      right: 16px;
+      top: 10px;
+      opacity: .78;
+    }
+    .queue-card-stack-layer:nth-child(3) {
+      left: 24px;
+      right: 24px;
+      top: 20px;
+      opacity: .64;
+    }
+    .queue-group-parent-row[data-stack-count="0"] .queue-card-stack {
+      display: none;
+    }
+    .queue-group-parent-row[data-stack-count="1"] .queue-card-stack-layer:nth-child(n + 2) {
+      display: none;
+    }
+    .queue-group-parent-row[data-stack-count="2"] .queue-card-stack-layer:nth-child(n + 3) {
+      display: none;
+    }
+    .queue-group-shell.is-collapsed > .queue-group-parent-row[data-stack-count]:not([data-stack-count="0"]) .queue-card-stack {
+      opacity: 1;
+      transform: translateY(0) scaleY(1);
     }
     .queue-group-parent-row .card::after {
       content: '';
@@ -1684,7 +1773,7 @@
       inset: 0;
       border-radius: 14px;
       pointer-events: none;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.05);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
     }
     .queue-group-children {
       display: flex;
@@ -1718,16 +1807,12 @@
       padding-top: 0.82rem;
       padding-bottom: 0.82rem;
     }
-    .queue-group-children > .item-row {
-      transform: scale(.97);
-      transform-origin: top center;
-    }
+    .queue-group-children > .item-row,
     .queue-batch-shell .queue-group-children > .item-row,
-    .queue-batch-shell .queue-song-shell > .queue-group-children > .item-row {
-      transform: scale(.95);
-    }
+    .queue-batch-shell .queue-song-shell > .queue-group-children > .item-row,
     .queue-batch-shell .queue-song-shell .queue-group-children > .item-row {
-      transform: scale(.93);
+      transform: none;
+      opacity: 1;
     }
     .queue-parent-caret {
       width: 34px;
@@ -2203,8 +2288,21 @@
     @keyframes breathe { 0%{transform:translateY(0)} 50%{transform:translateY(-2px)} 100%{transform:translateY(0)} }
     .micro { animation: breathe 3s ease-in-out infinite; }
     .slide-out { opacity: 0; transform: translateY(-10px); transition: transform .35s ease-in-out, opacity .35s ease-in-out; }
-    .enter-pre { opacity: 0; transform: translateY(8px); }
-    .enter-active { opacity: 1; transform: translateY(0); transition: transform .35s ease-in-out, opacity .35s ease-in-out; }
+    .enter-pre {
+      opacity: 0;
+      transform: translateY(18px) scale(.985);
+      filter: blur(10px);
+    }
+    .enter-active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+      transition:
+        transform .52s cubic-bezier(.18,.8,.22,1),
+        opacity .42s ease,
+        filter .52s cubic-bezier(.18,.8,.22,1);
+      transition-delay: var(--queue-enter-delay, 0ms);
+    }
     /* leave/fade/slide transition for queue items */
     .leave { opacity: 1; transform: translateY(0); }
     .leave-active { transition: transform .16s ease-in-out, opacity .16s ease-in-out; }
@@ -2267,6 +2365,17 @@
   .card:hover{ transform:none; }
   .micro{ animation:none; }
   .labels.labels-unlocked .chip.chip-dim{ animation:none; }
+  .queue-group-parent-row,
+  .queue-card-stack,
+  .enter-active {
+    transition: none !important;
+  }
+  .enter-pre,
+  .enter-active {
+    filter: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
   body.clear-all-anim #app-shell,
   body.clear-all-anim .window-chrome,
   body.clear-all-anim .bottom-left-controls,
@@ -4320,6 +4429,28 @@
       if(!task) return '';
       if(task.id) return `id:${task.id}`;
       return `temp:${task.tempKey || ''}:${stemsIdentityKey(task.stems || [])}`;
+    }
+
+    const queueAnimatedEntryKeys = new Set();
+
+    function stageQueueEntry(node, key, delayMs = 0){
+      if(!node) return;
+      const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      if(reducedMotion){
+        node.classList.remove('enter-pre');
+        node.classList.add('enter-active');
+        return;
+      }
+      if(key){
+        if(queueAnimatedEntryKeys.has(key)) return;
+        queueAnimatedEntryKeys.add(key);
+      }
+      node.style.setProperty('--queue-enter-delay', `${Math.max(0, Number(delayMs) || 0)}ms`);
+      node.classList.remove('enter-active');
+      node.classList.add('enter-pre');
+      requestAnimationFrame(() => {
+        node.classList.add('enter-active');
+      });
     }
 
     function queueTaskCount(){
@@ -6928,17 +7059,13 @@
       }
       setStatusVisibility(st, task.stage);
       const inserted = node.children[0];
-      inserted.classList.add('enter-pre');
       inserted.__taskId = task.id;
       inserted.__tempKey = task.tempKey || '';
       inserted.__batchKey = task.batchKey || '';
       inserted.__taskRowKey = taskRowIdentity(task);
       inserted.__stems = Array.isArray(task.stems) ? task.stems.slice() : [];
       queue.insertBefore(inserted, queue.firstChild);
-      // apply enter transition to the inserted card
-      requestAnimationFrame(() => {
-        inserted.classList.add('enter-active');
-      });
+      stageQueueEntry(inserted, `task:${inserted.__taskRowKey}`, Math.min(80, queue.childElementCount * 18));
       // Apply any stem labels if present
       applyLabels(inserted.querySelector('.labels'), displayStemsForTask(task));
       applyRowState(inserted, task);
@@ -6960,6 +7087,18 @@
         stopPad.classList.add('show');
         stopPad.title = 'expand';
         stopPad.innerHTML = '<span class="queue-parent-caret" aria-hidden="true"><svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>';
+      }
+      const card = row.querySelector('.card');
+      if(card){
+        const stack = document.createElement('div');
+        stack.className = 'queue-card-stack';
+        stack.setAttribute('aria-hidden', 'true');
+        stack.innerHTML = `
+          <span class="queue-card-stack-layer"></span>
+          <span class="queue-card-stack-layer"></span>
+          <span class="queue-card-stack-layer"></span>
+        `;
+        card.appendChild(stack);
       }
       return row;
     }
@@ -7016,6 +7155,12 @@
       const presetBtn = row.querySelector('.task-preset-btn');
       const shell = row.querySelector('.artwork-shell');
       const fallback = row.querySelector('.artwork-fallback');
+      const sourceCount = kind === 'batch'
+        ? Math.max(0, artworkGridTasks.length)
+        : Math.max(0, Array.isArray(childTasks) ? childTasks.length : 0);
+      const stackCount = Math.min(3, Math.max(0, sourceCount - 1));
+      row.dataset.stackCount = String(stackCount);
+      row.style.setProperty('--queue-stack-space', stackCount > 0 ? `${stackCount * 10 + 8}px` : '0px');
       let grid = row.querySelector('.queue-artwork-grid');
       if(!grid && shell){
         grid = document.createElement('div');
@@ -7100,7 +7245,7 @@
       shell.classList.toggle('is-collapsed', !expanded);
       const children = shell.querySelector(':scope > .queue-group-children');
       if(children){
-        children.style.maxHeight = expanded ? `${children.scrollHeight + 12}px` : '0px';
+        children.style.maxHeight = expanded ? 'none' : '0px';
       }
     }
 
@@ -7166,6 +7311,7 @@
           stems: unionStems,
         } : { name: 'song', stage: 'ready', pct: 0, stems: unionStems, groupStems: unionStems };
         syncParentRow(parentRow, parentTask, songTasks, { kind: 'song', title: songDisplayTitle(parentTask.name) });
+        stageQueueEntry(parentRow, `song-group:${groupKey}`);
         const toggle = (event) => {
           if(event.target.closest('button')) return;
           setGroupExpanded('song', groupKey, !isGroupExpanded('song', groupKey));
@@ -7223,6 +7369,7 @@
             title: megaCardTitle(songGroups.flatMap((group) => group.tasks.slice(0, 1))),
             artworkGridTasks: songGroups.flatMap((group) => group.tasks.slice(0, 1)),
           });
+          stageQueueEntry(parentRow, `batch-group:${songBatchKey}`);
           parentRow.addEventListener('click', (event) => {
             if(event.target.closest('button')) return;
             setGroupExpanded('batch', songBatchKey, !isGroupExpanded('batch', songBatchKey));
