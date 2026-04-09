@@ -2,9 +2,7 @@
 
 **MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers to fiddle with and the best quality.
 
-<p align="center">
-  <img src="assets/ui-preview.png" alt="Stemsplat UI" width="760" />
-</p>
+<img width="1430" height="892" alt="Screenshot 2026-04-09 at 9 35 16 AM" src="https://github.com/user-attachments/assets/20aac5ad-c93f-4ab5-b3e3-78d664b7214d" />
 
 
 ## Prerequisites
