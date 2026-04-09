@@ -335,6 +335,38 @@ class ExpandedBatterySmokeTests(ExpandedBatteryBase):
         self.assertIn("models", models.json())
         self.assertIn("status", downloads.json())
 
+    def test_model_status_reports_expected_download_sizes(self) -> None:
+        descriptors = [
+            {
+                "tag": "vocals",
+                "filename": main.MODEL_SPECS["vocals"].filename,
+                "url": "https://example.test/vocals",
+                "size_bytes": 123,
+            },
+            {
+                "tag": "instrumental",
+                "filename": main.MODEL_SPECS["instrumental"].filename,
+                "url": "https://example.test/instrumental",
+                "size_bytes": 456,
+            },
+        ]
+        (self.model_dir / main.MODEL_SPECS["vocals"].filename).unlink()
+        (self.model_dir / main.MODEL_SPECS["instrumental"].filename).unlink()
+        with mock.patch.object(main, "describe_downloads", return_value=descriptors):
+            models = self.client.get("/api/models_status")
+            downloads = self.client.get("/api/model_download_status")
+
+        self.assertEqual(models.status_code, 200, models.text)
+        self.assertEqual(downloads.status_code, 200, downloads.text)
+        models_payload = models.json()
+        downloads_payload = downloads.json()
+        self.assertEqual(models_payload["expected_total_bytes"], 579)
+        self.assertEqual(downloads_payload["expected_total_bytes"], 579)
+        self.assertEqual(downloads_payload["expected_missing_total_bytes"], 579)
+        by_key = {item["key"]: item for item in models_payload["models"]}
+        self.assertEqual(by_key["vocals"]["expected_size_bytes"], 123)
+        self.assertEqual(by_key["instrumental"]["expected_size_bytes"], 456)
+
 
 class ExpandedBatteryProcessingTests(ExpandedBatteryBase):
     def test_cancel_mid_processing_stops_cleanly_and_cleans_outputs(self) -> None:

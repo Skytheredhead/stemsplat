@@ -36,7 +36,7 @@ from enum import Enum
 from functools import partial, wraps
 from pathlib import Path
 from packaging import version
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 import soundfile as sf
@@ -44,7 +44,7 @@ import torch
 import yaml
 from beartype import beartype
 from beartype.typing import Callable as BeartypeCallable, Optional as BeartypeOptional, Tuple as BeartypeTuple
-from downloader import ModelDownloadError, SSL_CONTEXT, download_to, download_url_to_path
+from downloader import ModelDownloadError, SSL_CONTEXT, describe_downloads, download_to, download_url_to_path
 from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
@@ -932,7 +932,7 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.5.0"
 DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -1259,6 +1259,7 @@ EDITOR_WAVEFORM_POINTS = 1280
 EDITOR_WAVEFORM_POINTS_MIN = 640
 EDITOR_WAVEFORM_POINTS_MAX = 131072
 EDITOR_SAMPLE_RATE = 44_100
+EDITOR_SOURCE_WAVEFORM_CACHE_POINTS = (EDITOR_WAVEFORM_POINTS, 8192)
 
 MODE_CHOICES = set(MODE_TO_STEMS)
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
@@ -2132,16 +2133,6 @@ for uvicorn_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 for path in (MODEL_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, OUTPUT_ROOT):
     _ensure_dir(path)
 
-
-def _close_installer_ui(port: int = 6060) -> None:
-    url = f"http://localhost:{port}/installer_shutdown"
-    try:
-        with urllib.request.urlopen(url, timeout=1):
-            logger.debug("closed installer ui on %s", url)
-    except Exception:
-        logger.debug("installer ui not reachable at %s", url)
-
-
 def _cleanup_old_runtime_entries(path: Path, max_age_seconds: int = RUNTIME_CLEANUP_MAX_AGE_SEC) -> None:
     cutoff = time.time() - max_age_seconds
     for candidate in path.iterdir():
@@ -2680,23 +2671,19 @@ def _editor_waveform_payload_from_mono(
         return {"duration_ms": duration_ms, "points": [], "mins": [], "maxs": [], "point_count": 0}
     normalized_points = _coerce_editor_waveform_points(points)
     bucket_size = max(1, math.ceil(total_samples / max(8, normalized_points)))
-    payload_points: list[float] = []
-    payload_mins: list[float] = []
-    payload_maxs: list[float] = []
-    for start in range(0, total_samples, bucket_size):
-        stop = min(total_samples, start + bucket_size)
-        window = mono[start:stop]
-        if window.numel():
-            min_value = float(window.min().item())
-            max_value = float(window.max().item())
-            abs_peak = max(abs(min_value), abs(max_value))
-        else:
-            min_value = 0.0
-            max_value = 0.0
-            abs_peak = 0.0
-        payload_points.append(round(abs_peak, 4))
-        payload_mins.append(round(max(-1.0, min(1.0, min_value)), 4))
-        payload_maxs.append(round(max(-1.0, min(1.0, max_value)), 4))
+    bucket_count = max(1, math.ceil(total_samples / bucket_size))
+    padded_total = bucket_count * bucket_size
+    working = mono.detach().to(dtype=torch.float32).flatten()
+    if padded_total > total_samples:
+        pad_value = working[-1] if total_samples > 0 else working.new_tensor(0.0)
+        working = torch.cat((working, pad_value.repeat(padded_total - total_samples)))
+    windows = working.view(bucket_count, bucket_size)
+    mins_tensor = torch.clamp(windows.amin(dim=1), -1.0, 1.0)
+    maxs_tensor = torch.clamp(windows.amax(dim=1), -1.0, 1.0)
+    peaks_tensor = torch.maximum(mins_tensor.abs(), maxs_tensor.abs())
+    payload_points = [round(float(value), 4) for value in peaks_tensor.tolist()]
+    payload_mins = [round(float(value), 4) for value in mins_tensor.tolist()]
+    payload_maxs = [round(float(value), 4) for value in maxs_tensor.tolist()]
     return {
         "duration_ms": duration_ms,
         "points": payload_points,
@@ -2704,6 +2691,78 @@ def _editor_waveform_payload_from_mono(
         "maxs": payload_maxs,
         "point_count": len(payload_points),
     }
+
+
+def _editor_waveform_payload_from_extrema(
+    mins: torch.Tensor,
+    maxs: torch.Tensor,
+    *,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any]:
+    sample_count = int(min(mins.numel(), maxs.numel()))
+    if sample_count <= 0:
+        return {"points": [], "mins": [], "maxs": [], "point_count": 0}
+    normalized_points = _coerce_editor_waveform_points(points)
+    bucket_size = max(1, math.ceil(sample_count / max(8, normalized_points)))
+    bucket_count = max(1, math.ceil(sample_count / bucket_size))
+    padded_total = bucket_count * bucket_size
+    mins_working = mins[:sample_count].detach().to(dtype=torch.float32).flatten()
+    maxs_working = maxs[:sample_count].detach().to(dtype=torch.float32).flatten()
+    if padded_total > sample_count:
+        mins_pad = mins_working[-1]
+        maxs_pad = maxs_working[-1]
+        mins_working = torch.cat((mins_working, mins_pad.repeat(padded_total - sample_count)))
+        maxs_working = torch.cat((maxs_working, maxs_pad.repeat(padded_total - sample_count)))
+    mins_windows = mins_working.view(bucket_count, bucket_size)
+    maxs_windows = maxs_working.view(bucket_count, bucket_size)
+    mins_tensor = torch.clamp(mins_windows.amin(dim=1), -1.0, 1.0)
+    maxs_tensor = torch.clamp(maxs_windows.amax(dim=1), -1.0, 1.0)
+    peaks_tensor = torch.maximum(mins_tensor.abs(), maxs_tensor.abs())
+    return {
+        "points": [round(float(value), 4) for value in peaks_tensor.tolist()],
+        "mins": [round(float(value), 4) for value in mins_tensor.tolist()],
+        "maxs": [round(float(value), 4) for value in maxs_tensor.tolist()],
+        "point_count": int(bucket_count),
+    }
+
+
+def _resample_editor_waveform_payload(payload: dict[str, Any], *, points: int) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    mins = payload.get("mins")
+    maxs = payload.get("maxs")
+    if not isinstance(mins, list) or not isinstance(maxs, list):
+        return None
+    sample_count = min(len(mins), len(maxs))
+    duration_ms = max(0, int(round(float(payload.get("duration_ms") or 0))))
+    if sample_count <= 0:
+        return {
+            "duration_ms": duration_ms,
+            "points": [],
+            "mins": [],
+            "maxs": [],
+            "point_count": 0,
+        }
+    normalized_points = _coerce_editor_waveform_points(points)
+    if sample_count <= normalized_points:
+        source_points = payload.get("points")
+        if not isinstance(source_points, list) or len(source_points) < sample_count:
+            source_points = [
+                max(abs(float(mins[index] or 0.0)), abs(float(maxs[index] or 0.0)))
+                for index in range(sample_count)
+            ]
+        return {
+            "duration_ms": duration_ms,
+            "points": [max(0.0, min(1.0, float(value or 0.0))) for value in source_points[:sample_count]],
+            "mins": [max(-1.0, min(1.0, float(value or 0.0))) for value in mins[:sample_count]],
+            "maxs": [max(-1.0, min(1.0, float(value or 0.0))) for value in maxs[:sample_count]],
+            "point_count": sample_count,
+        }
+    mins_tensor = torch.tensor(mins[:sample_count], dtype=torch.float32)
+    maxs_tensor = torch.tensor(maxs[:sample_count], dtype=torch.float32)
+    resampled = _editor_waveform_payload_from_extrema(mins_tensor, maxs_tensor, points=normalized_points)
+    resampled["duration_ms"] = duration_ms
+    return resampled
 
 
 def _editor_waveform_payload_for_path(audio_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
@@ -2791,11 +2850,70 @@ def _cached_editor_source_waveform_payload(task_id: str, points: int = EDITOR_WA
     return _read_editor_waveform_cache(_editor_source_waveform_cache_path(task_id, points))
 
 
-def _cache_editor_source_waveform(task_id: str, wav_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
+def _best_cached_editor_source_waveform_payload(
+    task_id: str,
+    *,
+    min_points: int,
+) -> dict[str, Any] | None:
+    cache_dir = _editor_cache_dir(task_id)
+    candidate_payloads: list[tuple[int, dict[str, Any]]] = []
+    for path in cache_dir.glob("source_waveform*.json"):
+        payload = _read_editor_waveform_cache(path)
+        if payload is None:
+            continue
+        point_count = max(
+            0,
+            int(round(float(payload.get("point_count") or 0))),
+            len(payload.get("points") or []),
+            len(payload.get("mins") or []),
+            len(payload.get("maxs") or []),
+        )
+        if point_count >= min_points:
+            candidate_payloads.append((point_count, payload))
+    if not candidate_payloads:
+        return None
+    candidate_payloads.sort(key=lambda item: item[0])
+    return candidate_payloads[0][1]
+
+
+def _cached_or_resampled_editor_source_waveform_payload(
+    task_id: str,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any] | None:
+    normalized_points = _coerce_editor_waveform_points(points)
+    payload = _cached_editor_source_waveform_payload(task_id, normalized_points)
+    if payload is not None:
+        return payload
+    source_payload = _best_cached_editor_source_waveform_payload(task_id, min_points=normalized_points)
+    if source_payload is None:
+        return None
+    resampled = _resample_editor_waveform_payload(source_payload, points=normalized_points)
+    if resampled is None:
+        return None
+    _write_json_atomic(_editor_source_waveform_cache_path(task_id, normalized_points), resampled)
+    return resampled
+
+
+def _cache_editor_source_waveforms(
+    task_id: str,
+    wav_path: Path,
+    *,
+    points_values: Sequence[int] = EDITOR_SOURCE_WAVEFORM_CACHE_POINTS,
+) -> dict[int, dict[str, Any]]:
+    normalized_values = tuple(dict.fromkeys(_coerce_editor_waveform_points(points) for points in points_values))
     waveform = _load_waveform(wav_path)
-    payload = _editor_waveform_payload_from_tensor(waveform, points=points)
-    _write_json_atomic(_editor_source_waveform_cache_path(task_id, points), payload)
-    return payload
+    mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+    cached: dict[int, dict[str, Any]] = {}
+    for normalized_points in normalized_values:
+        payload = _editor_waveform_payload_from_mono(mono, points=normalized_points)
+        _write_json_atomic(_editor_source_waveform_cache_path(task_id, normalized_points), payload)
+        cached[normalized_points] = payload
+    return cached
+
+
+def _cache_editor_source_waveform(task_id: str, wav_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
+    normalized_points = _coerce_editor_waveform_points(points)
+    return _cache_editor_source_waveforms(task_id, wav_path, points_values=(normalized_points,))[normalized_points]
 
 
 def _editor_clipped_preview_path(task_id: str, clip: dict[str, Any]) -> Path:
@@ -2837,9 +2955,12 @@ def _ensure_editor_source_cache(task_id: str) -> Path | None:
     task = _require_task(task_id)
     cached_preview = _cached_editor_source_preview_path(task_id)
     if cached_preview is not None:
-        if _cached_editor_source_waveform_payload(task_id) is None:
+        if any(
+            _cached_or_resampled_editor_source_waveform_payload(task_id, points) is None
+            for points in EDITOR_SOURCE_WAVEFORM_CACHE_POINTS
+        ):
             with contextlib.suppress(Exception):
-                _cache_editor_source_waveform(task_id, cached_preview)
+                _cache_editor_source_waveforms(task_id, cached_preview, points_values=EDITOR_SOURCE_WAVEFORM_CACHE_POINTS)
         return cached_preview
 
     source_path = Path(str(task.get("source_path") or "")).expanduser()
@@ -2855,7 +2976,7 @@ def _ensure_editor_source_cache(task_id: str) -> Path | None:
         temp_preview_path = preview_path.with_suffix(".wav.tmp")
         shutil.copy2(decoded_path, temp_preview_path)
         temp_preview_path.replace(preview_path)
-        _cache_editor_source_waveform(task_id, preview_path)
+        _cache_editor_source_waveforms(task_id, preview_path, points_values=EDITOR_SOURCE_WAVEFORM_CACHE_POINTS)
         return preview_path
     finally:
         _cleanup_path(temp_dir)
@@ -4536,6 +4657,23 @@ def _selected_missing_models(selection: list[str] | None = None) -> list[str]:
     return [item for item in requested if not _model_file_exists(MODEL_SPECS[item].filename)]
 
 
+def _model_download_descriptors(selection: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    return {str(entry.get("tag") or ""): entry for entry in describe_downloads(selection)}
+
+
+def _sum_known_descriptor_bytes(descriptors: Sequence[dict[str, Any]]) -> int:
+    total_bytes = 0
+    for entry in descriptors:
+        size_bytes = entry.get("size_bytes")
+        if isinstance(size_bytes, int) and size_bytes > 0:
+            total_bytes += size_bytes
+    return total_bytes
+
+
+def _expected_model_download_bytes(selection: list[str] | None = None) -> int:
+    return _sum_known_descriptor_bytes(list(_model_download_descriptors(selection).values()))
+
+
 def _public_model_download_status() -> dict[str, Any]:
     with model_download_lock:
         payload = dict(model_download_state)
@@ -4548,6 +4686,8 @@ def _public_model_download_status() -> dict[str, Any]:
             "models_dir": str(MODEL_DIR),
             "models": models_status["models"],
             "downloaded_total_bytes": int(models_status["downloaded_total_bytes"]),
+            "expected_total_bytes": int(models_status["expected_total_bytes"]),
+            "expected_missing_total_bytes": int(models_status["expected_missing_total_bytes"]),
             "prompt_state": MODEL_PROMPT_COMPLETE if not missing else prompt_state,
         }
     )
@@ -4557,23 +4697,33 @@ def _public_model_download_status() -> dict[str, Any]:
 def _models_status_payload() -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     total_bytes = 0
+    expected_total_bytes = 0
+    expected_missing_total_bytes = 0
     missing: list[str] = []
+    download_descriptors = _model_download_descriptors()
     for key in MODEL_SPECS:
         path = _locate_model_file(MODEL_SPECS[key].filename)
         size_bytes = 0
         if path is not None:
             with contextlib.suppress(OSError):
                 size_bytes = max(0, int(path.stat().st_size))
+        descriptor = download_descriptors.get(key, {})
+        expected_size_bytes = descriptor.get("size_bytes")
         ready = path is not None and size_bytes >= 0
         if not ready:
             missing.append(key)
         total_bytes += size_bytes
+        if isinstance(expected_size_bytes, int) and expected_size_bytes > 0:
+            expected_total_bytes += expected_size_bytes
+            if not ready:
+                expected_missing_total_bytes += expected_size_bytes
         details.append(
             {
                 "key": key,
                 "label": MODEL_DISPLAY_NAMES.get(key, key),
                 "ready": ready,
                 "size_bytes": size_bytes if ready else None,
+                "expected_size_bytes": expected_size_bytes if isinstance(expected_size_bytes, int) and expected_size_bytes > 0 else None,
                 "path": str(path) if path is not None else "",
             }
         )
@@ -4582,6 +4732,8 @@ def _models_status_payload() -> dict[str, Any]:
         "models_dir": str(MODEL_DIR),
         "models": details,
         "downloaded_total_bytes": total_bytes,
+        "expected_total_bytes": expected_total_bytes,
+        "expected_missing_total_bytes": expected_missing_total_bytes,
     }
 
 
@@ -4634,7 +4786,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         step="preparing downloads",
         current_model="",
         downloaded_bytes=0,
-        total_bytes=0,
+        total_bytes=_expected_model_download_bytes(missing),
         download_rate_bytes_per_sec=0.0,
         eta_seconds=None,
         retry_count=0,
@@ -4731,6 +4883,21 @@ def _start_model_download(selection: list[str] | None = None) -> dict[str, Any]:
     with model_download_lock:
         if model_download_thread is not None and model_download_thread.is_alive():
             return _public_model_download_status()
+        missing = _selected_missing_models(selection)
+        _set_model_download_state(
+            status="done" if not missing else "downloading",
+            pct=100 if not missing else 1,
+            step="models ready" if not missing else "preparing downloads",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=_expected_model_download_bytes(missing),
+            download_rate_bytes_per_sec=0.0,
+            eta_seconds=0 if not missing else None,
+            retry_count=0,
+            retry_label="0",
+            started_at=time.time() if missing else None,
+            error="",
+        )
         model_download_thread = threading.Thread(target=_run_model_download, args=(selection,), daemon=True)
         model_download_thread.start()
     return _public_model_download_status()
@@ -6138,7 +6305,7 @@ def _process_task(task_id: str) -> None:
                 preview_path = _editor_source_preview_path(task_id)
                 preview_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(decoded_path, preview_path)
-                _cache_editor_source_waveform(task_id, preview_path)
+                _cache_editor_source_waveforms(task_id, preview_path, points_values=EDITOR_SOURCE_WAVEFORM_CACHE_POINTS)
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
         waveform, clip_snapshot = _apply_clip_to_waveform(task, waveform)
@@ -6965,7 +7132,6 @@ if _background_threads_enabled():
 
 @app.on_event("startup")
 async def _startup_cleanup() -> None:
-    _close_installer_ui()
     _cleanup_old_runtime_entries(WORK_DIR)
     _cleanup_old_runtime_entries(UPLOAD_DIR)
     _cleanup_old_runtime_entries(INTERMEDIATE_CACHE_DIR, INTERMEDIATE_CACHE_RETENTION_SECONDS)
@@ -7416,11 +7582,11 @@ async def task_waveform(task_id: str, output: str | None = None, points: int | N
     requested = str(output or "").strip()
     normalized_points = _coerce_editor_waveform_points(points)
     if not requested or requested == "source":
-        payload = _cached_editor_source_waveform_payload(task_id, normalized_points)
+        payload = _cached_or_resampled_editor_source_waveform_payload(task_id, normalized_points)
         if payload is None:
             preview_path = _ensure_editor_source_cache(task_id)
             if preview_path is not None:
-                payload = _cached_editor_source_waveform_payload(task_id, normalized_points)
+                payload = _cached_or_resampled_editor_source_waveform_payload(task_id, normalized_points)
                 if payload is None:
                     payload = _cache_editor_source_waveform(task_id, preview_path, points=normalized_points)
         if payload is None:
@@ -8091,7 +8257,6 @@ async def favicon():
 async def shutdown(request: Request):
     _require_local_request(request, "LAN clients cannot control the host machine.")
     logger.warning("shutdown requested; exiting process")
-    _close_installer_ui()
 
     def _exit_soon() -> None:
         time.sleep(0.25)
@@ -8114,7 +8279,6 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
 
     import uvicorn
 
-    _close_installer_ui()
     if not _port_available(args.port):
         raise SystemExit(f"Port {args.port} is already in use.")
     uvicorn.run("main:app", host=args.host, port=args.port, reload=False)

@@ -1,11 +1,6 @@
 stemsplat developer notes
 =========================
 
-Installer ➜ app handoff
------------------------
-- The installer UI runs on http://localhost:6060 and fades out once the main FastAPI app on http://localhost:8000 responds.
-- During handoff we trigger a short fade on the installer shell, then navigate to port 8000. A `navigator.sendBeacon` call (with a fetch fallback) asks the installer helper to shut down so the port is freed.
-
 Audio processing pipeline
 -------------------------
 1. Upload: Files are stored under `uploads/` and immediately normalized into 44.1 kHz stereo WAVs in `uploads_converted/`.
@@ -16,7 +11,7 @@ Audio processing pipeline
 
 Key backend behaviors
 ---------------------
-- ffmpeg is required for conversion. The server first looks for a system binary and otherwise falls back to the `imageio-ffmpeg` bundled executable. Run the installer to ensure the fallback is available.
+- ffmpeg is required for conversion. The server first looks for a system binary and otherwise falls back to the `imageio-ffmpeg` bundled executable.
 - `/upload` only converts and stages files; `/start/{task_id}` queues the heavy processing. Reruns reuse the converted WAV via `/rerun/{task_id}`.
 
 Front-end flow

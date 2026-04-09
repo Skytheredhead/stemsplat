@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import errno
-import hashlib
 import os
-import re
 import shutil
 import ssl
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -21,7 +21,7 @@ CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 REQUEST_TIMEOUT = 60
 MIN_FREE_SPACE_BUFFER_BYTES = 64 * 1024 * 1024
 SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where()) if certifi else ssl.create_default_context()
-HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+REMOTE_METADATA_CACHE_TTL_SECONDS = 60 * 60
 
 FILES = [
     {
@@ -128,41 +128,14 @@ class ModelDownloadError(RuntimeError):
         self.filename = filename
 
 
-def _clean_header_value(value: str | None) -> str | None:
-    if value is None:
-        return None
-    cleaned = value.strip().strip('"').strip("'")
-    return cleaned or None
-
-
-def _normalize_sha256(value: str | None) -> str | None:
-    cleaned = _clean_header_value(value)
-    if cleaned is None:
-        return None
-    candidate = cleaned.lower()
-    return candidate if HEX_SHA256_RE.fullmatch(candidate) else None
-
-
-def _sha256_for_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while True:
-            chunk = handle.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+_remote_metadata_cache_lock = threading.RLock()
+_remote_metadata_cache: dict[str, tuple[float, RemoteFileMetadata]] = {}
 
 
 def _metadata_from_headers(headers: Mapping[str, str | None]) -> RemoteFileMetadata:
     content_length = headers.get("Content-Length")
     size = int(content_length) if content_length and str(content_length).isdigit() else None
-    sha256 = None
-    for header_name in ("X-Linked-ETag", "ETag", "X-Xet-Hash"):
-        sha256 = _normalize_sha256(headers.get(header_name))
-        if sha256 is not None:
-            break
-    return RemoteFileMetadata(size=size, sha256=sha256)
+    return RemoteFileMetadata(size=size, sha256=None)
 
 
 def _merge_remote_metadata(primary: RemoteFileMetadata, fallback: RemoteFileMetadata) -> RemoteFileMetadata:
@@ -170,6 +143,13 @@ def _merge_remote_metadata(primary: RemoteFileMetadata, fallback: RemoteFileMeta
         size=primary.size if primary.size is not None else fallback.size,
         sha256=primary.sha256 if primary.sha256 is not None else fallback.sha256,
     )
+
+
+def _selected_items(selected: list[str] | None = None) -> list[Mapping[str, Any]]:
+    available_by_tag = {str(item.get("tag") or ""): item for item in FILES if item.get("tag")}
+    if selected:
+        return [available_by_tag[tag] for tag in dict.fromkeys(str(tag) for tag in selected) if tag in available_by_tag]
+    return list(FILES)
 
 
 def _format_bytes(value: int) -> str:
@@ -296,18 +276,46 @@ def _matches_expected_file(path: Path, *, expected_size: int | None, expected_sh
         return False
     if expected_size is not None and path.stat().st_size != expected_size:
         return False
-    if expected_sha256 is not None:
-        return _sha256_for_file(path) == expected_sha256
     return expected_size is not None
 
 
-def get_remote_file_metadata(url: str) -> RemoteFileMetadata:
+def get_remote_file_metadata(url: str, *, force_refresh: bool = False) -> RemoteFileMetadata:
+    if not force_refresh:
+        with _remote_metadata_cache_lock:
+            cached = _remote_metadata_cache.get(url)
+        if cached is not None:
+            cached_at, metadata = cached
+            if (time.time() - cached_at) < REMOTE_METADATA_CACHE_TTL_SECONDS:
+                return metadata
     try:
         req = Request(url, method="HEAD", headers={"User-Agent": "app-downloader"})
         with urlopen(req, timeout=REQUEST_TIMEOUT, context=SSL_CONTEXT) as r:
-            return _metadata_from_headers(r.headers)
+            metadata = _metadata_from_headers(r.headers)
     except Exception:
-        return RemoteFileMetadata()
+        metadata = RemoteFileMetadata()
+    with _remote_metadata_cache_lock:
+        _remote_metadata_cache[url] = (time.time(), metadata)
+    return metadata
+
+
+def describe_downloads(selected: list[str] | None = None) -> list[dict[str, Any]]:
+    descriptions: list[dict[str, Any]] = []
+    for item in _selected_items(selected):
+        url = str(item.get("url") or "").strip()
+        filename = str(item.get("filename") or "").strip()
+        tag = str(item.get("tag") or "").strip()
+        if not url or not filename or not tag:
+            continue
+        metadata = get_remote_file_metadata(url)
+        descriptions.append(
+            {
+                "tag": tag,
+                "filename": filename,
+                "url": url,
+                "size_bytes": metadata.size if isinstance(metadata.size, int) and metadata.size > 0 else None,
+            }
+        )
+    return descriptions
 
 
 def _emit_progress(
@@ -347,11 +355,7 @@ def download_to(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     base_dir = base_dir.resolve()
-    available_by_tag = {str(item.get("tag") or ""): item for item in FILES if item.get("tag")}
-    if selected:
-        selected_items = [available_by_tag[tag] for tag in dict.fromkeys(str(tag) for tag in selected) if tag in available_by_tag]
-    else:
-        selected_items = list(FILES)
+    selected_items = _selected_items(selected)
     if not selected_items:
         _emit_progress(
             progress_cb,
@@ -371,12 +375,7 @@ def download_to(
     for item in selected_items:
         tag = str(item.get("tag") or "")
         url, _dest = _validate_item(item, base_dir=base_dir)
-        remote_sha256 = _normalize_sha256(str(item.get("sha256") or "")) if item.get("sha256") else None
-        if item.get("sha256") and remote_sha256 is None:
-            raise _download_error("invalid-config", f"invalid sha256 configured for {item['filename']}", retryable=False, item=item)
         remote_metadata = get_remote_file_metadata(url)
-        if remote_sha256 is not None:
-            remote_metadata = RemoteFileMetadata(size=remote_metadata.size, sha256=remote_sha256)
         cached_metadata[tag] = remote_metadata
         remote_len = remote_metadata.size
         if isinstance(remote_len, int) and remote_len > 0:
@@ -409,7 +408,6 @@ def download_to(
         _ensure_disk_space(dest.parent, required_bytes=remote_len, item=item)
 
         bytes_written = 0
-        digest = hashlib.sha256()
         try:
             req = Request(url, headers={"User-Agent": "app-downloader"})
             with urlopen(req, timeout=REQUEST_TIMEOUT, context=SSL_CONTEXT) as r:
@@ -426,7 +424,6 @@ def download_to(
                             if not chunk:
                                 break
                             f.write(chunk)
-                            digest.update(chunk)
                             bytes_written += len(chunk)
                             _emit_progress(
                                 progress_cb,
@@ -463,11 +460,6 @@ def download_to(
                 retryable=True,
                 item=item,
             )
-
-        downloaded_sha256 = digest.hexdigest()
-        if expected_sha256 is not None and downloaded_sha256 != expected_sha256:
-            _cleanup_partial_file(tmp, item=item)
-            raise _download_error("checksum-mismatch", f"checksum mismatch for {item['filename']}", retryable=True, item=item)
         try:
             os.replace(tmp, dest)
         except OSError as exc:
@@ -531,7 +523,6 @@ def download_url_to_path(
     _ensure_disk_space(dest.parent, required_bytes=remote_len, item=item)
 
     bytes_written = 0
-    digest = hashlib.sha256()
     try:
         req = Request(url, headers={"User-Agent": user_agent})
         with urlopen(req, timeout=REQUEST_TIMEOUT, context=SSL_CONTEXT) as response:
@@ -547,7 +538,6 @@ def download_url_to_path(
                         if not chunk:
                             break
                         handle.write(chunk)
-                        digest.update(chunk)
                         bytes_written += len(chunk)
                         _emit_progress(
                             progress_cb,
@@ -584,11 +574,6 @@ def download_url_to_path(
             retryable=True,
             item=item,
         )
-
-    downloaded_sha256 = digest.hexdigest()
-    if expected_sha256 is not None and downloaded_sha256 != expected_sha256:
-        _cleanup_partial_file(tmp, item=item)
-        raise _download_error("checksum-mismatch", f"checksum mismatch for {item['filename']}", retryable=True, item=item)
     try:
         os.replace(tmp, dest)
     except OSError as exc:

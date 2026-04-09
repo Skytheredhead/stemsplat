@@ -27,6 +27,23 @@ def _run_step(name: str, command: list[str], *, env: dict[str, str] | None = Non
     return StepResult(name=name, returncode=result.returncode)
 
 
+def _project_python() -> str:
+    override = os.environ.get("PYTHON_BIN")
+    if override:
+        return override
+
+    for candidate in (
+        ROOT / "venv" / "bin" / "python",
+        ROOT / ".venv" / "bin" / "python",
+        ROOT / "venv" / "Scripts" / "python.exe",
+        ROOT / ".venv" / "Scripts" / "python.exe",
+    ):
+        if candidate.exists():
+            return str(candidate)
+
+    return sys.executable
+
+
 def main_cli() -> int:
     parser = argparse.ArgumentParser(description="Run the expanded Stemsplat test battery.")
     parser.add_argument(
@@ -39,9 +56,10 @@ def main_cli() -> int:
     env = dict(os.environ)
     env.setdefault("STEMSPLAT_DISABLE_BACKGROUND_THREADS", "1")
 
-    python = sys.executable
+    python = _project_python()
     baseline_modules = [
         "tests.test_downloader_checksums",
+        "tests.test_editor_waveforms",
         "tests.test_model_download_retry_policy",
         "tests.test_model_registry",
         "tests.test_output_layout",
@@ -58,7 +76,6 @@ def main_cli() -> int:
                 "main.py",
                 "downloader.py",
                 "launcher.py",
-                "install.py",
                 "app_paths.py",
                 "tests/test_expanded_battery.py",
             ],

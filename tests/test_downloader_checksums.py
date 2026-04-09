@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import io
 import shutil
 import tempfile
@@ -31,9 +30,8 @@ class DownloaderChecksumTests(unittest.TestCase):
     def _single_file_entry(self, *, url: str = "https://example.test/verified.ckpt") -> list[dict[str, str]]:
         return [{"url": url, "subdir": "models", "filename": "verified.ckpt", "tag": "verified"}]
 
-    def test_cached_file_is_skipped_only_when_sha256_matches(self) -> None:
+    def test_cached_file_is_skipped_when_size_matches_even_if_checksum_differs(self) -> None:
         payload = b"verified-model-contents"
-        expected_sha256 = hashlib.sha256(payload).hexdigest()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
@@ -48,17 +46,15 @@ class DownloaderChecksumTests(unittest.TestCase):
             ), mock.patch.object(
                 downloader,
                 "get_remote_file_metadata",
-                return_value=downloader.RemoteFileMetadata(size=len(payload), sha256=expected_sha256),
+                return_value=downloader.RemoteFileMetadata(size=len(payload), sha256="0" * 64),
             ), mock.patch.object(downloader, "urlopen") as mocked_urlopen:
                 downloader.download_to(base_dir)
 
         mocked_urlopen.assert_not_called()
 
-    def test_cached_file_is_redownloaded_when_sha256_mismatch(self) -> None:
-        stale_payload = b"stale-model-contents"
+    def test_cached_file_is_redownloaded_when_size_mismatch(self) -> None:
+        stale_payload = b"stale"
         fresh_payload = b"fresh-model-contents"
-        self.assertEqual(len(stale_payload), len(fresh_payload))
-        expected_sha256 = hashlib.sha256(fresh_payload).hexdigest()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
@@ -73,7 +69,7 @@ class DownloaderChecksumTests(unittest.TestCase):
             ), mock.patch.object(
                 downloader,
                 "get_remote_file_metadata",
-                return_value=downloader.RemoteFileMetadata(size=len(fresh_payload), sha256=expected_sha256),
+                return_value=downloader.RemoteFileMetadata(size=len(fresh_payload), sha256="f" * 64),
             ), mock.patch.object(
                 downloader,
                 "urlopen",
@@ -86,10 +82,8 @@ class DownloaderChecksumTests(unittest.TestCase):
 
         mocked_urlopen.assert_called_once()
 
-    def test_download_fails_when_payload_sha256_does_not_match(self) -> None:
-        expected_payload = b"expected-model-contents"
+    def test_download_ignores_payload_sha256_mismatch(self) -> None:
         actual_payload = b"unexpected-model-data!"
-        expected_sha256 = hashlib.sha256(expected_payload).hexdigest()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
@@ -102,18 +96,15 @@ class DownloaderChecksumTests(unittest.TestCase):
             ), mock.patch.object(
                 downloader,
                 "get_remote_file_metadata",
-                return_value=downloader.RemoteFileMetadata(size=len(actual_payload), sha256=expected_sha256),
+                return_value=downloader.RemoteFileMetadata(size=len(actual_payload), sha256="e" * 64),
             ), mock.patch.object(
                 downloader,
                 "urlopen",
                 return_value=_FakeDownloadResponse(actual_payload),
             ):
-                with self.assertRaises(downloader.ModelDownloadError) as ctx:
-                    downloader.download_to(base_dir)
+                downloader.download_to(base_dir)
 
-            self.assertEqual(ctx.exception.code, "checksum-mismatch")
-            self.assertTrue(ctx.exception.retryable)
-            self.assertFalse(dest.exists())
+            self.assertEqual(dest.read_bytes(), actual_payload)
             self.assertFalse((base_dir / "models" / "verified.ckpt.part").exists())
 
     def test_download_fails_when_payload_size_does_not_match(self) -> None:
@@ -166,8 +157,7 @@ class DownloaderChecksumTests(unittest.TestCase):
 
     def test_download_uses_get_headers_when_head_metadata_is_missing(self) -> None:
         payload = b"verified-model-contents"
-        expected_sha256 = hashlib.sha256(payload).hexdigest()
-        headers = {"Content-Length": str(len(payload)), "ETag": f'"{expected_sha256}"'}
+        headers = {"Content-Length": str(len(payload))}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
@@ -282,7 +272,6 @@ class DownloaderChecksumTests(unittest.TestCase):
 
     def test_download_deduplicates_selected_tags(self) -> None:
         payload = b"verified-model-contents"
-        expected_sha256 = hashlib.sha256(payload).hexdigest()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
@@ -293,7 +282,7 @@ class DownloaderChecksumTests(unittest.TestCase):
             ), mock.patch.object(
                 downloader,
                 "get_remote_file_metadata",
-                return_value=downloader.RemoteFileMetadata(size=len(payload), sha256=expected_sha256),
+                return_value=downloader.RemoteFileMetadata(size=len(payload), sha256=None),
             ), mock.patch.object(
                 downloader,
                 "urlopen",

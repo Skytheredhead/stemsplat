@@ -4224,7 +4224,7 @@
       const modelMap = new Map(
         (Array.isArray(status && status.models) ? status.models : []).map((item) => [item.key, item])
       );
-      let totalBytes = 0;
+      let installedBytes = 0;
       modelsList.innerHTML = '';
       MODEL_CHECKLIST_ORDER.forEach((key) => {
         const detail = modelMap.get(key) || null;
@@ -4242,11 +4242,14 @@
         label.className = 'model-item-label';
         label.textContent = MODEL_LABELS[key] || key;
         copy.appendChild(label);
-        if(ready && detail && Number(detail.size_bytes) > 0){
-          totalBytes += Number(detail.size_bytes) || 0;
+        const displaySize = ready ? Number(detail && detail.size_bytes) : Number(detail && detail.expected_size_bytes);
+        if(ready && Number(detail && detail.size_bytes) > 0){
+          installedBytes += Number(detail.size_bytes) || 0;
+        }
+        if(displaySize > 0){
           const size = document.createElement('span');
           size.className = 'model-item-size';
-          size.textContent = formatBytes(detail.size_bytes);
+          size.textContent = formatBytes(displaySize);
           copy.appendChild(size);
         }
         main.append(box, copy);
@@ -4269,7 +4272,13 @@
         modelsList.appendChild(row);
       });
       if(modelsTotal){
-        modelsTotal.textContent = totalBytes > 0 ? `total ${formatBytes(totalBytes)}` : '';
+        const expectedTotalBytes = Number(status && status.expected_total_bytes) || 0;
+        const totalBytes = expectedTotalBytes > 0 ? expectedTotalBytes : installedBytes;
+        if(totalBytes > 0 && installedBytes > 0 && expectedTotalBytes > installedBytes){
+          modelsTotal.textContent = `${formatBytes(installedBytes)} installed · ${formatBytes(totalBytes)} total`;
+        }else{
+          modelsTotal.textContent = totalBytes > 0 ? `total ${formatBytes(totalBytes)}` : '';
+        }
         modelsTotal.hidden = totalBytes <= 0;
       }
     }
@@ -4479,6 +4488,15 @@
         unit = units[i];
       }
       return `${size.toFixed(size >= 100 ? 0 : 1)} ${unit}`;
+    }
+
+    function allMissingModels(status = lastModelStatus){
+      return Array.isArray(status && status.missing) ? status.missing : [];
+    }
+
+    function expectedMissingModelBytes(status = lastModelStatus){
+      const value = Number(status && status.expected_missing_total_bytes);
+      return Number.isFinite(value) && value > 0 ? value : 0;
     }
 
     function formatDuration(seconds){
@@ -4699,6 +4717,7 @@
       const relevantMissing = relevantMissingModels(status);
       const isDownloading = !!(status && status.status === 'downloading');
       const isError = !!(status && status.status === 'error');
+      const downloadedTotalBytes = Number(status && status.downloaded_total_bytes) || 0;
       modelsBlocked = relevantMissing.length > 0 || isDownloading;
       renderModelChecklist(status);
       syncModelDownloadToast(status);
@@ -4708,6 +4727,8 @@
           noteMessage = status.error || 'model download failed';
         }else if(isDownloading){
           noteMessage = `downloading ${status.current_model || 'models'}`;
+        }else if(missing.length && downloadedTotalBytes <= 0){
+          noteMessage = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
         }else if(missing.length){
           noteMessage = relevantMissing.length
             ? `${relevantMissing.length} required model${relevantMissing.length === 1 ? '' : 's'} missing`
@@ -4742,7 +4763,10 @@
         modelsDownloadBtn.hidden = !showDownloadButton;
         modelsDownloadBtn.disabled = false;
         modelsDownloadBtn.classList.toggle('attention-sequence', showDownloadButton);
-        modelsDownloadBtn.textContent = isError ? 'retry download' : 'download models';
+        const totalMissingBytes = expectedMissingModelBytes(status);
+        modelsDownloadBtn.textContent = isError
+          ? 'retry download'
+          : (totalMissingBytes > 0 ? `download models (${formatBytes(totalMissingBytes)})` : 'download models');
       }
       if(modelsFolderBtn){
         modelsFolderBtn.hidden = isLanClient;
@@ -6449,7 +6473,7 @@
         <div class="text-xs opacity-70 text-center"><a href="https://huggingface.co/becruily" target="_blank" rel="noopener noreferrer" class="underline">models by becruily</a></div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.4.2</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.5.0</div>
     </div>
   </div>
 

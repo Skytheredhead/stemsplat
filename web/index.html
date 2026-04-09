@@ -5641,17 +5641,7 @@
 
     function primeTaskEditorAssets(task){
       if(!task || !task.id) return;
-      [640, 768, 896, 1024, 1152, 1280, 1536, 1792, 2048].forEach((points) => {
-        void ensureEditorWaveformPayload(task.id, '', points);
-      });
-      if(String(task.stage || '').toLowerCase() === 'done' && Array.isArray(task.outputs)){
-        task.outputs.forEach((output) => {
-          if(!output) return;
-          [640, 768, 896, 1024, 1280, 1536].forEach((points) => {
-            void ensureEditorWaveformPayload(task.id, String(output), points);
-          });
-        });
-      }
+      void ensureEditorWaveformPayload(task.id, '', 1280);
     }
 
     function bindTaskEditorButton(btn, task){
@@ -6115,6 +6105,7 @@
       const EDITOR_WAVEFORM_POINTS_MIN = 640;
       const EDITOR_WAVEFORM_POINTS_MAX = 131072;
       const EDITOR_WAVEFORM_POINT_STEPS = EDITOR_WAVEFORM_POINT_LEVELS.slice();
+      const WAVEFORM_DETAIL_TRANSITION_MS = 180;
 
       const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
       const timelineRenderWidth = (zoomValue = waveZoom) => {
@@ -6461,21 +6452,48 @@
 
       const applyTrackWaveformPayload = (trackItem, payload, { preserveClip = false } = {}) => {
         if(!trackItem || !payload || typeof payload !== 'object') return false;
+        const nextPoints = Array.isArray(payload.points) ? payload.points : [];
+        const nextMins = Array.isArray(payload.mins) ? payload.mins : [];
+        const nextMaxs = Array.isArray(payload.maxs) ? payload.maxs : [];
         const nextPointCount = Math.max(
-          Array.isArray(payload.points) ? payload.points.length : 0,
-          Array.isArray(payload.mins) ? payload.mins.length : 0,
-          Array.isArray(payload.maxs) ? payload.maxs.length : 0,
+          nextPoints.length,
+          nextMins.length,
+          nextMaxs.length,
           Math.round(Number(payload.point_count) || 0),
         );
         const currentPointCount = Math.max(0, Number(trackItem.pointCount) || 0);
         const durationMs = Math.max(0, Math.round(Number(payload.duration_ms) || 0));
         const changed = (
           nextPointCount !== currentPointCount ||
-          durationMs !== Math.max(0, Math.round(Number(trackItem.durationMs) || 0))
+          durationMs !== Math.max(0, Math.round(Number(trackItem.durationMs) || 0)) ||
+          nextPoints !== trackItem.points ||
+          nextMins !== trackItem.mins ||
+          nextMaxs !== trackItem.maxs
         );
-        trackItem.points = Array.isArray(payload.points) ? payload.points : [];
-        trackItem.mins = Array.isArray(payload.mins) ? payload.mins : [];
-        trackItem.maxs = Array.isArray(payload.maxs) ? payload.maxs : [];
+        const priorDurationMs = Math.max(0, Math.round(Number(trackItem.durationMs) || 0));
+        const shouldBlendDetailUpgrade = changed &&
+          currentPointCount > 0 &&
+          nextPointCount > currentPointCount &&
+          nextMins.length &&
+          nextMaxs.length &&
+          Array.isArray(trackItem.mins) &&
+          trackItem.mins.length &&
+          Array.isArray(trackItem.maxs) &&
+          trackItem.maxs.length &&
+          Math.abs(durationMs - priorDurationMs) <= 2;
+        if(shouldBlendDetailUpgrade){
+          trackItem.waveformTransition = {
+            mins: trackItem.mins.slice(),
+            maxs: trackItem.maxs.slice(),
+            startedAt: (window.performance && typeof window.performance.now === 'function') ? window.performance.now() : Date.now(),
+            durationMs: WAVEFORM_DETAIL_TRANSITION_MS,
+          };
+        }else{
+          trackItem.waveformTransition = null;
+        }
+        trackItem.points = nextPoints;
+        trackItem.mins = nextMins;
+        trackItem.maxs = nextMaxs;
         trackItem.pointCount = nextPointCount;
         trackItem.durationMs = durationMs;
         if(!preserveClip && trackItem.key === 'source' && !originalTrackDrafts[trackItem.key]){
@@ -6485,7 +6503,9 @@
             enabled: !!payload.clip_enabled,
           };
         }
-        trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
+        if(changed){
+          trackItem.waveformRevision = (trackItem.waveformRevision || 0) + 1;
+        }
         return changed;
       };
 
@@ -6851,8 +6871,11 @@
       const syncPlaybackFrame = () => {
         playbackFrame = 0;
         if(audio.paused) return;
-        playheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        syncUi();
+        const nextPlayheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        if(nextPlayheadMs !== playheadMs){
+          playheadMs = nextPlayheadMs;
+          syncTransportUi();
+        }
         playbackFrame = requestAnimationFrame(syncPlaybackFrame);
       };
 
@@ -6865,6 +6888,107 @@
         if(!playbackFrame) return;
         cancelAnimationFrame(playbackFrame);
         playbackFrame = 0;
+      };
+
+      const waveformTransitionNow = () => (
+        (window.performance && typeof window.performance.now === 'function') ? window.performance.now() : Date.now()
+      );
+
+      const activeWaveformTransition = (trackItem) => {
+        if(!trackItem || !trackItem.waveformTransition) return null;
+        const transition = trackItem.waveformTransition;
+        const durationMs = Math.max(1, Number(transition.durationMs) || WAVEFORM_DETAIL_TRANSITION_MS);
+        const progress = clampNumber((waveformTransitionNow() - Number(transition.startedAt || 0)) / durationMs, 0, 1);
+        if(progress >= 0.999){
+          trackItem.waveformTransition = null;
+          return null;
+        }
+        return {
+          ...transition,
+          progress,
+        };
+      };
+
+      const waveformProjectionForRange = ({
+        mins,
+        maxs,
+        renderStart,
+        renderEnd,
+        renderWidth,
+        canvasWidth,
+        centerY,
+        amplitudeScale,
+        densityBias = 1,
+      }) => {
+        const sampleCount = Math.max(1, Math.min(
+          Array.isArray(mins) ? mins.length : 0,
+          Array.isArray(maxs) ? maxs.length : 0,
+        ));
+        const visibleStartIndex = clampNumber(Math.floor((renderStart / Math.max(1, renderWidth)) * sampleCount) - 1, 0, sampleCount - 1);
+        const visibleEndIndex = clampNumber(Math.ceil((renderEnd / Math.max(1, renderWidth)) * sampleCount) + 1, visibleStartIndex + 1, sampleCount);
+        const visibleCount = Math.max(1, visibleEndIndex - visibleStartIndex);
+        const columnTarget = Math.max(1, Math.min(
+          visibleCount,
+          Math.ceil(canvasWidth * densityBias),
+          2400,
+        ));
+        const projectedUpper = new Array(columnTarget);
+        const projectedLower = new Array(columnTarget);
+        const projectedX = new Array(columnTarget);
+        for(let column = 0; column < columnTarget; column += 1){
+          const sliceStart = Math.floor((column / columnTarget) * visibleCount);
+          const sliceEnd = Math.max(sliceStart + 1, Math.min(visibleCount, Math.ceil(((column + 1) / columnTarget) * visibleCount)));
+          let minValue = 1;
+          let maxValue = -1;
+          for(let offset = sliceStart; offset < sliceEnd; offset += 1){
+            const index = visibleStartIndex + offset;
+            const sampleMin = Math.max(-1, Math.min(0, Number(mins[index] ?? 0)));
+            const sampleMax = Math.max(0, Math.min(1, Number(maxs[index] ?? 0)));
+            if(sampleMin < minValue) minValue = sampleMin;
+            if(sampleMax > maxValue) maxValue = sampleMax;
+          }
+          if(maxValue < 0) maxValue = 0;
+          if(minValue > 0) minValue = 0;
+          projectedUpper[column] = centerY - (maxValue * amplitudeScale);
+          projectedLower[column] = centerY - (minValue * amplitudeScale);
+          projectedX[column] = columnTarget <= 1 ? 0 : (column / (columnTarget - 1)) * Math.max(1, canvasWidth - 1);
+        }
+        return { projectedUpper, projectedLower, projectedX, columnTarget };
+      };
+
+      const drawProjectedWaveform = (ctx, projection, { fillColor, strokeColor, alpha = 1 } = {}) => {
+        if(!ctx || !projection || !projection.columnTarget) return;
+        const safeAlpha = clampNumber(Number(alpha) || 0, 0, 1);
+        if(safeAlpha <= 0.001) return;
+        const { projectedUpper, projectedLower, projectedX, columnTarget } = projection;
+        const priorAlpha = ctx.globalAlpha;
+        ctx.globalAlpha = priorAlpha * safeAlpha;
+        ctx.beginPath();
+        ctx.moveTo(projectedX[0] ?? 0, projectedUpper[0] ?? 0);
+        for(let offset = 1; offset < columnTarget; offset += 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedUpper[offset] ?? 0);
+        }
+        for(let offset = columnTarget - 1; offset >= 0; offset -= 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedLower[offset] ?? 0);
+        }
+        ctx.closePath();
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(projectedX[0] ?? 0, projectedUpper[0] ?? 0);
+        for(let offset = 1; offset < columnTarget; offset += 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedUpper[offset] ?? 0);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(projectedX[0] ?? 0, projectedLower[0] ?? 0);
+        for(let offset = 1; offset < columnTarget; offset += 1){
+          ctx.lineTo(projectedX[offset] ?? 0, projectedLower[offset] ?? 0);
+        }
+        ctx.stroke();
+        ctx.globalAlpha = priorAlpha;
       };
 
       const drawTrackWaveform = (trackItem) => {
@@ -6891,9 +7015,16 @@
         const renderStart = needsRebuffer ? desiredStart : currentStart;
         const renderEnd = Math.min(renderWidth, renderStart + bufferWidth);
         const canvasWidth = Math.max(1, renderEnd - renderStart);
-        const drawKey = `${viewportWidth}:${canvasWidth}:${height}:${renderStart}:${renderEnd}:${renderWidth}:${active ? 1 : 0}:${trackItem.waveformRevision || 0}`;
+        const transition = activeWaveformTransition(trackItem);
+        const transitionFrame = transition ? Math.round(transition.progress * 12) : 0;
+        const drawKey = `${viewportWidth}:${canvasWidth}:${height}:${renderStart}:${renderEnd}:${renderWidth}:${active ? 1 : 0}:${trackItem.waveformRevision || 0}:${transitionFrame}`;
         canvas.style.left = `${renderStart}px`;
-        if(trackItem.dom.waveformDrawKey === drawKey) return;
+        if(trackItem.dom.waveformDrawKey === drawKey){
+          if(transition){
+            scheduleViewportRender(trackItem);
+          }
+          return;
+        }
         trackItem.dom.waveformDrawKey = drawKey;
         trackItem.dom.renderedStart = renderStart;
         trackItem.dom.renderedEnd = renderEnd;
@@ -6915,66 +7046,52 @@
         const centerLineColor = active ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.10)';
         const verticalPadding = trackItem.key === 'source' ? 4 : 8;
         const amplitudeScale = Math.max(12, (height / 2) - verticalPadding);
-        const sampleCount = Math.max(1, Math.min(mins.length, maxs.length));
-        const visibleStartIndex = clampNumber(Math.floor((renderStart / Math.max(1, renderWidth)) * sampleCount) - 1, 0, sampleCount - 1);
-        const visibleEndIndex = clampNumber(Math.ceil((renderEnd / Math.max(1, renderWidth)) * sampleCount) + 1, visibleStartIndex + 1, sampleCount);
-        const visibleCount = Math.max(1, visibleEndIndex - visibleStartIndex);
-        const columnTarget = Math.max(1, Math.min(
-          visibleCount,
-          Math.ceil(canvasWidth * (trackItem.key === 'source' ? 1.15 : 1)),
-          2400,
-        ));
-        const projectedUpper = new Array(columnTarget);
-        const projectedLower = new Array(columnTarget);
-        const projectedX = new Array(columnTarget);
-        for(let column = 0; column < columnTarget; column += 1){
-          const sliceStart = Math.floor((column / columnTarget) * visibleCount);
-          const sliceEnd = Math.max(sliceStart + 1, Math.min(visibleCount, Math.ceil(((column + 1) / columnTarget) * visibleCount)));
-          let minValue = 1;
-          let maxValue = -1;
-          for(let offset = sliceStart; offset < sliceEnd; offset += 1){
-            const index = visibleStartIndex + offset;
-            const sampleMin = Math.max(-1, Math.min(0, Number(mins[index] ?? 0)));
-            const sampleMax = Math.max(0, Math.min(1, Number(maxs[index] ?? 0)));
-            if(sampleMin < minValue) minValue = sampleMin;
-            if(sampleMax > maxValue) maxValue = sampleMax;
-          }
-          if(maxValue < 0) maxValue = 0;
-          if(minValue > 0) minValue = 0;
-          projectedUpper[column] = centerY - (maxValue * amplitudeScale);
-          projectedLower[column] = centerY - (minValue * amplitudeScale);
-          projectedX[column] = columnTarget <= 1 ? 0 : (column / (columnTarget - 1)) * Math.max(1, canvasWidth - 1);
+        const densityBias = trackItem.key === 'source' ? 1.15 : 1;
+        const nextProjection = waveformProjectionForRange({
+          mins,
+          maxs,
+          renderStart,
+          renderEnd,
+          renderWidth,
+          canvasWidth,
+          centerY,
+          amplitudeScale,
+          densityBias,
+        });
+        if(transition && Array.isArray(transition.mins) && Array.isArray(transition.maxs)){
+          const priorProjection = waveformProjectionForRange({
+            mins: transition.mins,
+            maxs: transition.maxs,
+            renderStart,
+            renderEnd,
+            renderWidth,
+            canvasWidth,
+            centerY,
+            amplitudeScale,
+            densityBias,
+          });
+          drawProjectedWaveform(ctx, priorProjection, {
+            fillColor,
+            strokeColor,
+            alpha: 1 - transition.progress,
+          });
+          drawProjectedWaveform(ctx, nextProjection, {
+            fillColor,
+            strokeColor,
+            alpha: transition.progress,
+          });
+          scheduleViewportRender(trackItem);
+        }else{
+          drawProjectedWaveform(ctx, nextProjection, {
+            fillColor,
+            strokeColor,
+            alpha: 1,
+          });
         }
-        ctx.beginPath();
-        ctx.moveTo(projectedX[0] ?? 0, projectedUpper[0] ?? centerY);
-        for(let offset = 1; offset < columnTarget; offset += 1){
-          ctx.lineTo(projectedX[offset] ?? 0, projectedUpper[offset] ?? centerY);
-        }
-        for(let offset = columnTarget - 1; offset >= 0; offset -= 1){
-          ctx.lineTo(projectedX[offset] ?? 0, projectedLower[offset] ?? centerY);
-        }
-        ctx.closePath();
-        ctx.fillStyle = fillColor;
-        ctx.fill();
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, centerY + 0.5);
         ctx.lineTo(canvasWidth, centerY + 0.5);
         ctx.strokeStyle = centerLineColor;
-        ctx.stroke();
-        ctx.strokeStyle = strokeColor;
-        ctx.beginPath();
-        ctx.moveTo(projectedX[0] ?? 0, projectedUpper[0] ?? centerY);
-        for(let offset = 1; offset < columnTarget; offset += 1){
-          ctx.lineTo(projectedX[offset] ?? 0, projectedUpper[offset] ?? centerY);
-        }
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(projectedX[0] ?? 0, projectedLower[0] ?? centerY);
-        for(let offset = 1; offset < columnTarget; offset += 1){
-          ctx.lineTo(projectedX[offset] ?? 0, projectedLower[offset] ?? centerY);
-        }
         ctx.stroke();
       };
 
@@ -7024,6 +7141,14 @@
             trackItem.dom.soloBtn.classList.toggle('is-active', !!state.solo);
           }
         }
+      };
+
+      const syncTrackTransportUi = (trackItem) => {
+        if(!trackItem || !trackItem.dom) return;
+        const safeDuration = Math.max(1, trackItem.durationMs || 1);
+        const currentPlayhead = Math.max(0, Math.min(trackItem.durationMs || 0, playheadMs));
+        const headPct = (currentPlayhead / safeDuration) * 100;
+        trackItem.dom.playhead.style.left = `${headPct}%`;
       };
 
       const syncMetaUi = () => {
@@ -7088,6 +7213,10 @@
         syncUi();
         if(task.id){
           timelineTracks.forEach((trackItem) => {
+            const cachedPayload = bestCachedEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget);
+            if(cachedPayload){
+              applyTrackWaveformPayload(trackItem, cachedPayload, { preserveClip: true });
+            }
             if((trackItem.pointCount || 0) >= requestedPointTarget) return;
             if(trackItem.detailFetchTimer){
               clearTimeout(trackItem.detailFetchTimer);
@@ -7150,6 +7279,12 @@
         syncPlayButton();
       };
 
+      const syncTransportUi = () => {
+        timelineTracks.forEach(syncTrackTransportUi);
+        syncMetaUi();
+        syncPlayButton();
+      };
+
       const loadPreviewForTrack = async (trackItem, { preservePlayhead = true, force = false } = {}) => {
         if(!trackItem) return;
         if(!force && loadedPreviewTrackKey === trackItem.key && audio.src){
@@ -7189,11 +7324,20 @@
 
       const loadWaveformForTrack = async (trackItem) => {
         if(!trackItem || trackItem.waveformLoaded) return;
+        const requestedPointTarget = waveformPointTarget();
+        if(task.id){
+          const cachedPayload = bestCachedEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget);
+          if(cachedPayload){
+            applyTrackWaveformPayload(trackItem, cachedPayload);
+          }
+        }
         if(task.id){
           try{
-            const payload = await ensureEditorWaveformPayload(task.id, trackItem.output || '', waveformPointTarget());
-            if(payload){
-              applyTrackWaveformPayload(trackItem, payload);
+            if((trackItem.pointCount || 0) < requestedPointTarget){
+              const payload = await ensureEditorWaveformPayload(task.id, trackItem.output || '', requestedPointTarget);
+              if(payload){
+                applyTrackWaveformPayload(trackItem, payload);
+              }
             }
           }catch(_){}
         }
@@ -7217,7 +7361,7 @@
       const setPlayhead = (nextMs) => {
         playheadMs = Math.max(0, Math.round(Number(nextMs) || 0));
         try { audio.currentTime = playheadMs / 1000; } catch(_) {}
-        syncUi();
+        syncTransportUi();
       };
 
       const setInPoint = () => {
@@ -7244,7 +7388,7 @@
           audio.pause();
           stopPlaybackLoop();
         }
-        syncUi();
+        syncTransportUi();
       };
 
       const openContextMenuForTrack = (trackItem, clientX, clientY) => {
@@ -7550,15 +7694,17 @@
         if(dragState.kind === 'playhead'){
           playheadMs = nearestSnapValue(rawMs, trackItem.key, 'playhead');
           try { audio.currentTime = playheadMs / 1000; } catch(_) {}
+          syncTransportUi();
         }else if(dragState.kind === 'in'){
           const endValue = Number.isFinite(Number(trackItem.clip.endMs)) ? Number(trackItem.clip.endMs) : trackItem.durationMs;
           trackItem.clip.startMs = Math.min(nearestSnapValue(rawMs, trackItem.key, 'in'), endValue);
           trackItem.clip.enabled = true;
+          syncUi();
         }else if(dragState.kind === 'out'){
           trackItem.clip.endMs = Math.max(nearestSnapValue(rawMs, trackItem.key, 'out'), trackItem.clip.startMs);
           trackItem.clip.enabled = true;
+          syncUi();
         }
-        syncUi();
       };
       const handleDocumentPointerUp = () => {
         if(!dragState) return;
@@ -7573,8 +7719,13 @@
         if(dragState.moved && dragState.beforeSnapshot){
           commitHistory(dragState.beforeSnapshot);
         }
+        const endedPlayheadDrag = dragState.kind === 'playhead';
         dragState = null;
-        syncUi();
+        if(endedPlayheadDrag){
+          syncTransportUi();
+        }else{
+          syncUi();
+        }
       };
       const handleDocumentPointerDown = (event) => {
         if(contextMenuEl && !contextMenuEl.contains(event.target)){
@@ -7672,13 +7823,16 @@
         syncUi();
       });
       audio.addEventListener('timeupdate', () => {
-        playheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
-        syncUi();
+        const nextPlayheadMs = Math.round((Number(audio.currentTime) || 0) * 1000);
+        if(nextPlayheadMs !== playheadMs){
+          playheadMs = nextPlayheadMs;
+          syncTransportUi();
+        }
       });
-      audio.addEventListener('pause', () => { stopPlaybackLoop(); syncUi(); });
-      audio.addEventListener('play', () => { syncUi(); });
-      audio.addEventListener('playing', () => { startPlaybackLoop(); syncUi(); });
-      audio.addEventListener('ended', () => { stopPlaybackLoop(); syncUi(); });
+      audio.addEventListener('pause', () => { stopPlaybackLoop(); syncTransportUi(); });
+      audio.addEventListener('play', () => { syncTransportUi(); });
+      audio.addEventListener('playing', () => { startPlaybackLoop(); syncTransportUi(); });
+      audio.addEventListener('ended', () => { stopPlaybackLoop(); syncTransportUi(); });
 
       [buttons.select, buttons.range, buttons.razor, buttons.slip].forEach((button) => {
         guardClick(button, (event) => {
@@ -7809,7 +7963,7 @@
       renderTrackPlacement();
       syncHistoryUi();
       syncUi();
-      void Promise.all(tracks.map((trackItem) => loadWaveformForTrack(trackItem)));
+      void Promise.all(timelineTracks.map((trackItem) => loadWaveformForTrack(trackItem)));
       await setActiveTrack('source', { preservePlayhead: false });
       playheadMs = sourceOriginalClip.startMs || 0;
       syncUi();
@@ -9756,7 +9910,7 @@
       const modelMap = new Map(
         (Array.isArray(status && status.models) ? status.models : []).map((item) => [item.key, item])
       );
-      let totalBytes = 0;
+      let installedBytes = 0;
       modelsList.innerHTML = '';
       MODEL_CHECKLIST_ORDER.forEach((key) => {
         const detail = modelMap.get(key) || null;
@@ -9774,11 +9928,14 @@
         label.className = 'model-item-label';
         label.textContent = MODEL_LABELS[key] || key;
         copy.appendChild(label);
-        if(ready && detail && Number(detail.size_bytes) > 0){
-          totalBytes += Number(detail.size_bytes) || 0;
+        const displaySize = ready ? Number(detail && detail.size_bytes) : Number(detail && detail.expected_size_bytes);
+        if(ready && Number(detail && detail.size_bytes) > 0){
+          installedBytes += Number(detail.size_bytes) || 0;
+        }
+        if(displaySize > 0){
           const size = document.createElement('span');
           size.className = 'model-item-size';
-          size.textContent = formatBytes(detail.size_bytes);
+          size.textContent = formatBytes(displaySize);
           copy.appendChild(size);
         }
         main.append(box, copy);
@@ -9801,7 +9958,13 @@
         modelsList.appendChild(row);
       });
       if(modelsTotal){
-        modelsTotal.textContent = totalBytes > 0 ? `total ${formatBytes(totalBytes)}` : '';
+        const expectedTotalBytes = Number(status && status.expected_total_bytes) || 0;
+        const totalBytes = expectedTotalBytes > 0 ? expectedTotalBytes : installedBytes;
+        if(totalBytes > 0 && installedBytes > 0 && expectedTotalBytes > installedBytes){
+          modelsTotal.textContent = `${formatBytes(installedBytes)} installed · ${formatBytes(totalBytes)} total`;
+        }else{
+          modelsTotal.textContent = totalBytes > 0 ? `total ${formatBytes(totalBytes)}` : '';
+        }
         modelsTotal.hidden = totalBytes <= 0;
       }
     }
@@ -10016,6 +10179,15 @@
       return `${size.toFixed(size >= 100 ? 0 : 1)} ${unit}`;
     }
 
+    function allMissingModels(status = lastModelStatus){
+      return Array.isArray(status && status.missing) ? status.missing : [];
+    }
+
+    function expectedMissingModelBytes(status = lastModelStatus){
+      const value = Number(status && status.expected_missing_total_bytes);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    }
+
     function formatDuration(seconds){
       const value = Number(seconds);
       if(!Number.isFinite(value) || value < 0) return '';
@@ -10214,15 +10386,16 @@
       wrap.appendChild(card);
       activeModelReminderToast = { card, title, body, downloadBtn, folderBtn };
       downloadBtn.addEventListener('click', async () => {
-      const currentMissing = relevantMissingModels() || missing;
-      await beginModelDownload(currentMissing);
+        const currentMissing = allMissingModels();
+        const selection = currentMissing.length ? currentMissing : missing;
+        await beginModelDownload(selection);
       });
       folderBtn.addEventListener('click', () => openModelsFolderAction());
       return activeModelReminderToast;
     }
 
     function syncModelReminderToast(status){
-      const missing = relevantMissingModels(status);
+      const missing = allMissingModels(status);
       const isDownloading = isModelDownloadBusyStatus(status && status.status);
       if(!missing.length || isDownloading || modelDownloadIntentActive){
         removeModelReminderToast();
@@ -10230,7 +10403,10 @@
       }
       const toast = ensureModelReminderToast(missing);
       toast.title.textContent = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
-      toast.body.textContent = 'download the required models before splitting songs.';
+      const totalBytes = expectedMissingModelBytes(status);
+      toast.body.textContent = totalBytes > 0
+        ? `download all missing models (${formatBytes(totalBytes)}) before splitting songs.`
+        : 'download all missing models before splitting songs.';
     }
 
     async function beginModelDownload(missing){
@@ -10365,6 +10541,14 @@
       });
       card.appendChild(body);
 
+      const totalMissingBytes = expectedMissingModelBytes(status);
+      if(totalMissingBytes > 0){
+        const sizeNote = document.createElement('div');
+        sizeNote.className = 'text-xs opacity-70';
+        sizeNote.textContent = `${missing.length} model${missing.length === 1 ? '' : 's'} · ${formatBytes(totalMissingBytes)} total`;
+        card.appendChild(sizeNote);
+      }
+
       const row = document.createElement('div');
       row.className = 'flex gap-3 justify-end flex-wrap';
       const folderBtn = makeActionButton('open models folder', 'bg-white/10 text-white');
@@ -10437,6 +10621,7 @@
       const isDownloading = isModelDownloadBusyStatus(statusText);
       const isRetrying = statusText === 'retrying';
       const isError = !!(status && status.status === 'error');
+      const downloadedTotalBytes = Number(status && status.downloaded_total_bytes) || 0;
       modelsBlocked = relevantMissing.length > 0 || isDownloading;
       renderModelChecklist(status);
       syncModelDownloadToast(status);
@@ -10449,6 +10634,8 @@
           noteMessage = status.error || `network dropped, retrying in 5s... (${status.retry_label || '1'})`;
         }else if(isDownloading){
           noteMessage = `downloading ${status.current_model || 'models'}`;
+        }else if(missing.length && downloadedTotalBytes <= 0){
+          noteMessage = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
         }else if(missing.length){
           noteMessage = relevantMissing.length
             ? `${relevantMissing.length} required model${relevantMissing.length === 1 ? '' : 's'} missing`
@@ -10487,7 +10674,10 @@
         modelsDownloadBtn.hidden = !showDownloadButton;
         modelsDownloadBtn.disabled = false;
         modelsDownloadBtn.classList.toggle('attention-sequence', showDownloadButton);
-        modelsDownloadBtn.textContent = isError ? 'retry download' : 'download models';
+        const totalMissingBytes = expectedMissingModelBytes(status);
+        modelsDownloadBtn.textContent = isError
+          ? 'retry download'
+          : (totalMissingBytes > 0 ? `download models (${formatBytes(totalMissingBytes)})` : 'download models');
       }
       if(modelsFolderBtn){
         modelsFolderBtn.hidden = isLanClient;
@@ -12902,7 +13092,7 @@
         </div>
       </div>
 
-      <div class="mt-6 text-center opacity-70 text-sm">v0.4.2</div>
+      <div class="mt-6 text-center opacity-70 text-sm">v0.5.0</div>
       </div>
     </div>
   </div>

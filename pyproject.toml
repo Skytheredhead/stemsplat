@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "stemrunner"
-version = "0.4.2"
+version = "0.5.0"
 description = "Self-hosted stem separation tool"
 authors = ["Your Name <you@example.com>"]
 

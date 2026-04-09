@@ -38,4 +38,4 @@ else
   exit 1
 fi
 
-exec "${PYTHON_BIN}" "${SCRIPT_DIR}/install.py"
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/launcher.py"
