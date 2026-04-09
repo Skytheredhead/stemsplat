@@ -1,55 +1,108 @@
-# stemsplat - v0.4.2 release
+# stemsplat
 
-**MAC ONLY!** This is a free, high quality, no bs stem splitter. No weird numbers to fiddle with and the best quality.
+**Mac-only stem splitter for Apple Silicon.**  
+The best and easiest to use ap for stem splitting.
 
 <img width="1430" height="892" alt="Screenshot 2026-04-09 at 9 35 16 AM" src="https://github.com/user-attachments/assets/20aac5ad-c93f-4ab5-b3e3-78d664b7214d" />
 
-
-## Prerequisites
-
-- Python (I'm using 3.13.5, not sure about other versions)
-- APPLE SILICON Mac (M-series)
-
 ## Quickstart
-1. Download the .zip from the latest release
-2. Extract the .zip
-3. Open the .app
-4. Download the models in the app
-5. Done
 
-## Features
-- Vocals, instrumental, and deux split modes (quality comparisons on stemsplat.skylarenns.com)
+1. Download the latest `.zip` from the Releases page
+2. Extract it
+3. Open the `.app`
+
+## What It Does
+
+- Runs fully locally on your Mac
+- No cloud uploads
 - Batch queue processing
-- Mobile/LAN usage for use from other devices
-- Export format/folder selection
-- No cloud
+- LAN/mobile access from other devices on your local network
+- Multiple export formats
+- Previous-files history so recent outputs are easy to reopen or reuse
 
-## Current Models (Thank you Becruily)
+## Why This Exists
 
-**Becruily's Huggingface:**
-- Vocals - https://huggingface.co/becruily/mel-band-roformer-vocals/tree/main
-- Instrumental - https://huggingface.co/becruily/mel-band-roformer-instrumental/tree/main
-- Deux - https://huggingface.co/becruily/mel-band-roformer-deux/tree/main
+Most online stem splitters either suck or are behind paywalls, and UVR was a pain to do anything.
+I made Stemsplat to fill in the gaps UVR left. 
 
-## v0.4.2 plans
-- [ ]  Change port to something that’s not :8000 → 9876
-- [ ]  Model Manager: Installed models list (already there), estimated disk usage
-- [x]  History (with file size limits, etc.) use to cache outputs, and other stuff. Default user warning to 10GB, able to change this in settings to higher (or lower) amount.
-- [x]  EST TIME REMAINING COMPLETE REWORK
-- [x]  Model Manager: Installed models list (already there), estimated disk usage
-- [x]  Checksum verification for model downloads
-- [ ]  When a lan device tries to process but another device is already processing, say that somewhere
-- [ ]  When I right click a song that’s in the queue, have a button say “remove from queue” and a second button that says “change stem” where it brings up the 4 “fast” “quality” “special” “presets” and when hovered over one of those a new list appears to the right with the options in there. Add the same shift+click and cmd/control+click functionality to this right click changer’s options as well.
-- [x]  Zip vs separate functionality in settings for multi-stem exports.
-- [x]  Add a crap ton of models
-- [x]  Add presets
-- [ ]  Add “all stems” preset:
-Splits vocals
-Splits instrumental
-Karaoke split on vocal split
-6s split on instrumental split (delete the “vocal” stem as it wont have anything)
-drum 6s on drum split
-- [x]  Crappy tooltips for models
+email stemsplat@gmail.com for bugs/feature requests
+
+## Stems
+
+- Vocals
+- Instrumental
+- Both (deux)
+- Both (separate)
+- Guitar
+- Background vocals
+- Full mix
+- Full mix faster
+- Drum split - 4
+- Drum split - 6
+- All stems
+- Boost harmonies
+- Denoise
+
+## Requirements
+
+### For the app
+- Apple Silicon Mac (M-series)
+- macOS
+- Enough free disk space for models and exports (a couple gigs)
+- Python 3.10+
+
+## Model Credits
+
+### Becruily
+- Vocals  
+  https://huggingface.co/becruily/mel-band-roformer-vocals
+- Instrumental  
+  https://huggingface.co/becruily/mel-band-roformer-instrumental
+- Deux  
+  https://huggingface.co/becruily/mel-band-roformer-deux
+- Guitar  
+  https://huggingface.co/becruily/mel-band-roformer-guitar
+- Karaoke / Background vocals  
+  https://huggingface.co/becruily/mel-band-roformer-karaoke
+
+### Jarredou
+- Denoise  
+  https://huggingface.co/jarredou/aufr33_MelBand_Denoise
+- BS-Roformer 6-stem  
+  https://huggingface.co/jarredou/BS-ROFO-SW-Fixed
+- DrumSep 6-stem  
+  https://github.com/jarredou/models/releases
+
+### Other bundled/downloadable sources
+- Demucs drums / bass / other / 6-stem variants
+- ZFTurbo DrumSep 4-stem
+
+
+## Future release plans (subject to change):
+
+### v0.5.0:
+- [ ]  Having an “edit” button that opens a popup card with a full-song waveform, in/out selection, and preview
+- [ ]  Mute/solo toggles for each selected stem inside that edit flow
+- [ ]  For a large upload all at once, keep it as one stack with a unified progress bar, then expand into individual cards on click and collapse back up
+- [ ]  Make the stop button a pause button, but only if it behaves like a real queue pause and not fake task resume
+- [ ]  Add estimated processing times to songs in queue and total estimated time for the queue
 - [ ]  Add user-created presets
-- [ ]  UI changes
-- [ ]  made the stop button actually work
+- [ ]  Export album covers with instrument pictures so splits are visually differentiated
+- [ ]  Custom right click
+- [ ]  When I right click a model and hit “remove from queue,” make the scroll animation cleaner/smoother
+- [ ]  Instead of “- vocals,” include the model name like “- vocals (single)” or “- vocals (full)”
+- [ ]  Settings/nerd stuff/device toggle (mps / cpu)
+- [ ]  Settings + quit + other stuff in the top toolbar
+- [ ]  Add uninstall
+- [ ]  Add delete models
+- [ ]  Right click models to uninstall one by one in model manager
+- [ ]  Add models resuming if partially downloaded and the network fails, if you feel good about the reliability work
+
+### v0.6.0:
+- [ ]  BPM/key detector
+- [ ]  BPM/key shifter
+- [ ]  De-reverb model
+- [ ]  Wind model
+- [ ]  Strings model
+- [ ]  Single-channel compute optimization
+- [ ]  In-app updates instead of redownloading from GitHub
