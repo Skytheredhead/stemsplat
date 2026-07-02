@@ -1285,7 +1285,29 @@ SUPPORTED_MEDIA_SUFFIXES = {
     ".avi",
 }
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+MAX_UPLOAD_BYTES = max(1, int(float(os.environ.get("STEMSPLAT_MAX_UPLOAD_MB", "2048")) * 1024 * 1024))
+MAX_ACTIVE_TASKS = max(1, int(os.environ.get("STEMSPLAT_MAX_ACTIVE_TASKS", "100")))
+SUBPROCESS_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("STEMSPLAT_SUBPROCESS_TIMEOUT_SECONDS", "7200")))
+FFPROBE_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("STEMSPLAT_FFPROBE_TIMEOUT_SECONDS", "30")))
 RUNTIME_CLEANUP_MAX_AGE_SEC = 24 * 60 * 60
+
+MEDIA_MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
+    ".flac": (b"fLaC",),
+    ".ogg": (b"OggS",),
+    ".opus": (b"OggS",),
+    ".webm": (b"\x1a\x45\xdf\xa3",),
+    ".mkv": (b"\x1a\x45\xdf\xa3",),
+}
+RIFF_MEDIA_TYPES = {
+    ".wav": b"WAVE",
+    ".wave": b"WAVE",
+    ".avi": b"AVI ",
+}
+FORM_MEDIA_TYPES = {
+    ".aif": b"AIFF",
+    ".aiff": b"AIFF",
+}
+MP4_FAMILY_SUFFIXES = {".m4a", ".aac", ".mp4", ".m4v", ".mov", ".alac"}
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -1321,6 +1343,15 @@ def _safe_stem(name: str) -> str:
     raw = Path(name).stem or "split"
     cleaned = re.sub(r"[^\w .-]+", "_", raw, flags=re.ASCII).strip(" ._")
     return cleaned or "split"
+
+
+def _require_safe_upload_filename(raw_name: str | None) -> str:
+    name = str(raw_name or "upload").strip()
+    if not name or "\x00" in name or "/" in name or "\\" in name or Path(name).name != name:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsafe upload filename.")
+    if len(name.encode("utf-8", errors="ignore")) > 255:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Upload filename is too long.")
+    return name
 
 
 def _locate_case_insensitive(path: Path) -> Path | None:
@@ -2191,12 +2222,21 @@ def _run_interruptible_subprocess(
     cmd: list[str],
     *,
     stop_check: Callable[[], None] | None = None,
+    timeout_seconds: float | None = SUBPROCESS_TIMEOUT_SECONDS,
 ) -> None:
     if stop_check is None:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+        )
         return
 
     stop_check()
+    started_at = time.monotonic()
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
@@ -2208,6 +2248,17 @@ def _run_interruptible_subprocess(
             stop_check()
             if process.poll() is not None:
                 break
+            if timeout_seconds is not None and (time.monotonic() - started_at) > timeout_seconds:
+                with contextlib.suppress(Exception):
+                    process.terminate()
+                with contextlib.suppress(Exception):
+                    process.wait(timeout=1.5)
+                if process.poll() is None:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                with contextlib.suppress(Exception):
+                    process.communicate(timeout=1.0)
+                raise subprocess.TimeoutExpired(cmd, timeout_seconds)
             time.sleep(0.12)
         _stdout, stderr = process.communicate()
     except TaskStopped:
@@ -2321,7 +2372,7 @@ def _probe_source(path: Path) -> SourceInfo:
             "json",
             str(path),
         ]
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SECONDS)
         data = json.loads(result.stdout or "{}")
     except Exception as exc:
         logger.warning("ffprobe failed for %s: %s", path, exc)
@@ -4431,8 +4482,18 @@ def _path_total_bytes(path: Path) -> int:
         return 0
 
 
-def _previous_file_entry_total_bytes(entry: dict[str, Any]) -> int:
+def _previous_file_storage_dir(entry: dict[str, Any]) -> Path:
     storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+    if not _path_within(storage_dir, PREVIOUS_FILES_DIR):
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    return storage_dir
+
+
+def _previous_file_entry_total_bytes(entry: dict[str, Any]) -> int:
+    try:
+        storage_dir = _previous_file_storage_dir(entry)
+    except AppError:
+        return 0
     return _path_total_bytes(storage_dir)
 
 
@@ -4460,11 +4521,17 @@ def _history_storage_payload(
 
 
 def _previous_file_output_paths(entry: dict[str, Any]) -> tuple[Path, list[Path]]:
-    storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+    storage_dir = _previous_file_storage_dir(entry)
     if not storage_dir.exists() or not storage_dir.is_dir():
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
     outputs_dir = storage_dir / "outputs"
-    outputs = [outputs_dir / str(name) for name in (entry.get("outputs") or [])]
+    if not _path_within(outputs_dir, storage_dir):
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    outputs: list[Path] = []
+    for name in entry.get("outputs") or []:
+        output_path = (outputs_dir / str(name)).expanduser()
+        if _path_within(output_path, outputs_dir):
+            outputs.append(output_path)
     existing_outputs = [path for path in outputs if path.exists() and path.is_file()]
     if outputs and not existing_outputs:
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
@@ -4502,8 +4569,14 @@ def _prune_previous_files(*, save: bool = True) -> list[dict[str, Any]]:
     removed_dirs: list[Path] = []
     with previous_files_lock:
         for entry in previous_files_index:
-            storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+            try:
+                storage_dir = _previous_file_storage_dir(entry)
+            except AppError:
+                continue
             source_path = Path(str(entry.get("source_path") or "")).expanduser()
+            if not _path_within(source_path, storage_dir):
+                removed_dirs.append(storage_dir)
+                continue
             if float(entry.get("finished_at") or 0.0) < cutoff:
                 removed_dirs.append(storage_dir)
                 continue
@@ -5231,9 +5304,13 @@ def _output_subdir_for_label(mode: str, label: str) -> Path | None:
 
 
 def _relative_output_name(output_path: Path, root_dir: Path) -> str:
-    with contextlib.suppress(Exception):
-        return str(output_path.relative_to(root_dir))
-    return output_path.name
+    try:
+        relative = output_path.expanduser().resolve().relative_to(root_dir.expanduser().resolve())
+        if any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("unsafe relative output name")
+        return "/".join(relative.parts)
+    except Exception:
+        return Path(output_path.name).name
 
 
 def _unique_output_path(path: Path) -> Path:
@@ -5910,16 +5987,38 @@ def _validate_multi_stem_export(multi_stem_export: str) -> str:
 def _validate_media_type(name: str, content_type: str | None = None) -> str:
     suffix = Path(name).suffix.lower()
     kind = (content_type or "").lower()
-    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES and not (kind.startswith("audio/") or kind.startswith("video/")):
+    if suffix not in SUPPORTED_MEDIA_SUFFIXES:
         raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
-    if not suffix and not (kind.startswith("audio/") or kind.startswith("video/")):
-        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio or video file.")
+    if kind and not (kind.startswith("audio/") or kind.startswith("video/") or kind == "application/octet-stream"):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported upload content type.")
     return suffix
 
 
+def _media_magic_matches(suffix: str, sample: bytes) -> bool:
+    if suffix in RIFF_MEDIA_TYPES:
+        return len(sample) >= 12 and sample[:4] == b"RIFF" and sample[8:12] == RIFF_MEDIA_TYPES[suffix]
+    if suffix in FORM_MEDIA_TYPES:
+        return len(sample) >= 12 and sample[:4] == b"FORM" and sample[8:12] == FORM_MEDIA_TYPES[suffix]
+    if suffix == ".mp3":
+        return sample.startswith(b"ID3") or (len(sample) >= 2 and sample[0] == 0xFF and (sample[1] & 0xE0) == 0xE0)
+    if suffix == ".aac":
+        return len(sample) >= 2 and sample[0] == 0xFF and (sample[1] & 0xF6) in {0xF0, 0xF2}
+    if suffix in MP4_FAMILY_SUFFIXES:
+        return len(sample) >= 12 and sample[4:8] == b"ftyp"
+    prefixes = MEDIA_MAGIC_PREFIXES.get(suffix)
+    return any(sample.startswith(prefix) for prefix in prefixes or ())
+
+
+def _validate_media_header(path: Path, suffix: str) -> None:
+    with path.open("rb") as handle:
+        sample = handle.read(64)
+    if not _media_magic_matches(suffix, sample):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file content does not match a supported media format.")
+
+
 async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
-    original_name = Path(file.filename or "upload").name
-    _validate_media_type(original_name, file.content_type or "")
+    original_name = _require_safe_upload_filename(file.filename)
+    suffix = _validate_media_type(original_name, file.content_type or "")
 
     task_id = str(uuid.uuid4())
     stored_name = f"{task_id}_{original_name}"
@@ -5933,8 +6032,12 @@ async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
                     break
                 handle.write(chunk)
                 bytes_written += len(chunk)
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is too large.")
     except Exception as exc:
         _cleanup_path(source_path)
+        if isinstance(exc, AppError):
+            raise
         raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}") from exc
     finally:
         with contextlib.suppress(Exception):
@@ -5943,6 +6046,11 @@ async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
     if bytes_written <= 0:
         _cleanup_path(source_path)
         raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is empty.")
+    try:
+        _validate_media_header(source_path, suffix)
+    except Exception:
+        _cleanup_path(source_path)
+        raise
     return original_name, source_path
 
 
@@ -5951,7 +6059,10 @@ def _store_local_media_file(path: Path) -> tuple[str, Path]:
     if not source.exists() or not source.is_file():
         raise AppError(ErrorCode.INVALID_REQUEST, f"file doesn't exist: {source}")
     original_name = source.name
-    _validate_media_type(original_name)
+    suffix = _validate_media_type(original_name)
+    if source.stat().st_size > MAX_UPLOAD_BYTES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Imported file is too large.")
+    _validate_media_header(source, suffix)
     task_id = str(uuid.uuid4())
     stored_name = f"{task_id}_{original_name}"
     stored_path = UPLOAD_DIR / stored_name
@@ -5992,6 +6103,21 @@ def _queue_task(task_id: str, *, front: bool = False) -> None:
         task_queue.queue.appendleft(task_id)
         task_queue.unfinished_tasks += 1
         task_queue.not_empty.notify()
+
+
+def _active_task_count_locked(exclude_task_id: str | None = None) -> int:
+    count = 0
+    for current_id, task in tasks.items():
+        if exclude_task_id is not None and current_id == exclude_task_id:
+            continue
+        if str(task.get("status") or "") in {"ready", "queued", "running"}:
+            count += 1
+    return count
+
+
+def _ensure_task_capacity_locked(exclude_task_id: str | None = None) -> None:
+    if _active_task_count_locked(exclude_task_id) >= MAX_ACTIVE_TASKS:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Too many active tasks. Wait for the queue to drain before adding more.")
 
 
 def _apply_task_start_settings(
@@ -6070,6 +6196,8 @@ def _register_task(
     if clip_enabled is not None:
         payload["clip_enabled"] = bool(clip_enabled)
     with tasks_lock:
+        if auto_start:
+            _ensure_task_capacity_locked()
         tasks[task_id] = payload
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
     threading.Thread(target=_warm_editor_source_cache, args=(task_id,), daemon=True).start()
@@ -6089,6 +6217,7 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
             return task
         if task["status"] in TERMINAL_STATUSES:
             return task
+        _ensure_task_capacity_locked(exclude_task_id=task_id)
         task["status"] = "queued"
         task["stage"] = "Waiting in queue"
         task["eta_seconds"] = None
@@ -7190,6 +7319,9 @@ async def _log_requests(request: Request, call_next):
         response = await call_next(request)
     elapsed_ms = (time.time() - started) * 1000
     logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     return response
 
 

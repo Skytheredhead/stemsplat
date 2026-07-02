@@ -557,7 +557,7 @@ class ExpandedBatteryAudioTests(ExpandedBatteryBase):
             or "could not read wav" in str(task["error"]).lower()
         )
 
-    def test_reverse_extension_mismatch_is_content_accepted(self) -> None:
+    def test_upload_rejects_spoofed_extension_even_with_audio_mime(self) -> None:
         source = self.make_audio("mismatch.wav", seconds=1.0)
         disguised = self.root / "fixtures" / "mismatch.txt"
         disguised.write_bytes(source.read_bytes())
@@ -567,7 +567,40 @@ class ExpandedBatteryAudioTests(ExpandedBatteryBase):
                 files={"file": (disguised.name, handle, "audio/wav")},
                 data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
             )
-        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.status_code, 400, response.text)
+
+    def test_upload_rejects_path_traversal_filename(self) -> None:
+        source = self.make_audio("safe.wav", seconds=1.0)
+        with source.open("rb") as handle:
+            response = self.client.post(
+                "/upload",
+                files={"file": ("../evil.wav", handle, "audio/wav")},
+                data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+            )
+        self.assertEqual(response.status_code, 400, response.text)
+
+    def test_upload_rejects_oversized_file_before_queueing(self) -> None:
+        source = self.make_audio("too_large.wav", seconds=1.0)
+        with mock.patch.object(main, "MAX_UPLOAD_BYTES", 8):
+            with source.open("rb") as handle:
+                response = self.client.post(
+                    "/upload",
+                    files={"file": (source.name, handle, "audio/wav")},
+                    data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+                )
+        self.assertEqual(response.status_code, 400, response.text)
+
+    def test_upload_rejects_media_header_mismatch(self) -> None:
+        disguised = self.root / "fixtures" / "fake.wav"
+        disguised.parent.mkdir(parents=True, exist_ok=True)
+        disguised.write_bytes(b"<html><script>alert(1)</script></html>")
+        with disguised.open("rb") as handle:
+            response = self.client.post(
+                "/upload",
+                files={"file": (disguised.name, handle, "audio/wav")},
+                data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+            )
+        self.assertEqual(response.status_code, 400, response.text)
 
     def test_mono_input_round_trips_as_mono_output(self) -> None:
         mono = self.make_audio("mono.wav", seconds=1.0, channels=1)
@@ -667,6 +700,34 @@ class ExpandedBatteryRecoveryTests(ExpandedBatteryBase):
         os.utime(stale, (old_time, old_time))
         asyncio.run(main._startup_cleanup())
         self.assertFalse(stale.exists())
+
+    def test_history_download_rejects_index_path_escape(self) -> None:
+        outside = self.root / "outside-history"
+        outputs = outside / "outputs"
+        outputs.mkdir(parents=True)
+        (outputs / "song.wav").write_bytes(b"unsafe")
+        with main.previous_files_lock:
+            main.previous_files_index[:] = [
+                {
+                    "id": "escape",
+                    "task_id": "task-escape",
+                    "original_name": "song.wav",
+                    "mode": "vocals",
+                    "stems": ["vocals"],
+                    "storage_dir": str(outside),
+                    "source_path": str(outside / "song.wav"),
+                    "source_name": "song.wav",
+                    "outputs": ["song.wav"],
+                    "finished_at": time.time(),
+                    "artwork_path": "",
+                    "output_format": "wav",
+                    "video_handling": "audio_only",
+                    "preset_settings": None,
+                    "total_bytes": 0,
+                }
+            ]
+        response = self.client.get("/api/history/escape/download")
+        self.assertEqual(response.status_code, 400, response.text)
 
 
 if __name__ == "__main__":
