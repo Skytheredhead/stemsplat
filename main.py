@@ -65,6 +65,7 @@ from app_paths import (
     model_search_dirs,
 )
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from rotary_embedding_torch import RotaryEmbedding
 from starlette.background import BackgroundTask
@@ -955,7 +956,13 @@ PREVIOUS_FILES_RETENTION_CHOICES: dict[str, int] = {
     "3mo": 90 * 24 * 60 * 60,
     "6mo": 180 * 24 * 60 * 60,
 }
-LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth"}
+LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth", "/health"}
+SKYTOOLS_API_PREFIX = "/api/internal/skytools"
+SKYTOOLS_HEALTH_PATH = "/health"
+SKYTOOLS_OWNER_HEADER = "x-skytools-owner-id"
+SKYTOOLS_JOB_HEADER = "x-skytools-job-id"
+SKYTOOLS_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:@-]{1,160}$")
+SKYTOOLS_DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 TERMINAL_TASK_RETENTION_LIMIT = 100
 MODEL_PROMPT_PENDING = "pending"
 MODEL_PROMPT_DISMISSED = "dismissed"
@@ -3870,6 +3877,64 @@ def _update_task_runtime_view(task: dict[str, Any], *, now: float | None = None)
 
 app = FastAPI()
 app.state.runtime_status_provider = None
+
+
+def _skytools_allowed_origins() -> list[str]:
+    approved: list[str] = []
+    for item in str(os.environ.get("STEMSPLAT_SKYTOOLS_ALLOWED_ORIGINS") or "").split(","):
+        origin = item.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed = urlparse(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError(f"Invalid STEMSPLAT_SKYTOOLS_ALLOWED_ORIGINS entry: {origin!r}")
+        normalized = f"{parsed.scheme}://{parsed.netloc}"
+        if normalized not in approved:
+            approved.append(normalized)
+    return approved
+
+
+SKYTOOLS_ALLOWED_ORIGINS = _skytools_allowed_origins()
+
+
+def _skytools_max_upload_bytes() -> int:
+    raw = str(os.environ.get("STEMSPLAT_SKYTOOLS_MAX_UPLOAD_BYTES") or "").strip()
+    if not raw:
+        return SKYTOOLS_DEFAULT_MAX_UPLOAD_BYTES
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("STEMSPLAT_SKYTOOLS_MAX_UPLOAD_BYTES must be an integer") from exc
+    if value < UPLOAD_CHUNK_SIZE:
+        raise RuntimeError(f"STEMSPLAT_SKYTOOLS_MAX_UPLOAD_BYTES must be at least {UPLOAD_CHUNK_SIZE}")
+    return value
+
+
+SKYTOOLS_MAX_UPLOAD_BYTES = _skytools_max_upload_bytes()
+if SKYTOOLS_ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=SKYTOOLS_ALLOWED_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Skytools-Owner-Id",
+            "X-Skytools-Job-Id",
+        ],
+        expose_headers=["Content-Disposition"],
+        max_age=600,
+    )
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
 task_queue: queue.Queue[str] = queue.Queue()
@@ -4491,6 +4556,100 @@ def _require_task(task_id: str) -> dict[str, Any]:
         if task is None:
             raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
         return task
+
+
+def _skytools_gateway_token() -> str:
+    return str(os.environ.get("STEMSPLAT_SKYTOOLS_INTERNAL_TOKEN") or "").strip()
+
+
+def _skytools_auth_error(request: Request) -> JSONResponse | None:
+    expected = _skytools_gateway_token()
+    if not expected:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "skytools_api_not_configured"},
+            headers={"Cache-Control": "no-store"},
+        )
+    scheme, separator, supplied = str(request.headers.get("authorization") or "").partition(" ")
+    authorized = separator == " " and scheme.lower() == "bearer" and secrets.compare_digest(supplied.strip(), expected)
+    if authorized:
+        return None
+    return JSONResponse(
+        status_code=401,
+        content={"error": "unauthorized"},
+        headers={"Cache-Control": "no-store", "WWW-Authenticate": "Bearer"},
+    )
+
+
+def _skytools_identity(request: Request, *, require_job_id: bool = False) -> tuple[str, str | None]:
+    owner_id = str(request.headers.get(SKYTOOLS_OWNER_HEADER) or "").strip()
+    job_id = str(request.headers.get(SKYTOOLS_JOB_HEADER) or "").strip()
+    if not SKYTOOLS_ID_PATTERN.fullmatch(owner_id):
+        raise HTTPException(status_code=400, detail="invalid X-Skytools-Owner-Id")
+    if require_job_id and not SKYTOOLS_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(status_code=400, detail="invalid X-Skytools-Job-Id")
+    if job_id and not SKYTOOLS_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(status_code=400, detail="invalid X-Skytools-Job-Id")
+    return owner_id, job_id or None
+
+
+def _require_skytools_owned_task(task_id: str, owner_id: str) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None or not secrets.compare_digest(str(task.get("skytools_owner_id") or ""), owner_id):
+            raise HTTPException(status_code=404, detail="job not found")
+        return task
+
+
+def _find_skytools_job(job_id: str) -> dict[str, Any] | None:
+    with tasks_lock:
+        for task in tasks.values():
+            if secrets.compare_digest(str(task.get("skytools_job_id") or ""), job_id):
+                return task
+    return None
+
+
+def _skytools_queue_position(task_id: str) -> int | None:
+    with task_queue.mutex:
+        queued_ids = list(task_queue.queue)
+    try:
+        return queued_ids.index(task_id) + 1
+    except ValueError:
+        return None
+
+
+def _skytools_job_payload(task: dict[str, Any]) -> dict[str, Any]:
+    status = str(task.get("status") or "")
+    state = {
+        "ready": "accepted",
+        "queued": "queued",
+        "running": "running",
+        "done": "succeeded",
+        "error": "failed",
+        "stopped": "cancelled",
+    }.get(status, "running")
+    internal_id = str(task["id"])
+    return {
+        "id": internal_id,
+        "external_job_id": str(task.get("skytools_job_id") or ""),
+        "state": state,
+        "queue_position": _skytools_queue_position(internal_id) if status == "queued" else None,
+        "progress": {
+            "percent": max(0, min(100, int(task.get("pct") or 0))),
+            "phase": str(task.get("stage") or status),
+            "eta_seconds": task.get("eta_seconds"),
+            "eta_state": task.get("eta_state"),
+        },
+        "result": {
+            "ready": status == "done",
+            "download_url": f"{SKYTOOLS_API_PREFIX}/jobs/{internal_id}/result" if status == "done" else None,
+        },
+        "error": str(task.get("error") or "") or None,
+        "created_at": task.get("created_at"),
+        "started_at": task.get("started_at"),
+        "finished_at": task.get("finished_at"),
+        "version": int(task.get("version") or 0),
+    }
 
 
 def _estimate_eta(task: dict[str, Any], pct: int) -> int | None:
@@ -5401,9 +5560,32 @@ def _validate_media_type(name: str, content_type: str | None = None) -> str:
     return suffix
 
 
-async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
-    original_name = Path(file.filename or "upload").name
-    _validate_media_type(original_name, file.content_type or "")
+async def _store_uploaded_file(
+    file: UploadFile,
+    *,
+    max_bytes: int | None = None,
+    require_known_suffix: bool = False,
+) -> tuple[str, Path]:
+    raw_name = str(file.filename or "upload")
+    original_name = Path(raw_name).name
+    content_type = str(file.content_type or "").partition(";")[0].strip().lower()
+    suffix = _validate_media_type(original_name, content_type)
+    if require_known_suffix:
+        if (
+            raw_name != original_name
+            or "\x00" in raw_name
+            or not original_name.strip()
+            or len(original_name.encode("utf-8", errors="ignore")) > 255
+        ):
+            raise AppError(ErrorCode.INVALID_REQUEST, "Unsafe upload filename.")
+        if suffix not in SUPPORTED_MEDIA_SUFFIXES:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file extension.")
+        if content_type and not (
+            content_type.startswith("audio/")
+            or content_type.startswith("video/")
+            or content_type in {"application/octet-stream", "application/ogg", "application/x-matroska"}
+        ):
+            raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported media content type.")
 
     task_id = str(uuid.uuid4())
     stored_name = f"{task_id}_{original_name}"
@@ -5415,8 +5597,13 @@ async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
                 chunk = await file.read(UPLOAD_CHUNK_SIZE)
                 if not chunk:
                     break
-                handle.write(chunk)
                 bytes_written += len(chunk)
+                if max_bytes is not None and bytes_written > max_bytes:
+                    raise AppError(ErrorCode.INVALID_REQUEST, f"Upload exceeds the {max_bytes}-byte limit.")
+                handle.write(chunk)
+    except AppError:
+        _cleanup_path(source_path)
+        raise
     except Exception as exc:
         _cleanup_path(source_path)
         raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}") from exc
@@ -6637,8 +6824,11 @@ async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
 @app.middleware("http")
 async def _log_requests(request: Request, call_next):
     started = time.time()
-    if _lan_passcode_required(request):
-        path = request.url.path
+    path = request.url.path
+    if path.startswith(SKYTOOLS_API_PREFIX):
+        auth_error = None if request.method == "OPTIONS" else _skytools_auth_error(request)
+        response = auth_error if auth_error is not None else await call_next(request)
+    elif _lan_passcode_required(request):
         allowed = path in LAN_AUTH_ALLOWED_PATHS
         authorized = _request_has_valid_lan_session(request)
         if not authorized and not allowed:
@@ -6652,6 +6842,105 @@ async def _log_requests(request: Request, call_next):
     elapsed_ms = (time.time() - started) * 1000
     logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
     return response
+
+
+@app.get(SKYTOOLS_HEALTH_PATH)
+async def skytools_health() -> dict[str, Any]:
+    with tasks_lock:
+        states = [str(task.get("status") or "") for task in tasks.values()]
+    return {
+        "status": "ok" if _skytools_gateway_token() else "degraded",
+        "service": "stemsplat",
+        "version": APP_VERSION,
+        "skytools_api_configured": bool(_skytools_gateway_token()),
+        "approved_origin_count": len(SKYTOOLS_ALLOWED_ORIGINS),
+        "max_upload_bytes": SKYTOOLS_MAX_UPLOAD_BYTES,
+        "queue": {
+            "queued": sum(state == "queued" for state in states),
+            "running": sum(state == "running" for state in states),
+        },
+    }
+
+
+@app.post(f"{SKYTOOLS_API_PREFIX}/jobs")
+async def create_skytools_job(
+    request: Request,
+    file: UploadFile = File(...),
+    mode: str = Form("vocals"),
+    output_format: str = Form("mp3_320"),
+    multi_stem_export: str = Form("zip"),
+    video_handling: str = Form("audio_only"),
+):
+    owner_id, external_job_id = _skytools_identity(request, require_job_id=True)
+    assert external_job_id is not None
+    existing = _find_skytools_job(external_job_id)
+    if existing is not None:
+        if not secrets.compare_digest(str(existing.get("skytools_owner_id") or ""), owner_id):
+            raise HTTPException(status_code=409, detail="external job id already exists")
+        return {"job": _skytools_job_payload(existing), "idempotent_replay": True}
+
+    normalized_output_format = {"mp3": "mp3_320"}.get(output_format, output_format)
+    source_path: Path | None = None
+    registered_task_id: str | None = None
+    try:
+        _validate_mode_and_output_format(mode, normalized_output_format)
+        normalized_multi_stem_export = _validate_multi_stem_export(multi_stem_export)
+        normalized_video_handling = _validate_video_handling(video_handling)
+        original_name, source_path = await _store_uploaded_file(
+            file,
+            max_bytes=SKYTOOLS_MAX_UPLOAD_BYTES,
+            require_known_suffix=True,
+        )
+        task = _register_task(
+            original_name=original_name,
+            source_path=source_path,
+            source_dir=None,
+            mode=mode,
+            output_format=normalized_output_format,
+            video_handling=normalized_video_handling,
+            multi_stem_export=normalized_multi_stem_export,
+            output_same_as_input=False,
+            delivery="browser_download",
+            auto_start=False,
+        )
+        registered_task_id = str(task["id"])
+        with tasks_lock:
+            task["skytools_owner_id"] = owner_id
+            task["skytools_job_id"] = external_job_id
+            task["version"] = int(task.get("version") or 0) + 1
+        _enqueue_task(registered_task_id)
+        _resume_queue_processing()
+    except AppError as exc:
+        if source_path is not None and registered_task_id is None:
+            _cleanup_path(source_path)
+        status = 413 if exc.message.startswith("Upload exceeds") else 400
+        raise exc.to_http(status) from exc
+    return JSONResponse(status_code=202, content={"job": _skytools_job_payload(task), "idempotent_replay": False})
+
+
+@app.get(f"{SKYTOOLS_API_PREFIX}/jobs/{{task_id}}")
+async def get_skytools_job(task_id: str, request: Request) -> dict[str, Any]:
+    owner_id, _external_job_id = _skytools_identity(request)
+    return {"job": _skytools_job_payload(_require_skytools_owned_task(task_id, owner_id))}
+
+
+@app.post(f"{SKYTOOLS_API_PREFIX}/jobs/{{task_id}}/cancel")
+async def cancel_skytools_job(task_id: str, request: Request) -> dict[str, Any]:
+    owner_id, _external_job_id = _skytools_identity(request)
+    task = _require_skytools_owned_task(task_id, owner_id)
+    if str(task.get("status") or "") not in TERMINAL_STATUSES:
+        _request_task_stop(task_id)
+        _resume_queue_processing()
+    return {"job": _skytools_job_payload(_require_skytools_owned_task(task_id, owner_id))}
+
+
+@app.get(f"{SKYTOOLS_API_PREFIX}/jobs/{{task_id}}/result")
+async def download_skytools_result(task_id: str, request: Request):
+    owner_id, _external_job_id = _skytools_identity(request)
+    task = _require_skytools_owned_task(task_id, owner_id)
+    if str(task.get("status") or "") != "done":
+        raise HTTPException(status_code=409, detail="result not ready")
+    return await download_output(task_id)
 
 
 def _pick_directory_dialog() -> Path | None:
