@@ -1169,6 +1169,7 @@ ARCHIVE_MODE_LABELS = {
     "both_deux": "both",
     "both_separate": "both",
     "negative_guitar": "negative guitar",
+    "negative_htdemucs_ft_drums": "negative drums",
     "negative_htdemucs_ft_other": "negative other",
     "negative_htdemucs_ft_bass": "negative bass",
     "bs_roformer_6s": "full mix",
@@ -1186,6 +1187,7 @@ MODE_TO_STEMS = {
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
     "negative_guitar": ("negative_guitar",),
+    "negative_htdemucs_ft_drums": ("negative_htdemucs_ft_drums",),
     "negative_htdemucs_ft_other": ("negative_htdemucs_ft_other",),
     "negative_htdemucs_ft_bass": ("negative_htdemucs_ft_bass",),
     "both_deux": ("deux",),
@@ -1211,6 +1213,7 @@ MODE_REQUIRED_MODELS = {
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
     "negative_guitar": ("guitar",),
+    "negative_htdemucs_ft_drums": ("htdemucs_ft_drums",),
     "negative_htdemucs_ft_other": ("guitar", "htdemucs_ft_other"),
     "negative_htdemucs_ft_bass": ("htdemucs_ft_bass",),
     "both_deux": ("deux",),
@@ -1236,6 +1239,7 @@ MODE_OUTPUT_LABELS = {
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
     "negative_guitar": ("negative guitar",),
+    "negative_htdemucs_ft_drums": ("negative drums",),
     "negative_htdemucs_ft_other": ("negative other",),
     "negative_htdemucs_ft_bass": ("negative bass",),
     "both_deux": ("vocals", "instrumental"),
@@ -3456,6 +3460,7 @@ def _runtime_stage_key_for_display(stage_text: str) -> str | None:
 def _runtime_model_sequence(mode: str) -> list[str]:
     negative_mode_models = {
         "negative_guitar": ["guitar"],
+        "negative_htdemucs_ft_drums": ["htdemucs_ft_drums"],
         "negative_htdemucs_ft_other": ["guitar", "htdemucs_ft_other"],
         "negative_htdemucs_ft_bass": ["htdemucs_ft_bass"],
     }
@@ -6271,8 +6276,16 @@ def _process_task(task_id: str) -> None:
                 raise AppError(ErrorCode.SEPARATION_FAILED, "full mix model returned incomplete output.")
             for label, tensor in zip(expected_labels, bs_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "negative_htdemucs_ft_bass"}:
-            model_key = "htdemucs_ft_bass" if mode == "negative_htdemucs_ft_bass" else mode
+        elif mode in {
+            "htdemucs_ft_drums",
+            "htdemucs_ft_bass",
+            "negative_htdemucs_ft_drums",
+            "negative_htdemucs_ft_bass",
+        }:
+            model_key = {
+                "negative_htdemucs_ft_drums": "htdemucs_ft_drums",
+                "negative_htdemucs_ft_bass": "htdemucs_ft_bass",
+            }.get(mode, mode)
             fast_model = manager.get(model_key)
             fast_started_at = time.time()
             fast_pred = _run_model_for_spec(
@@ -6290,7 +6303,7 @@ def _process_task(task_id: str) -> None:
             target_tensor = _extract_target_tensor(model_key, fast_model, fast_pred)
             output_tensor = (
                 _negative_model_output(waveform, fast_pred, target_tensor)
-                if mode == "negative_htdemucs_ft_bass"
+                if mode in {"negative_htdemucs_ft_drums", "negative_htdemucs_ft_bass"}
                 else target_tensor
             )
             _append_named_output(

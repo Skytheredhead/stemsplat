@@ -110,6 +110,11 @@ NEGATIVE_MODE_EXPECTATIONS = {
         "required_models": ["guitar"],
         "output_labels": ["negative guitar"],
     },
+    "negative_htdemucs_ft_drums": {
+        "stems": ["negative_htdemucs_ft_drums"],
+        "required_models": ["htdemucs_ft_drums"],
+        "output_labels": ["negative drums"],
+    },
     "negative_htdemucs_ft_other": {
         "stems": ["negative_htdemucs_ft_other"],
         "required_models": ["guitar", "htdemucs_ft_other"],

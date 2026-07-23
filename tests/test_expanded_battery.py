@@ -460,6 +460,20 @@ class ExpandedBatteryProcessingTests(ExpandedBatteryBase):
         output_waveform, _ = sf.read(str(output_path), always_2d=True)
         self.assertLess(float(abs(output_waveform - (source_waveform * 0.92)).max()), 2e-4)
 
+    def test_negative_drums_exports_mix_minus_drums(self) -> None:
+        source = self.make_audio("negative_drums.wav", seconds=1.0)
+        payload = self.upload_task(source, stems="negative_htdemucs_ft_drums", multi_stem_export="separate")
+        task_id = str(payload["task_id"])
+        self.start_task(task_id, output_root=self.output_root, multi_stem_export="separate")
+        task = self.run_task_to_completion(task_id)
+
+        self.assertEqual(task["status"], "done")
+        self.assertEqual(task["outputs"], ["negative_drums - negative drums.wav"])
+        self.assertEqual(self.controller.observed_inputs[0][0], "htdemucs_ft_drums")
+        output_path = Path(str(task["out_dir"])) / str(task["outputs"][0])
+        output_waveform, _ = sf.read(str(output_path), always_2d=True)
+        self.assertLess(float(abs(output_waveform).max()), 2e-4)
+
     def test_drumsep_6s_runs_drums_model_before_drum_split(self) -> None:
         source = self.make_audio("drumsplit6.wav", seconds=1.0)
         payload = self.upload_task(source, stems="drumsep_6s", multi_stem_export="separate")
