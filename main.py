@@ -1168,6 +1168,9 @@ MODEL_DISPLAY_NAMES = {
 ARCHIVE_MODE_LABELS = {
     "both_deux": "both",
     "both_separate": "both",
+    "negative_guitar": "negative guitar",
+    "negative_htdemucs_ft_other": "negative other",
+    "negative_htdemucs_ft_bass": "negative bass",
     "bs_roformer_6s": "full mix",
     "htdemucs_6s": "full mix faster",
     "drumsep_6s": "drum split - 6",
@@ -1182,6 +1185,9 @@ MODE_TO_STEMS = {
     "unselected": (),
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
+    "negative_guitar": ("negative_guitar",),
+    "negative_htdemucs_ft_other": ("negative_htdemucs_ft_other",),
+    "negative_htdemucs_ft_bass": ("negative_htdemucs_ft_bass",),
     "both_deux": ("deux",),
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
@@ -1204,6 +1210,9 @@ MODE_REQUIRED_MODELS = {
     "unselected": (),
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
+    "negative_guitar": ("guitar",),
+    "negative_htdemucs_ft_other": ("guitar", "htdemucs_ft_other"),
+    "negative_htdemucs_ft_bass": ("htdemucs_ft_bass",),
     "both_deux": ("deux",),
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
@@ -1226,6 +1235,9 @@ MODE_OUTPUT_LABELS = {
     "unselected": (),
     "vocals": ("vocals",),
     "instrumental": ("instrumental",),
+    "negative_guitar": ("negative guitar",),
+    "negative_htdemucs_ft_other": ("negative other",),
+    "negative_htdemucs_ft_bass": ("negative bass",),
     "both_deux": ("vocals", "instrumental"),
     "both_separate": ("vocals", "instrumental"),
     "guitar": ("guitar",),
@@ -3244,6 +3256,17 @@ def _residual_output(source: torch.Tensor, predicted: torch.Tensor) -> torch.Ten
     return _waveform_like(source, predicted) - predicted
 
 
+def _negative_model_output(
+    source: torch.Tensor,
+    prediction: torch.Tensor,
+    target_tensor: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if prediction.shape[0] == 2:
+        return prediction[1]
+    target = target_tensor if target_tensor is not None else prediction[0]
+    return _residual_output(source, target)
+
+
 def _db_to_gain(db_value: float) -> float:
     return float(10.0 ** (float(db_value) / 20.0))
 
@@ -3431,6 +3454,13 @@ def _runtime_stage_key_for_display(stage_text: str) -> str | None:
 
 
 def _runtime_model_sequence(mode: str) -> list[str]:
+    negative_mode_models = {
+        "negative_guitar": ["guitar"],
+        "negative_htdemucs_ft_other": ["guitar", "htdemucs_ft_other"],
+        "negative_htdemucs_ft_bass": ["htdemucs_ft_bass"],
+    }
+    if mode in negative_mode_models:
+        return negative_mode_models[mode]
     if mode in {"vocals", "instrumental", "deux", "guitar", "denoise", "bs_roformer_6s"}:
         return [mode]
     if mode == "mel_band_karaoke":
@@ -4713,10 +4743,10 @@ def _stage_progress_fraction(mode: str, stage_text: str, pct: int) -> float | No
         "drumsep_6s",
         "drumsep_4s",
     }:
-        if mode == "htdemucs_ft_other" and stage_model == "guitar":
+        if mode in {"htdemucs_ft_other", "negative_htdemucs_ft_other"} and stage_model == "guitar":
             span = max(1, OTHER_FILTER_GUITAR_END_PCT - MODEL_PROGRESS_START_PCT)
             return max(0.0, min(1.0, (clamped - MODEL_PROGRESS_START_PCT) / span))
-        if mode == "htdemucs_ft_other" and stage_model == "htdemucs_ft_other":
+        if mode in {"htdemucs_ft_other", "negative_htdemucs_ft_other"} and stage_model == "htdemucs_ft_other":
             span = max(1, OTHER_FILTER_OTHER_END_PCT - OTHER_FILTER_OTHER_START_PCT)
             return max(0.0, min(1.0, (clamped - OTHER_FILTER_OTHER_START_PCT) / span))
         if mode in {"drumsep_6s", "drumsep_4s"} and stage_model == "htdemucs_ft_drums":
@@ -6062,7 +6092,7 @@ def _process_task(task_id: str) -> None:
             _record_eta_sample("instrumental", audio_seconds, time.time() - instrumental_started_at)
             _append_named_output(temp_outputs, work_dir, "vocals", vocals_pred[0])
             _append_named_output(temp_outputs, work_dir, "instrumental", instrumental_pred[0])
-        elif mode == "guitar":
+        elif mode in {"guitar", "negative_guitar"}:
             guitar_model = manager.get("guitar")
             guitar_started_at = time.time()
             guitar_pred = _run_model_for_spec(
@@ -6077,7 +6107,12 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("guitar", audio_seconds, time.time() - guitar_started_at)
-            _append_named_output(temp_outputs, work_dir, "guitar", guitar_pred[0])
+            guitar_tensor = (
+                _negative_model_output(waveform, guitar_pred)
+                if mode == "negative_guitar"
+                else guitar_pred[0]
+            )
+            _append_named_output(temp_outputs, work_dir, MODE_OUTPUT_LABELS[mode][0], guitar_tensor)
         elif mode == "mel_band_karaoke":
             vocals_model = manager.get("vocals")
             karaoke_model = manager.get("mel_band_karaoke")
@@ -6236,28 +6271,35 @@ def _process_task(task_id: str) -> None:
                 raise AppError(ErrorCode.SEPARATION_FAILED, "full mix model returned incomplete output.")
             for label, tensor in zip(expected_labels, bs_6s_pred, strict=False):
                 _append_named_output(temp_outputs, work_dir, label, tensor)
-        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass"}:
-            fast_model = manager.get(mode)
+        elif mode in {"htdemucs_ft_drums", "htdemucs_ft_bass", "negative_htdemucs_ft_bass"}:
+            model_key = "htdemucs_ft_bass" if mode == "negative_htdemucs_ft_bass" else mode
+            fast_model = manager.get(model_key)
             fast_started_at = time.time()
             fast_pred = _run_model_for_spec(
-                mode,
+                model_key,
                 fast_model,
                 waveform,
                 progress_cb=lambda frac: _set_task_progress(
                     task_id,
-                    f"Running {MODEL_DISPLAY_NAMES[mode]} model",
+                    f"Running {MODEL_DISPLAY_NAMES[model_key]} model",
                     _map_fraction(MODEL_PROGRESS_START_PCT, SINGLE_MODEL_PROGRESS_END_PCT, frac),
                 ),
                 stop_check=lambda: _stop_check(task_id),
             )
-            _record_eta_sample(mode, audio_seconds, time.time() - fast_started_at)
+            _record_eta_sample(model_key, audio_seconds, time.time() - fast_started_at)
+            target_tensor = _extract_target_tensor(model_key, fast_model, fast_pred)
+            output_tensor = (
+                _negative_model_output(waveform, fast_pred, target_tensor)
+                if mode == "negative_htdemucs_ft_bass"
+                else target_tensor
+            )
             _append_named_output(
                 temp_outputs,
                 work_dir,
                 MODE_OUTPUT_LABELS[mode][0],
-                _extract_target_tensor(mode, fast_model, fast_pred),
+                output_tensor,
             )
-        elif mode == "htdemucs_ft_other":
+        elif mode in {"htdemucs_ft_other", "negative_htdemucs_ft_other"}:
             guitar_model = manager.get("guitar")
             filtered_other_model = manager.get("htdemucs_ft_other")
 
@@ -6290,11 +6332,17 @@ def _process_task(task_id: str) -> None:
                 stop_check=lambda: _stop_check(task_id),
             )
             _record_eta_sample("htdemucs_ft_other", audio_seconds, time.time() - filtered_other_started_at)
+            other_tensor = _extract_target_tensor("htdemucs_ft_other", filtered_other_model, filtered_other_pred)
+            output_tensor = (
+                _negative_model_output(waveform, filtered_other_pred, other_tensor)
+                if mode == "negative_htdemucs_ft_other"
+                else other_tensor
+            )
             _append_named_output(
                 temp_outputs,
                 work_dir,
-                "other",
-                _extract_target_tensor("htdemucs_ft_other", filtered_other_model, filtered_other_pred),
+                MODE_OUTPUT_LABELS[mode][0],
+                output_tensor,
             )
         elif mode == "htdemucs_6s":
             htdemucs_6s_model = manager.get("htdemucs_6s")

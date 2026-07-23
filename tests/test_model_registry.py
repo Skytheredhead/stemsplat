@@ -104,6 +104,24 @@ PRESET_MODE_EXPECTATIONS = {
     },
 }
 
+NEGATIVE_MODE_EXPECTATIONS = {
+    "negative_guitar": {
+        "stems": ["negative_guitar"],
+        "required_models": ["guitar"],
+        "output_labels": ["negative guitar"],
+    },
+    "negative_htdemucs_ft_other": {
+        "stems": ["negative_htdemucs_ft_other"],
+        "required_models": ["guitar", "htdemucs_ft_other"],
+        "output_labels": ["negative other"],
+    },
+    "negative_htdemucs_ft_bass": {
+        "stems": ["negative_htdemucs_ft_bass"],
+        "required_models": ["htdemucs_ft_bass"],
+        "output_labels": ["negative bass"],
+    },
+}
+
 
 def _module_ast(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -249,6 +267,12 @@ class ModelRegistryTests(unittest.TestCase):
             if mode == "preset_all_stems":
                 expected_required = ["vocals", "instrumental", "mel_band_karaoke", "bs_roformer_6s", "guitar", "drumsep_6s"]
             self.assertEqual(list(self.mode_required_models[mode]), expected_required)
+            self.assertEqual(list(self.mode_output_labels[mode]), expected["output_labels"])
+
+    def test_negative_mode_registry(self) -> None:
+        for mode, expected in NEGATIVE_MODE_EXPECTATIONS.items():
+            self.assertEqual(list(self.mode_to_stems[mode]), expected["stems"])
+            self.assertEqual(list(self.mode_required_models[mode]), expected["required_models"])
             self.assertEqual(list(self.mode_output_labels[mode]), expected["output_labels"])
 
     def test_preset_defaults_are_present(self) -> None:

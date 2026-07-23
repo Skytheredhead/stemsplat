@@ -111,9 +111,7 @@ class _FakeProcessingController:
         self.after_progress = None
 
     def _output_count(self, model_key: str) -> int:
-        if model_key == "deux":
-            return 2
-        if model_key == "mel_band_karaoke":
+        if model_key in {"vocals", "instrumental", "deux", "guitar", "mel_band_karaoke"}:
             return 2
         labels = main.MODE_OUTPUT_LABELS.get(model_key)
         if labels:
@@ -447,6 +445,20 @@ class ExpandedBatteryProcessingTests(ExpandedBatteryBase):
         archive_path = Path(str(task["out_dir"])) / str(task["outputs"][0])
         self.assertTrue(archive_path.exists())
         self.assertEqual(archive_path.suffix, ".zip")
+
+    def test_negative_guitar_uses_second_guitar_model_output(self) -> None:
+        source = self.make_audio("negative_guitar.wav", seconds=1.0)
+        payload = self.upload_task(source, stems="negative_guitar", multi_stem_export="separate")
+        task_id = str(payload["task_id"])
+        self.start_task(task_id, output_root=self.output_root, multi_stem_export="separate")
+        task = self.run_task_to_completion(task_id)
+
+        self.assertEqual(task["status"], "done")
+        self.assertEqual(task["outputs"], ["negative_guitar - negative guitar.wav"])
+        output_path = Path(str(task["out_dir"])) / str(task["outputs"][0])
+        source_waveform, _ = sf.read(str(source), always_2d=True)
+        output_waveform, _ = sf.read(str(output_path), always_2d=True)
+        self.assertLess(float(abs(output_waveform - (source_waveform * 0.92)).max()), 2e-4)
 
     def test_drumsep_6s_runs_drums_model_before_drum_split(self) -> None:
         source = self.make_audio("drumsplit6.wav", seconds=1.0)
