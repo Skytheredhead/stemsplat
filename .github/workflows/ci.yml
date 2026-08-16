@@ -16,10 +16,13 @@ jobs:
         with:
           python-version: '3.10'
           cache: pip
+      - name: Install media validation tools
+        run: brew install ffmpeg
       - name: Install locked dependencies
         run: python -m pip install --require-hashes -r requirements-dev-macos-arm64.lock
       - name: Syntax and tests
         env:
+          STEMSPLAT_APP_HOME: ${{ runner.temp }}/stemsplat-ci-home
           STEMSPLAT_DISABLE_BACKGROUND_THREADS: '1'
         run: |
           python -m compileall -q -f main.py launcher.py downloader.py quality.py stemsplat tests
