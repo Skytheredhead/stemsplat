@@ -1,0 +1,19 @@
+{
+  "name": "stemsplat-release-assets",
+  "private": true,
+  "version": "0.4.3",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.cjs -i web/tailwind-input.css -o web/app.css --minify",
+    "check:offline": "node tools/check_offline_frontend.mjs",
+    "lint": "npm run lint:js",
+    "lint:js": "eslint web/*.js tests/e2e/*.mjs tools/*.mjs",
+    "test:e2e": "node tools/run-playwright.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.35.0",
+    "@playwright/test": "1.62.1",
+    "eslint": "9.35.0",
+    "globals": "16.3.0",
+    "tailwindcss": "3.4.17"
+  }
+}

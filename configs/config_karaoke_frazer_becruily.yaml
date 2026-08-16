@@ -16,7 +16,7 @@ model:
   time_transformer_depth: 1
   freq_transformer_depth: 1
   linear_transformer_depth: 0
-  freqs_per_bands: !!python/tuple
+  freqs_per_bands:
   - 2
   - 2
   - 2
@@ -91,7 +91,7 @@ model:
   stft_normalized: false
   mask_estimator_depth: 2
   multi_stft_resolution_loss_weight: 1.0
-  multi_stft_resolutions_window_sizes: !!python/tuple
+  multi_stft_resolutions_window_sizes:
   - 4096
   - 2048
   - 1024

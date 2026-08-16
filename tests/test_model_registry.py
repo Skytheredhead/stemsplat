@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 import unittest
 
@@ -10,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_PATH = ROOT / "main.py"
 DOWNLOADER_PATH = ROOT / "downloader.py"
+MANIFEST_PATH = ROOT / "models" / "manifest.json"
 CONFIG_DIR = ROOT / "configs"
 
 NEW_MODEL_EXPECTATIONS = {
@@ -196,14 +198,13 @@ class ModelRegistryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.main_ast = _module_ast(MAIN_PATH)
-        cls.downloader_ast = _module_ast(DOWNLOADER_PATH)
         cls.constants = _simple_constants(cls.main_ast)
         cls.model_specs = _model_specs_from_ast(cls.main_ast)
         cls.mode_to_stems = _literal_eval(cls.main_ast, "MODE_TO_STEMS")
         cls.mode_required_models = _literal_eval(cls.main_ast, "MODE_REQUIRED_MODELS")
         cls.mode_output_labels = _literal_eval(cls.main_ast, "MODE_OUTPUT_LABELS")
         cls.compat_defaults = _dict_with_named_constants(cls.main_ast, "COMPAT_SETTINGS_DEFAULTS", cls.constants)
-        cls.downloader_files = _literal_eval(cls.downloader_ast, "FILES")
+        cls.model_manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     def test_new_model_specs_match_configs(self) -> None:
         for key, expected in NEW_MODEL_EXPECTATIONS.items():
@@ -215,7 +216,7 @@ class ModelRegistryTests(unittest.TestCase):
                 self.assertEqual(spec["kind"], expected["kind"])
 
             config_path = CONFIG_DIR / str(spec["config"])
-            cfg = yaml.unsafe_load(config_path.read_text(encoding="utf-8"))
+            cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             self.assertEqual(int(cfg["audio"]["chunk_size"]), spec["segment"])
             self.assertEqual(int(cfg["inference"]["num_overlap"]), spec["overlap"])
 
@@ -259,11 +260,15 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertEqual(self.compat_defaults["boost_harmonies_base_song_gain_db"], -3.0)
 
     def test_downloader_entries_match_model_specs(self) -> None:
-        by_tag = {item["tag"]: item for item in self.downloader_files}
+        by_tag = {item["tag"]: item for item in self.model_manifest["models"]}
         for key, expected in NEW_MODEL_EXPECTATIONS.items():
             item = by_tag[key]
             self.assertEqual(item["filename"], expected["filename"])
-            self.assertEqual(item["url"], expected["url"])
+            if item.get("auto_download"):
+                self.assertNotIn("/resolve/main/", str(item["url"]))
+                self.assertEqual(len(str(item["sha256"])), 64)
+            else:
+                self.assertTrue(item.get("blocked_reason"))
 
 
 if __name__ == "__main__":

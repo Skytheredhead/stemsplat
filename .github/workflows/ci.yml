@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements-dev-macos-arm64.lock
+      - name: Syntax and tests
+        env:
+          STEMSPLAT_DISABLE_BACKGROUND_THREADS: '1'
+        run: |
+          python -m compileall -q -f main.py launcher.py downloader.py quality.py stemsplat tests
+          python -m unittest discover -s tests -p 'test_*.py' -q
+      - name: Ruff
+        run: ruff check stemsplat quality.py tools/pip_audit_gate.py tools/release_gate.py tools/sign_update.py tests/test_dependency_audit_gate.py tests/test_security_hardening.py tests/test_upload_admission.py tests/test_state_store.py tests/test_model_manifest.py tests/test_update_verification.py tests/test_quality_harness.py tests/test_packaged_resources.py tests/test_lan_surface.py tests/test_release_gate.py
+      - name: Mypy new modules
+        run: mypy --ignore-missing-imports stemsplat/atomic.py stemsplat/security.py stemsplat/state.py stemsplat/uploads.py stemsplat/model_manifest.py stemsplat/updates.py
+      - name: Dependency audit
+        run: |
+          python tools/pip_audit_gate.py --requirements requirements-macos-arm64.lock
+          python tools/pip_audit_gate.py --requirements requirements-dev-macos-arm64.lock
+          python tools/pip_audit_gate.py --requirements requirements-quality-macos-arm64.lock
+      - name: Secret scan
+        run: |
+          detect-secrets scan --all-files \
+            --exclude-files '(^|/)(\.venv|node_modules|\.mypy_cache|\.ruff_cache|\.git)/|package-lock\.json$|requirements-.*\.lock$|web/app\.css$' \
+            --exclude-lines '"(config_)?sha256"\s*:\s*"[0-9a-f]{64}"' \
+            > /tmp/stemsplat-secrets.json
+          python -c 'import json, sys; data=json.load(open("/tmp/stemsplat-secrets.json")); sys.exit(any(data.get("results", {}).values()))'
+      - name: SBOM
+        run: cyclonedx-py requirements requirements-macos-arm64.lock --output-format JSON --output-file stemsplat-sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stemsplat-sbom
+          path: stemsplat-sbom.json
+
+  frontend:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+      - run: npm run build:css
+      - run: git diff --exit-code -- web/app.css
+      - run: npm run check:offline
+      - run: npm run lint:js
+
+  e2e:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m pip install --require-hashes -r requirements-macos-arm64.lock
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install chromium
+      - run: npm run test:e2e
+
+  release-gate-shape:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Production gate must fail closed without external prerequisites
+        run: python tools/release_gate.py && exit 1 || test $? -eq 2

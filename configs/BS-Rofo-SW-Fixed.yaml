@@ -16,7 +16,7 @@ model:
   time_transformer_depth: 1
   freq_transformer_depth: 1
   linear_transformer_depth: 0
-  freqs_per_bands: !!python/tuple
+  freqs_per_bands:
     - 2
     - 2
     - 2
@@ -91,7 +91,7 @@ model:
   stft_normalized: false
   mask_estimator_depth: 2
   multi_stft_resolution_loss_weight: 1.0
-  multi_stft_resolutions_window_sizes: !!python/tuple
+  multi_stft_resolutions_window_sizes:
   - 4096
   - 2048
   - 1024
@@ -137,7 +137,7 @@ augmentations:
   loudness_min: 0.5
   loudness_max: 1.5
   mixup: true # mix several stems of same type with some probability (only works for dataset types: 1, 2, 3)
-  mixup_probs: !!python/tuple # 2 additional stems of the same type (1st with prob 0.2, 2nd with prob 0.02)
+  mixup_probs: # 2 additional stems of the same type (1st with prob 0.2, 2nd with prob 0.02)
     - 0.2
     - 0.02
   mixup_loudness_min: 0.5

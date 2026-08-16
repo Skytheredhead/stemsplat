@@ -5,6 +5,7 @@ import contextlib
 import logging
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -20,10 +21,20 @@ from app_paths import RUNTIME_DIR, ensure_app_dirs
 
 ensure_app_dirs()
 
-from main import _task_runner_main, app, set_runtime_status_provider
+from main import (
+    _compat_settings_payload,
+    _get_certificate_manager,
+    _reset_lan_auth_sessions,
+    _task_runner_main,
+    app,
+    create_lan_app,
+    set_lan_runtime_controller,
+    set_runtime_status_provider,
+)
 
 logger = logging.getLogger("stemsplat.launcher")
 PREFERRED_PORT = 9876
+LAN_PORT = 9877
 FALLBACK_SCAN = 32
 
 try:
@@ -51,11 +62,16 @@ def _pick_port(host: str, preferred: int) -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_until_ready(url: str, timeout: float = 30.0) -> bool:
+def _wait_until_ready(url: str, timeout: float = 30.0, *, ca_file: Path | None = None) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         with contextlib.suppress(Exception):
-            with urllib.request.urlopen(url, timeout=1):
+            kwargs: dict[str, Any] = {"timeout": 1}
+            if url.lower().startswith("https://"):
+                if ca_file is None:
+                    raise ValueError("an HTTPS readiness probe requires its issuing CA")
+                kwargs["context"] = ssl.create_default_context(cafile=str(ca_file))
+            with urllib.request.urlopen(url, **kwargs):
                 return True
         time.sleep(0.2)
     return False
@@ -163,22 +179,21 @@ class ServerController:
         self._port_conflict = False
         self._port_notice_acknowledged = False
         self._windowed = False
+        self.lan_controller: LanServerController | None = None
 
     def client_url(self, port: int | None = None) -> str:
         current = port if port is not None else (self._current_port or self.preferred_port)
         return f"http://{self.client_host}:{current}/"
 
     def lan_url(self, port: int | None = None) -> str:
-        if not self.lan_ip:
+        if not self.lan_ip or self.lan_controller is None or not self.lan_controller.running:
             return ""
-        current = port if port is not None else (self._current_port or self.preferred_port)
-        return f"http://{self.lan_ip}:{current}/"
+        return f"https://{self.lan_ip}:{self.lan_controller.port}/"
 
     def lan_local_url(self, port: int | None = None) -> str:
-        if not self.local_hostname:
+        if not self.local_hostname or self.lan_controller is None or not self.lan_controller.running:
             return ""
-        current = port if port is not None else (self._current_port or self.preferred_port)
-        return f"http://{self.local_hostname}:{current}/"
+        return f"https://{self.local_hostname}:{self.lan_controller.port}/"
 
     def runtime_status(self) -> dict[str, Any]:
         with self._lock:
@@ -195,8 +210,9 @@ class ServerController:
             "client_url": self.client_url(current_port),
             "lan_url": lan_url,
             "lan_local_url": lan_local_url,
-            "lan_display": f"{self.lan_ip}:{current_port}" if self.lan_ip else "",
-            "lan_local_display": f"{self.local_hostname}:{current_port}" if self.local_hostname else "",
+            "lan_display": f"{self.lan_ip}:{LAN_PORT}" if lan_url else "",
+            "lan_local_display": f"{self.local_hostname}:{LAN_PORT}" if lan_local_url else "",
+            "lan_enabled": bool(self.lan_controller and self.lan_controller.running),
             "network_name": self.network_name,
             "port_conflict": port_conflict,
             "show_port_notice": port_conflict and not acknowledged,
@@ -225,6 +241,8 @@ class ServerController:
         return self.runtime_status()
 
     def stop(self) -> None:
+        if self.lan_controller is not None:
+            self.lan_controller.stop()
         with self._lock:
             server = self._server
             thread = self._thread
@@ -301,12 +319,23 @@ class ServerController:
         with self._lock:
             self._port_conflict = False
             self._port_notice_acknowledged = True
+        if self.lan_controller is not None:
+            with contextlib.suppress(Exception):
+                self.lan_controller.sync()
         payload = self.runtime_status()
         payload["switched"] = True
         return payload
 
     def _start_server(self, port: int) -> None:
-        config = uvicorn.Config(app, host=self.bind_host, port=port, reload=False, log_level="info")
+        config = uvicorn.Config(
+            app,
+            host=self.bind_host,
+            port=port,
+            reload=False,
+            log_level="info",
+            proxy_headers=False,
+            forwarded_allow_ips="",
+        )
         server = _ThreadedServer(config)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -319,6 +348,113 @@ class ServerController:
             self._server = server
             self._thread = thread
             self._current_port = port
+
+
+class LanServerController:
+    def __init__(self, desktop: ServerController, port: int = LAN_PORT) -> None:
+        self.desktop = desktop
+        self.port = port
+        self._lock = threading.RLock()
+        self._server: _ThreadedServer | None = None
+        self._thread: threading.Thread | None = None
+        self._monitor_stop = threading.Event()
+        self._monitor_thread: threading.Thread | None = None
+        desktop.lan_controller = self
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return bool(self._thread and self._thread.is_alive() and self._server)
+
+    def sync(self) -> None:
+        enabled = bool(_compat_settings_payload().get("lan_access_enabled"))
+        if not enabled:
+            self.stop()
+            return
+        certificate = _get_certificate_manager().ensure(
+            self.desktop.local_hostname,
+            [self.desktop.lan_ip],
+        )
+        if self.running:
+            self.stop(stop_monitor=False)
+        if not _port_available("0.0.0.0", self.port):
+            raise RuntimeError(f"LAN port {self.port} is already in use")
+        lan_app = create_lan_app()
+        config = uvicorn.Config(
+            lan_app,
+            host="0.0.0.0",
+            port=self.port,
+            reload=False,
+            log_level="info",
+            ssl_certfile=str(certificate.certificate_path),
+            ssl_keyfile=str(certificate.private_key_path),
+            proxy_headers=False,
+            forwarded_allow_ips="",
+        )
+        server = _ThreadedServer(config)
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        ready_host = self.desktop.lan_ip or self.desktop.local_hostname
+        if not ready_host or not _wait_until_ready(
+            f"https://{ready_host}:{self.port}/",
+            ca_file=certificate.ca_certificate_path,
+        ):
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=2)
+            raise RuntimeError("LAN HTTPS listener did not become ready")
+        with self._lock:
+            self._server = server
+            self._thread = thread
+        self._ensure_monitor()
+        logger.info("LAN HTTPS listener started on port %s", self.port)
+
+    def _ensure_monitor(self) -> None:
+        with self._lock:
+            if self._monitor_thread is not None and self._monitor_thread.is_alive():
+                return
+            self._monitor_stop.clear()
+            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self._monitor_thread.start()
+
+    def _monitor_loop(self) -> None:
+        while not self._monitor_stop.wait(6 * 60 * 60):
+            if not bool(_compat_settings_payload().get("lan_access_enabled")):
+                continue
+            try:
+                self.desktop.lan_ip = _local_lan_ip()
+                self.desktop.local_hostname = _local_hostname()
+                certificate = _get_certificate_manager().ensure(
+                    self.desktop.local_hostname,
+                    [self.desktop.lan_ip],
+                )
+                if certificate.renewed:
+                    _reset_lan_auth_sessions()
+                    self.sync()
+            except Exception:
+                logger.exception("LAN certificate renewal check failed; existing listener remains active")
+
+    def stop(self, *, stop_monitor: bool = True) -> None:
+        if stop_monitor:
+            self._monitor_stop.set()
+        with self._lock:
+            server = self._server
+            thread = self._thread
+            self._server = None
+            self._thread = None
+        if server is None or thread is None:
+            return
+        server.should_exit = True
+        thread.join(timeout=6)
+        if thread.is_alive():
+            server.force_exit = True
+            thread.join(timeout=2)
+        if stop_monitor:
+            with self._lock:
+                monitor = self._monitor_thread
+                self._monitor_thread = None
+            if monitor is not None and monitor is not threading.current_thread():
+                monitor.join(timeout=1)
 
 
 class DesktopApi:
@@ -474,7 +610,7 @@ def _run_windowed_app(controller: ServerController) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Launch the stemsplat desktop app.")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--client-host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
@@ -485,10 +621,19 @@ def main(argv: list[str] | None = None) -> int:
         _task_runner_main(Path(args.task_runner_input).expanduser())
         return 0
 
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        parser.error("the desktop listener is local-only; enable LAN HTTPS in settings")
+
     preferred_port = args.port if args.port is not None else PREFERRED_PORT
     controller = ServerController(args.host, args.client_host, preferred_port)
+    lan_controller = LanServerController(controller)
     set_runtime_status_provider(controller.runtime_status)
+    set_lan_runtime_controller(lan_controller)
     controller.start_initial()
+    try:
+        lan_controller.sync()
+    except Exception:
+        logger.exception("LAN HTTPS listener could not be started; desktop remains available")
 
     logger.info("starting stemsplat on %s", controller.client_url())
 

@@ -1,0 +1,34 @@
+{
+  "corpora": [
+    {
+      "name": "MUSDB18-HQ",
+      "path": "/external/path/to/MUSDB18-HQ",
+      "license": "MUSDB18 access terms; audio is not committed"
+    },
+    {
+      "name": "Slakh2100 tiny",
+      "path": "/external/path/to/slakh2100_flac_redux/tiny",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "name": "private excerpts",
+      "path": "/external/path/to/stemsplat-private-corpus",
+      "license": "user-owned; hashes and tags only",
+      "private": true,
+      "excerpts": [
+        {"sha256": "0000000000000000000000000000000000000000000000000000000000000000", "tags": ["vocals"]},
+        {"sha256": "1111111111111111111111111111111111111111111111111111111111111111", "tags": ["instrumental"]},
+        {"sha256": "2222222222222222222222222222222222222222222222222222222222222222", "tags": ["dense_mix"]},
+        {"sha256": "3333333333333333333333333333333333333333333333333333333333333333", "tags": ["acoustic"]},
+        {"sha256": "4444444444444444444444444444444444444444444444444444444444444444", "tags": ["bass"]},
+        {"sha256": "5555555555555555555555555555555555555555555555555555555555555555", "tags": ["drums"]},
+        {"sha256": "6666666666666666666666666666666666666666666666666666666666666666", "tags": ["guitar"]},
+        {"sha256": "7777777777777777777777777777777777777777777777777777777777777777", "tags": ["piano"]},
+        {"sha256": "8888888888888888888888888888888888888888888888888888888888888888", "tags": ["noisy"]},
+        {"sha256": "9999999999999999999999999999999999999999999999999999999999999999", "tags": ["denoise"]},
+        {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "tags": ["vocals", "dense_mix"]},
+        {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "tags": ["instrumental", "acoustic"]}
+      ]
+    }
+  ]
+}

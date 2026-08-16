@@ -4,12 +4,14 @@ import argparse
 import asyncio
 import contextlib
 import gc
+import hashlib
 import importlib
 import inspect
 import ipaddress
 import json
 import logging
 import math
+import mimetypes
 import os
 import platform
 import queue
@@ -35,7 +37,7 @@ from enum import Enum
 from functools import partial, wraps
 from pathlib import Path
 from packaging import version
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 import soundfile as sf
@@ -43,19 +45,21 @@ import torch
 import yaml
 from beartype import beartype
 from beartype.typing import Callable as BeartypeCallable, Optional as BeartypeOptional, Tuple as BeartypeTuple
-from downloader import ModelDownloadError, SSL_CONTEXT, download_to, download_url_to_path
+from downloader import ModelDownloadError, SSL_CONTEXT, describe_downloads, download_to, download_url_to_path
 from einops import pack, rearrange, reduce, repeat, unpack
 from app_paths import (
     ARTWORK_DIR,
     CONFIG_DIR,
     INTERMEDIATE_CACHE_DIR,
     LOG_DIR,
+    LAN_DIR,
     MODEL_DIR,
     OUTPUT_ROOT,
     PREVIOUS_FILES_DIR,
     PREVIOUS_FILES_INDEX_PATH,
     RESOURCE_DIR,
     RUNTIME_DIR,
+    STATE_DB_PATH,
     ETA_HISTORY_PATH,
     SETTINGS_PATH,
     UPLOAD_DIR,
@@ -68,6 +72,34 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from rotary_embedding_torch import RotaryEmbedding
 from starlette.background import BackgroundTask
+from stemsplat.atomic import atomic_write_bytes, atomic_write_json
+from stemsplat.model_manifest import ModelManifest, ModelManifestError
+from stemsplat.security import (
+    MUTATING_METHODS,
+    SECURITY_HEADERS,
+    LanAuthManager,
+    LanCertificateManager,
+    SESSION_TTLS,
+    hash_passcode,
+    normalized_host,
+    origin_matches,
+    request_has_forwarded_identity,
+)
+from stemsplat.state import StateConflictError, StateStore
+from stemsplat.updates import (
+    UpdateManifest,
+    UpdateVerificationError,
+    parse_and_verify_manifest,
+    verify_release_asset,
+)
+from stemsplat.uploads import (
+    UploadAdmissionController,
+    UploadAdmissionError,
+    UploadPolicy,
+    stage_local_batch,
+    stage_upload,
+)
+from stemsplat.version import __version__
 from torch import einsum, nn
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
@@ -931,7 +963,8 @@ class ExportPlan:
 
 LOG_PATH = LOG_DIR / "main_stemsplat.log"
 MODEL_SEARCH_DIRS = model_search_dirs()
-APP_VERSION = "0.4.2"
+MODEL_MANIFEST = ModelManifest(RESOURCE_DIR / "models" / "manifest.json")
+APP_VERSION = __version__
 DEFAULT_APP_PORT = 9876
 GITHUB_REPO = "Skytheredhead/stemsplat"
 GITHUB_LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -944,7 +977,7 @@ PROCESS_RSS_LIMIT_FALLBACK_BYTES = 8 * 1024 * 1024 * 1024
 MPS_MEMORY_HEADROOM_RATIO = 0.88
 UPDATE_CHECK_INTERVAL_SEC = 12 * 60 * 60
 LAN_AUTH_COOKIE_NAME = "stemsplat_lan_auth"
-LAN_AUTH_TTL_CHOICES = {"15m", "1d", "1w", "never"}
+LAN_AUTH_TTL_CHOICES = set(SESSION_TTLS)
 PREVIOUS_FILES_RETENTION_CHOICES: dict[str, int] = {
     "12h": 12 * 60 * 60,
     "1d": 24 * 60 * 60,
@@ -955,7 +988,15 @@ PREVIOUS_FILES_RETENTION_CHOICES: dict[str, int] = {
     "3mo": 90 * 24 * 60 * 60,
     "6mo": 180 * 24 * 60 * 60,
 }
-LAN_AUTH_ALLOWED_PATHS = {"/", "/favicon.ico", "/api/lan_auth"}
+LAN_AUTH_ALLOWED_PATHS = {
+    "/",
+    "/favicon.ico",
+    "/api/lan_auth",
+    "/api/lan/auth",
+    "/api/lan/logout",
+    "/api/lan/status",
+    "/assets/lan-login.js",
+}
 TERMINAL_TASK_RETENTION_LIMIT = 100
 MODEL_PROMPT_PENDING = "pending"
 MODEL_PROMPT_DISMISSED = "dismissed"
@@ -1016,6 +1057,8 @@ COMPAT_SETTINGS_DEFAULTS = {
     "update_last_notified_version": "",
     "update_skipped_version": "",
     "lan_passcode_enabled": False,
+    "lan_access_enabled": False,
+    "lan_passcode_hash": "",
     "lan_passcode": "",
     "lan_passcode_ttl": "1d",
     "previous_files_retention": "1w",
@@ -1025,6 +1068,7 @@ COMPAT_SETTINGS_DEFAULTS = {
     "boost_harmonies_base_song_gain_db": BOOST_HARMONIES_DEFAULT_BASE_GAIN_DB,
     "boost_guitar_guitar_gain_db": BOOST_GUITAR_DEFAULT_GUITAR_GAIN_DB,
     "boost_guitar_base_song_gain_db": BOOST_GUITAR_DEFAULT_BASE_GAIN_DB,
+    "editor_snap_distance_ms": 180,
 }
 
 MODEL_SPECS: dict[str, ModelSpec] = {
@@ -1128,21 +1172,6 @@ MODEL_ALIAS_MAP = {
     "BS-Rofo-SW-Fixed.ckpt": ["BS-Rofo-SW-Fixed-v1.ckpt", "BS Rofo SW Fixed.ckpt"],
 }
 
-MODEL_URLS = {
-    "vocals": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
-    "instrumental": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-    "deux": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
-    "guitar": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-    "mel_band_karaoke": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-    "denoise": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
-    "bs_roformer_6s": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
-    "htdemucs_ft_drums": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
-    "htdemucs_ft_bass": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
-    "htdemucs_ft_other": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
-    "htdemucs_6s": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
-    "drumsep_6s": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
-    "drumsep_4s": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
-}
 MODEL_DISPLAY_NAMES = {
     "vocals": "vocals",
     "instrumental": "instrumental",
@@ -1253,6 +1282,11 @@ BOTH_SEPARATE_INSTRUMENTAL_START_PCT = 50
 BOTH_SEPARATE_INSTRUMENTAL_END_PCT = 95
 EXPORT_PROGRESS_START_PCT = 96
 EXPORT_PROGRESS_END_PCT = 99
+EDITOR_WAVEFORM_POINTS = 1280
+EDITOR_WAVEFORM_POINTS_MIN = 640
+EDITOR_WAVEFORM_POINTS_MAX = 131072
+EDITOR_SAMPLE_RATE = 44_100
+EDITOR_SOURCE_WAVEFORM_CACHE_POINTS = (EDITOR_WAVEFORM_POINTS, 8192)
 
 MODE_CHOICES = set(MODE_TO_STEMS)
 OUTPUT_FORMAT_CHOICES = {"same_as_input", "mp3_320", "mp3_128", "wav", "m4a", "flac"}
@@ -1278,7 +1312,29 @@ SUPPORTED_MEDIA_SUFFIXES = {
     ".avi",
 }
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+MAX_UPLOAD_BYTES = max(1, int(float(os.environ.get("STEMSPLAT_MAX_UPLOAD_MB", "2048")) * 1024 * 1024))
+MAX_ACTIVE_TASKS = max(1, int(os.environ.get("STEMSPLAT_MAX_ACTIVE_TASKS", "100")))
+SUBPROCESS_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("STEMSPLAT_SUBPROCESS_TIMEOUT_SECONDS", "7200")))
+FFPROBE_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("STEMSPLAT_FFPROBE_TIMEOUT_SECONDS", "30")))
 RUNTIME_CLEANUP_MAX_AGE_SEC = 24 * 60 * 60
+
+MEDIA_MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
+    ".flac": (b"fLaC",),
+    ".ogg": (b"OggS",),
+    ".opus": (b"OggS",),
+    ".webm": (b"\x1a\x45\xdf\xa3",),
+    ".mkv": (b"\x1a\x45\xdf\xa3",),
+}
+RIFF_MEDIA_TYPES = {
+    ".wav": b"WAVE",
+    ".wave": b"WAVE",
+    ".avi": b"AVI ",
+}
+FORM_MEDIA_TYPES = {
+    ".aif": b"AIFF",
+    ".aiff": b"AIFF",
+}
+MP4_FAMILY_SUFFIXES = {".m4a", ".aac", ".mp4", ".m4v", ".mov", ".alac"}
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -1314,6 +1370,15 @@ def _safe_stem(name: str) -> str:
     raw = Path(name).stem or "split"
     cleaned = re.sub(r"[^\w .-]+", "_", raw, flags=re.ASCII).strip(" ._")
     return cleaned or "split"
+
+
+def _require_safe_upload_filename(raw_name: str | None) -> str:
+    name = str(raw_name or "upload").strip()
+    if not name or "\x00" in name or "/" in name or "\\" in name or Path(name).name != name:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsafe upload filename.")
+    if len(name.encode("utf-8", errors="ignore")) > 255:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Upload filename is too long.")
+    return name
 
 
 def _locate_case_insensitive(path: Path) -> Path | None:
@@ -1407,7 +1472,15 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     if str(normalized.get("multi_stem_export") or "") not in MULTI_STEM_EXPORT_CHOICES:
         normalized["multi_stem_export"] = "zip"
     normalized["lan_passcode_enabled"] = bool(normalized.get("lan_passcode_enabled"))
-    normalized["lan_passcode"] = str(normalized.get("lan_passcode") or "")[:24]
+    normalized["lan_access_enabled"] = bool(normalized.get("lan_access_enabled"))
+    passcode_hash = str(normalized.get("lan_passcode_hash") or "").strip()
+    legacy_passcode = str(normalized.get("lan_passcode") or "")
+    if legacy_passcode and not passcode_hash:
+        passcode_hash = hash_passcode(legacy_passcode)
+    normalized["lan_passcode_hash"] = passcode_hash
+    normalized["lan_passcode"] = ""
+    if normalized["lan_access_enabled"] and not passcode_hash:
+        normalized["lan_access_enabled"] = False
     if str(normalized.get("lan_passcode_ttl") or "") not in LAN_AUTH_TTL_CHOICES:
         normalized["lan_passcode_ttl"] = "1d"
     if str(normalized.get("previous_files_retention") or "") not in PREVIOUS_FILES_RETENTION_CHOICES:
@@ -1434,6 +1507,11 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     boost_guitar_settings = _boost_guitar_settings_payload(normalized)
     normalized["boost_guitar_guitar_gain_db"] = boost_guitar_settings["overlay_gain_db"]
     normalized["boost_guitar_base_song_gain_db"] = boost_guitar_settings["base_song_gain_db"]
+    try:
+        editor_snap_distance_ms = int(float(normalized.get("editor_snap_distance_ms") or 180))
+    except Exception:
+        editor_snap_distance_ms = 180
+    normalized["editor_snap_distance_ms"] = max(0, min(2_000, editor_snap_distance_ms))
     normalized["structure_mode"] = "flat"
     return normalized
 
@@ -1534,7 +1612,7 @@ def _load_runtime_stats() -> dict[str, Any]:
 
 
 def _save_runtime_stats(stats: dict[str, Any]) -> None:
-    ETA_HISTORY_PATH.write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    atomic_write_json(ETA_HISTORY_PATH, stats)
 
 
 def _normalize_previous_file_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -1600,12 +1678,13 @@ def _load_previous_files_index() -> list[dict[str, Any]]:
 
 
 def _save_previous_files_index(entries: list[dict[str, Any]]) -> None:
-    PREVIOUS_FILES_INDEX_PATH.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    atomic_write_json(PREVIOUS_FILES_INDEX_PATH, entries)
 
 
 def _save_compat_settings(settings: dict[str, Any]) -> None:
     payload = _normalize_settings_payload(settings)
-    SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    payload["lan_passcode"] = ""
+    atomic_write_json(SETTINGS_PATH, payload, mode=0o600)
 
 
 def _compat_settings_payload() -> dict[str, Any]:
@@ -1613,20 +1692,32 @@ def _compat_settings_payload() -> dict[str, Any]:
         return dict(_compat_settings)
 
 
-def _set_compat_settings(patch: dict[str, Any]) -> dict[str, Any]:
+def _set_compat_settings(patch: dict[str, Any], *, expected_version: int | None = None) -> dict[str, Any]:
+    global settings_state_version
+    patch = dict(patch)
+    if "lan_passcode" in patch:
+        passcode = str(patch.pop("lan_passcode") or "")
+        patch["lan_passcode_hash"] = hash_passcode(passcode) if passcode else ""
+        patch["lan_passcode_enabled"] = bool(passcode)
     with compat_settings_lock:
         current = _normalize_settings_payload(dict(_compat_settings))
         updated = dict(current)
         updated.update(patch)
         updated = _normalize_settings_payload(updated)
+        if state_persistence_enabled:
+            settings_state_version = _get_state_store().save_settings(
+                updated,
+                expected_version=expected_version,
+            )
         _save_compat_settings(updated)
         _compat_settings.clear()
         _compat_settings.update(updated)
         changed_security = any(
             current.get(key) != updated.get(key)
-            for key in ("lan_passcode_enabled", "lan_passcode", "lan_passcode_ttl")
+            for key in ("lan_access_enabled", "lan_passcode_enabled", "lan_passcode_hash", "lan_passcode_ttl")
         )
         result = dict(_compat_settings)
+        result["lan_passcode"] = ""
     if changed_security:
         _reset_lan_auth_sessions()
     return result
@@ -1639,6 +1730,8 @@ def _current_output_root() -> Path:
 
 
 def _is_remote_client(request: Request | None) -> bool:
+    if request is not None and str(getattr(request.app.state, "surface", "")) == "lan":
+        return True
     if request is None or request.client is None:
         return False
     host = str(request.client.host or "").strip().lower()
@@ -1678,15 +1771,18 @@ def _lan_auth_ttl_seconds(ttl_value: str | None) -> int | None:
 
 
 def _reset_lan_auth_sessions() -> None:
-    with lan_auth_lock:
-        lan_auth_sessions.clear()
+    lan_auth_manager.sessions.revoke_all()
 
 
 def _lan_passcode_required(request: Request | None) -> bool:
     if not _is_remote_client(request):
         return False
     settings = _compat_settings_payload()
-    return bool(settings.get("lan_passcode_enabled")) and bool(str(settings.get("lan_passcode") or "").strip())
+    return (
+        bool(settings.get("lan_access_enabled"))
+        and bool(settings.get("lan_passcode_enabled"))
+        and bool(str(settings.get("lan_passcode_hash") or "").strip())
+    )
 
 
 def _request_client_host(request: Request | None) -> str:
@@ -1713,31 +1809,14 @@ def _prune_lan_auth_sessions_locked(now: float | None = None) -> None:
 
 def _request_has_valid_lan_session(request: Request) -> bool:
     token = request.cookies.get(LAN_AUTH_COOKIE_NAME)
-    if not token:
-        return False
-    client_host = _request_client_host(request)
-    now = time.time()
-    with lan_auth_lock:
-        _prune_lan_auth_sessions_locked(now)
-        session = lan_auth_sessions.get(token)
-        if not isinstance(session, dict):
-            return False
-        session_host = str(session.get("host") or "")
-        if not session_host or session_host != client_host:
-            lan_auth_sessions.pop(token, None)
-            return False
-        expires_at = session.get("expires_at")
-        if isinstance(expires_at, (int, float)) and float(expires_at) <= now:
-            lan_auth_sessions.pop(token, None)
-            return False
-        return True
+    return lan_auth_manager.sessions.valid(token, _request_client_host(request))
 
 
 def _load_lan_login_page() -> str:
     candidate = WEB_DIR / "lan_login.html"
-    if candidate.exists():
-        return candidate.read_text(encoding="utf-8")
-    return """<!DOCTYPE html><html><body style="background:#0f2027;color:#fff;font-family:sans-serif;display:grid;place-items:center;min-height:100vh;">lan login page missing</body></html>"""
+    if not candidate.is_file():
+        raise RuntimeError("packaged LAN login UI is missing")
+    return candidate.read_text(encoding="utf-8")
 
 
 def _lan_unauthorized_response(request: Request) -> HTMLResponse | JSONResponse:
@@ -1840,13 +1919,48 @@ def _select_release_download_asset(release: dict[str, Any]) -> dict[str, Any]:
     return best
 
 
+def _read_small_https_asset(url: str, *, limit: int = 128 * 1024) -> bytes:
+    if not str(url or "").startswith("https://"):
+        raise UpdateVerificationError("update metadata URL must use HTTPS")
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"stemsplat/{APP_VERSION} ({platform.system()})"},
+    )
+    with urllib.request.urlopen(request, timeout=10, context=SSL_CONTEXT) as response:
+        payload = response.read(limit + 1)
+    if len(payload) > limit:
+        raise UpdateVerificationError("update metadata exceeds its size limit")
+    return payload
+
+
+def _verified_release_asset(release: dict[str, Any]) -> tuple[dict[str, Any], UpdateManifest]:
+    assets = [asset for asset in (release.get("assets") or []) if isinstance(asset, dict)]
+    metadata = next((asset for asset in assets if asset.get("name") == "stemsplat-update.json"), None)
+    signature = next((asset for asset in assets if asset.get("name") == "stemsplat-update.json.sig"), None)
+    if metadata is None or signature is None:
+        raise UpdateVerificationError("the release is missing signed update metadata")
+    manifest = parse_and_verify_manifest(
+        _read_small_https_asset(str(metadata.get("url") or "")),
+        _read_small_https_asset(str(signature.get("url") or ""), limit=4096),
+        RESOURCE_DIR / "updates" / "public-key.pem",
+    )
+    if manifest.version != str(release.get("version") or "").strip():
+        raise UpdateVerificationError("signed update version does not match the release")
+    asset = next((item for item in assets if item.get("name") == manifest.asset_name), None)
+    if asset is None or str(asset.get("url") or "") != manifest.download_url:
+        raise UpdateVerificationError("signed update asset is not present in the release")
+    if int(asset.get("size") or 0) != manifest.byte_length:
+        raise UpdateVerificationError("signed update size does not match release metadata")
+    return asset, manifest
+
+
 def _release_download_destination(asset_name: str) -> Path:
     return ensure_unique_path(_ensure_dir(OUTPUT_ROOT) / asset_name)
 
 
 def _download_latest_release_to_downloads() -> tuple[dict[str, Any], Path]:
     release = _fetch_latest_release()
-    asset = _select_release_download_asset(release)
+    asset, manifest = _verified_release_asset(release)
     destination = _release_download_destination(str(asset.get("name") or "stemsplat-update.zip"))
     saved_path = download_url_to_path(
         str(asset.get("url") or ""),
@@ -1854,6 +1968,11 @@ def _download_latest_release_to_downloads() -> tuple[dict[str, Any], Path]:
         user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
         force_redownload=True,
     )
+    try:
+        verify_release_asset(saved_path, manifest)
+    except Exception:
+        saved_path.unlink(missing_ok=True)
+        raise
     latest_version = str(release.get("version") or "").strip()
     if latest_version:
         _set_compat_settings({"update_last_notified_version": latest_version})
@@ -1867,7 +1986,9 @@ def _set_release_download_state(**patch: Any) -> None:
 
 def _public_release_download_status() -> dict[str, Any]:
     with release_download_lock:
-        return dict(release_download_state)
+        payload = dict(release_download_state)
+    payload.pop("path", None)
+    return payload
 
 
 def _release_download_error_message(exc: Exception) -> str:
@@ -1875,13 +1996,15 @@ def _release_download_error_message(exc: Exception) -> str:
         return exc.message
     if isinstance(exc, ModelDownloadError):
         return str(exc)
+    if isinstance(exc, UpdateVerificationError):
+        return "The update could not be authenticated and was not kept."
     return "download failed unexpectedly"
 
 
 def _run_release_download() -> None:
     try:
         release = _fetch_latest_release()
-        asset = _select_release_download_asset(release)
+        asset, manifest = _verified_release_asset(release)
     except Exception as exc:
         logger.error("release metadata fetch failed", exc_info=True)
         _set_release_download_state(
@@ -1952,7 +2075,9 @@ def _run_release_download() -> None:
             user_agent=f"stemsplat/{APP_VERSION} ({platform.system()})",
             force_redownload=True,
         )
+        verify_release_asset(saved_path, manifest)
     except Exception as exc:
+        destination_path.unlink(missing_ok=True)
         logger.error("release download failed", exc_info=True)
         _set_release_download_state(
             status="error",
@@ -1992,6 +2117,7 @@ def _run_release_download() -> None:
         filename=saved_path.name,
         version=release_version,
         release_name=release_name,
+        verified_sha256=manifest.sha256,
     )
 
 
@@ -2020,7 +2146,9 @@ def _start_release_download() -> dict[str, Any]:
         )
         release_download_thread = threading.Thread(target=_run_release_download, daemon=True)
         release_download_thread.start()
-        return dict(release_download_state)
+        payload = dict(release_download_state)
+        payload.pop("path", None)
+        return payload
 
 
 def _release_status_payload(*, refresh: bool = False) -> dict[str, Any]:
@@ -2089,9 +2217,34 @@ runtime_stats_lock = threading.RLock()
 runtime_stats = _load_runtime_stats()
 lan_auth_lock = threading.RLock()
 lan_auth_sessions: dict[str, dict[str, Any]] = {}
+lan_auth_manager = LanAuthManager()
+settings_state_version = 0
+state_persistence_enabled = False
+state_store_lock = threading.RLock()
+state_store_instance: StateStore | None = None
+state_store_path: Path | None = None
+lan_runtime_controller: Any | None = None
 
 
 ensure_app_dirs()
+
+
+def _get_state_store() -> StateStore:
+    global state_store_instance, state_store_path
+    with state_store_lock:
+        if state_store_instance is None or state_store_path != STATE_DB_PATH:
+            state_store_instance = StateStore(STATE_DB_PATH)
+            state_store_path = STATE_DB_PATH
+        return state_store_instance
+
+
+def _get_certificate_manager() -> LanCertificateManager:
+    return LanCertificateManager(LAN_DIR)
+
+
+def set_lan_runtime_controller(controller: Any | None) -> None:
+    global lan_runtime_controller
+    lan_runtime_controller = controller
 stream_handler = logging.StreamHandler()
 file_handler: logging.Handler | None
 try:
@@ -2120,16 +2273,6 @@ for uvicorn_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 
 for path in (MODEL_DIR, RUNTIME_DIR, UPLOAD_DIR, WORK_DIR, OUTPUT_ROOT):
     _ensure_dir(path)
-
-
-def _close_installer_ui(port: int = 6060) -> None:
-    url = f"http://localhost:{port}/installer_shutdown"
-    try:
-        with urllib.request.urlopen(url, timeout=1):
-            logger.debug("closed installer ui on %s", url)
-    except Exception:
-        logger.debug("installer ui not reachable at %s", url)
-
 
 def _cleanup_old_runtime_entries(path: Path, max_age_seconds: int = RUNTIME_CLEANUP_MAX_AGE_SEC) -> None:
     cutoff = time.time() - max_age_seconds
@@ -2189,12 +2332,21 @@ def _run_interruptible_subprocess(
     cmd: list[str],
     *,
     stop_check: Callable[[], None] | None = None,
+    timeout_seconds: float | None = SUBPROCESS_TIMEOUT_SECONDS,
 ) -> None:
     if stop_check is None:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+        )
         return
 
     stop_check()
+    started_at = time.monotonic()
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
@@ -2206,6 +2358,17 @@ def _run_interruptible_subprocess(
             stop_check()
             if process.poll() is not None:
                 break
+            if timeout_seconds is not None and (time.monotonic() - started_at) > timeout_seconds:
+                with contextlib.suppress(Exception):
+                    process.terminate()
+                with contextlib.suppress(Exception):
+                    process.wait(timeout=1.5)
+                if process.poll() is None:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                with contextlib.suppress(Exception):
+                    process.communicate(timeout=1.0)
+                raise subprocess.TimeoutExpired(cmd, timeout_seconds)
             time.sleep(0.12)
         _stdout, stderr = process.communicate()
     except TaskStopped:
@@ -2319,7 +2482,7 @@ def _probe_source(path: Path) -> SourceInfo:
             "json",
             str(path),
         ]
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT_SECONDS)
         data = json.loads(result.stdout or "{}")
     except Exception as exc:
         logger.warning("ffprobe failed for %s: %s", path, exc)
@@ -2596,6 +2759,392 @@ def _load_waveform(wav_path: Path) -> torch.Tensor:
     return waveform
 
 
+def _coerce_optional_ms(value: Any, *, default: int | None = None) -> int | None:
+    if value is None or value == "":
+        return default
+    with contextlib.suppress(Exception):
+        parsed = int(round(float(value)))
+        return max(0, parsed)
+    return default
+
+
+def _normalize_clip_bounds_ms(
+    start_ms: Any,
+    end_ms: Any,
+    *,
+    duration_ms: int,
+    enabled: bool,
+) -> tuple[int, int | None, bool]:
+    safe_duration = max(0, int(duration_ms))
+    normalized_start = max(0, min(safe_duration, _coerce_optional_ms(start_ms, default=0) or 0))
+    raw_end = _coerce_optional_ms(end_ms, default=None)
+    normalized_end = safe_duration if raw_end is None else max(normalized_start, min(safe_duration, raw_end))
+    if normalized_end <= normalized_start:
+        normalized_end = safe_duration
+    clip_enabled = bool(enabled) and safe_duration > 0 and (normalized_start > 0 or normalized_end < safe_duration)
+    return normalized_start, (normalized_end if clip_enabled else None), clip_enabled
+
+
+def _task_clip_snapshot(task: dict[str, Any], *, duration_ms: int) -> dict[str, Any]:
+    start_ms, end_ms, clip_enabled = _normalize_clip_bounds_ms(
+        task.get("clip_start_ms"),
+        task.get("clip_end_ms"),
+        duration_ms=duration_ms,
+        enabled=bool(task.get("clip_enabled")),
+    )
+    return {
+        "clip_start_ms": start_ms,
+        "clip_end_ms": end_ms,
+        "clip_enabled": clip_enabled,
+    }
+
+
+def _apply_clip_to_waveform(task: dict[str, Any], waveform: torch.Tensor) -> tuple[torch.Tensor, dict[str, Any]]:
+    total_samples = int(waveform.shape[1]) if waveform.ndim == 2 else 0
+    duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
+    clip = _task_clip_snapshot(task, duration_ms=duration_ms)
+    if not clip["clip_enabled"] or total_samples <= 0:
+        return waveform, clip
+    start_sample = max(0, min(total_samples, int(round((clip["clip_start_ms"] / 1000.0) * EDITOR_SAMPLE_RATE))))
+    end_ms_value = clip["clip_end_ms"] if isinstance(clip["clip_end_ms"], int) else duration_ms
+    end_sample = max(start_sample, min(total_samples, int(round((end_ms_value / 1000.0) * EDITOR_SAMPLE_RATE))))
+    if end_sample <= start_sample:
+        return waveform, {"clip_start_ms": 0, "clip_end_ms": None, "clip_enabled": False}
+    return waveform[:, start_sample:end_sample], clip
+
+
+def _coerce_editor_waveform_points(points: int | None) -> int:
+    try:
+        numeric = int(points or EDITOR_WAVEFORM_POINTS)
+    except Exception:
+        numeric = EDITOR_WAVEFORM_POINTS
+    return max(EDITOR_WAVEFORM_POINTS_MIN, min(EDITOR_WAVEFORM_POINTS_MAX, numeric))
+
+
+def _editor_waveform_payload_from_mono(
+    mono: torch.Tensor,
+    *,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any]:
+    total_samples = int(mono.shape[0])
+    duration_ms = int(round((total_samples / EDITOR_SAMPLE_RATE) * 1000.0)) if total_samples > 0 else 0
+    if total_samples <= 0:
+        return {"duration_ms": duration_ms, "points": [], "mins": [], "maxs": [], "point_count": 0}
+    normalized_points = _coerce_editor_waveform_points(points)
+    bucket_size = max(1, math.ceil(total_samples / max(8, normalized_points)))
+    bucket_count = max(1, math.ceil(total_samples / bucket_size))
+    padded_total = bucket_count * bucket_size
+    working = mono.detach().to(dtype=torch.float32).flatten()
+    if padded_total > total_samples:
+        pad_value = working[-1] if total_samples > 0 else working.new_tensor(0.0)
+        working = torch.cat((working, pad_value.repeat(padded_total - total_samples)))
+    windows = working.view(bucket_count, bucket_size)
+    mins_tensor = torch.clamp(windows.amin(dim=1), -1.0, 1.0)
+    maxs_tensor = torch.clamp(windows.amax(dim=1), -1.0, 1.0)
+    peaks_tensor = torch.maximum(mins_tensor.abs(), maxs_tensor.abs())
+    payload_points = [round(float(value), 4) for value in peaks_tensor.tolist()]
+    payload_mins = [round(float(value), 4) for value in mins_tensor.tolist()]
+    payload_maxs = [round(float(value), 4) for value in maxs_tensor.tolist()]
+    return {
+        "duration_ms": duration_ms,
+        "points": payload_points,
+        "mins": payload_mins,
+        "maxs": payload_maxs,
+        "point_count": len(payload_points),
+    }
+
+
+def _editor_waveform_payload_from_extrema(
+    mins: torch.Tensor,
+    maxs: torch.Tensor,
+    *,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any]:
+    sample_count = int(min(mins.numel(), maxs.numel()))
+    if sample_count <= 0:
+        return {"points": [], "mins": [], "maxs": [], "point_count": 0}
+    normalized_points = _coerce_editor_waveform_points(points)
+    bucket_size = max(1, math.ceil(sample_count / max(8, normalized_points)))
+    bucket_count = max(1, math.ceil(sample_count / bucket_size))
+    padded_total = bucket_count * bucket_size
+    mins_working = mins[:sample_count].detach().to(dtype=torch.float32).flatten()
+    maxs_working = maxs[:sample_count].detach().to(dtype=torch.float32).flatten()
+    if padded_total > sample_count:
+        mins_pad = mins_working[-1]
+        maxs_pad = maxs_working[-1]
+        mins_working = torch.cat((mins_working, mins_pad.repeat(padded_total - sample_count)))
+        maxs_working = torch.cat((maxs_working, maxs_pad.repeat(padded_total - sample_count)))
+    mins_windows = mins_working.view(bucket_count, bucket_size)
+    maxs_windows = maxs_working.view(bucket_count, bucket_size)
+    mins_tensor = torch.clamp(mins_windows.amin(dim=1), -1.0, 1.0)
+    maxs_tensor = torch.clamp(maxs_windows.amax(dim=1), -1.0, 1.0)
+    peaks_tensor = torch.maximum(mins_tensor.abs(), maxs_tensor.abs())
+    return {
+        "points": [round(float(value), 4) for value in peaks_tensor.tolist()],
+        "mins": [round(float(value), 4) for value in mins_tensor.tolist()],
+        "maxs": [round(float(value), 4) for value in maxs_tensor.tolist()],
+        "point_count": int(bucket_count),
+    }
+
+
+def _resample_editor_waveform_payload(payload: dict[str, Any], *, points: int) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    mins = payload.get("mins")
+    maxs = payload.get("maxs")
+    if not isinstance(mins, list) or not isinstance(maxs, list):
+        return None
+    sample_count = min(len(mins), len(maxs))
+    duration_ms = max(0, int(round(float(payload.get("duration_ms") or 0))))
+    if sample_count <= 0:
+        return {
+            "duration_ms": duration_ms,
+            "points": [],
+            "mins": [],
+            "maxs": [],
+            "point_count": 0,
+        }
+    normalized_points = _coerce_editor_waveform_points(points)
+    if sample_count <= normalized_points:
+        source_points = payload.get("points")
+        if not isinstance(source_points, list) or len(source_points) < sample_count:
+            source_points = [
+                max(abs(float(mins[index] or 0.0)), abs(float(maxs[index] or 0.0)))
+                for index in range(sample_count)
+            ]
+        return {
+            "duration_ms": duration_ms,
+            "points": [max(0.0, min(1.0, float(value or 0.0))) for value in source_points[:sample_count]],
+            "mins": [max(-1.0, min(1.0, float(value or 0.0))) for value in mins[:sample_count]],
+            "maxs": [max(-1.0, min(1.0, float(value or 0.0))) for value in maxs[:sample_count]],
+            "point_count": sample_count,
+        }
+    mins_tensor = torch.tensor(mins[:sample_count], dtype=torch.float32)
+    maxs_tensor = torch.tensor(maxs[:sample_count], dtype=torch.float32)
+    resampled = _editor_waveform_payload_from_extrema(mins_tensor, maxs_tensor, points=normalized_points)
+    resampled["duration_ms"] = duration_ms
+    return resampled
+
+
+def _editor_waveform_payload_for_path(audio_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
+    temp_dir: Path | None = None
+    wav_path = audio_path
+    try:
+        if wav_path.suffix.lower() not in {".wav", ".wave"}:
+            source_info = _probe_source(audio_path)
+            temp_dir = Path(tempfile.mkdtemp(prefix="editor_waveform_", dir=str(WORK_DIR)))
+            wav_path = _decode_audio_to_wav(audio_path, temp_dir, source_info.channels)
+        waveform = _load_waveform(wav_path)
+        mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+        return _editor_waveform_payload_from_mono(mono, points=points)
+    finally:
+        if temp_dir is not None:
+            _cleanup_path(temp_dir)
+
+
+def _editor_cache_dir(task_id: str) -> Path:
+    return _ensure_dir(WORK_DIR / "editor_cache" / task_id)
+
+
+def _editor_source_preview_path(task_id: str) -> Path:
+    return _editor_cache_dir(task_id) / "source_preview.wav"
+
+
+def _editor_source_waveform_cache_path(task_id: str, points: int = EDITOR_WAVEFORM_POINTS) -> Path:
+    normalized_points = _coerce_editor_waveform_points(points)
+    if normalized_points == EDITOR_WAVEFORM_POINTS:
+        return _editor_cache_dir(task_id) / "source_waveform.json"
+    return _editor_cache_dir(task_id) / f"source_waveform_{normalized_points}.json"
+
+
+def _editor_waveform_payload_from_tensor(
+    waveform: torch.Tensor,
+    *,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any]:
+    mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+    return _editor_waveform_payload_from_mono(mono, points=points)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    atomic_write_json(path, payload)
+
+
+def _read_editor_waveform_cache(path: Path) -> dict[str, Any] | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    points = payload.get("points")
+    duration_ms = payload.get("duration_ms")
+    if not isinstance(points, list):
+        return None
+    try:
+        mins = payload.get("mins")
+        maxs = payload.get("maxs")
+        return {
+            "duration_ms": max(0, int(round(float(duration_ms or 0)))),
+            "points": [max(0.0, min(1.0, float(value or 0.0))) for value in points],
+            "mins": [max(-1.0, min(1.0, float(value or 0.0))) for value in mins] if isinstance(mins, list) else [],
+            "maxs": [max(-1.0, min(1.0, float(value or 0.0))) for value in maxs] if isinstance(maxs, list) else [],
+            "point_count": max(0, int(round(float(payload.get("point_count") or len(points))))),
+        }
+    except Exception:
+        return None
+
+
+def _cached_editor_source_preview_path(task_id: str) -> Path | None:
+    candidate = _editor_source_preview_path(task_id)
+    if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+        return candidate
+    return None
+
+
+def _cached_editor_source_waveform_payload(task_id: str, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any] | None:
+    return _read_editor_waveform_cache(_editor_source_waveform_cache_path(task_id, points))
+
+
+def _best_cached_editor_source_waveform_payload(
+    task_id: str,
+    *,
+    min_points: int,
+) -> dict[str, Any] | None:
+    cache_dir = _editor_cache_dir(task_id)
+    candidate_payloads: list[tuple[int, dict[str, Any]]] = []
+    for path in cache_dir.glob("source_waveform*.json"):
+        payload = _read_editor_waveform_cache(path)
+        if payload is None:
+            continue
+        point_count = max(
+            0,
+            int(round(float(payload.get("point_count") or 0))),
+            len(payload.get("points") or []),
+            len(payload.get("mins") or []),
+            len(payload.get("maxs") or []),
+        )
+        if point_count >= min_points:
+            candidate_payloads.append((point_count, payload))
+    if not candidate_payloads:
+        return None
+    candidate_payloads.sort(key=lambda item: item[0])
+    return candidate_payloads[0][1]
+
+
+def _cached_or_resampled_editor_source_waveform_payload(
+    task_id: str,
+    points: int = EDITOR_WAVEFORM_POINTS,
+) -> dict[str, Any] | None:
+    normalized_points = _coerce_editor_waveform_points(points)
+    payload = _cached_editor_source_waveform_payload(task_id, normalized_points)
+    if payload is not None:
+        return payload
+    source_payload = _best_cached_editor_source_waveform_payload(task_id, min_points=normalized_points)
+    if source_payload is None:
+        return None
+    resampled = _resample_editor_waveform_payload(source_payload, points=normalized_points)
+    if resampled is None:
+        return None
+    _write_json_atomic(_editor_source_waveform_cache_path(task_id, normalized_points), resampled)
+    return resampled
+
+
+def _cache_editor_source_waveforms(
+    task_id: str,
+    wav_path: Path,
+    *,
+    points_values: Sequence[int] = EDITOR_SOURCE_WAVEFORM_CACHE_POINTS,
+) -> dict[int, dict[str, Any]]:
+    normalized_values = tuple(dict.fromkeys(_coerce_editor_waveform_points(points) for points in points_values))
+    waveform = _load_waveform(wav_path)
+    mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+    cached: dict[int, dict[str, Any]] = {}
+    for normalized_points in normalized_values:
+        payload = _editor_waveform_payload_from_mono(mono, points=normalized_points)
+        _write_json_atomic(_editor_source_waveform_cache_path(task_id, normalized_points), payload)
+        cached[normalized_points] = payload
+    return cached
+
+
+def _cache_editor_source_waveform(task_id: str, wav_path: Path, *, points: int = EDITOR_WAVEFORM_POINTS) -> dict[str, Any]:
+    normalized_points = _coerce_editor_waveform_points(points)
+    return _cache_editor_source_waveforms(task_id, wav_path, points_values=(normalized_points,))[normalized_points]
+
+
+def _editor_clipped_preview_path(task_id: str, clip: dict[str, Any]) -> Path:
+    start_ms = int(max(0, int(clip.get("clip_start_ms") or 0)))
+    end_value = clip.get("clip_end_ms")
+    end_part = "full" if end_value is None else str(int(max(0, int(end_value))))
+    enabled_part = "on" if clip.get("clip_enabled") else "off"
+    filename = f"source_preview_{enabled_part}_{start_ms}_{end_part}.wav"
+    return _editor_cache_dir(task_id) / filename
+
+
+def _preview_audio_path_for_task(task: dict[str, Any], output: str | None = None) -> Path:
+    requested = str(output or "").strip()
+    if requested and requested != "source":
+        return _task_named_output_path(task, output)
+
+    task_id = str(task.get("id") or "")
+    preview_path = _ensure_editor_source_cache(task_id)
+    if preview_path is None:
+        return _task_named_output_path(task, output)
+
+    clip = _task_clip_snapshot(
+        task,
+        duration_ms=int(round(max(0.0, float(task.get("audio_seconds") or 0.0)) * 1000.0)),
+    )
+    if not clip["clip_enabled"]:
+        return preview_path
+
+    clipped_path = _editor_clipped_preview_path(task_id, clip)
+    if clipped_path.exists() and clipped_path.is_file() and clipped_path.stat().st_size > 0:
+        return clipped_path
+
+    waveform = _load_waveform(preview_path)
+    clipped_waveform, _ = _apply_clip_to_waveform(task, waveform)
+    return _write_temp_wave(clipped_path.parent, clipped_path.name, clipped_waveform)
+
+
+def _ensure_editor_source_cache(task_id: str) -> Path | None:
+    task = _require_task(task_id)
+    cached_preview = _cached_editor_source_preview_path(task_id)
+    if cached_preview is not None:
+        if any(
+            _cached_or_resampled_editor_source_waveform_payload(task_id, points) is None
+            for points in EDITOR_SOURCE_WAVEFORM_CACHE_POINTS
+        ):
+            with contextlib.suppress(Exception):
+                _cache_editor_source_waveforms(task_id, cached_preview, points_values=EDITOR_SOURCE_WAVEFORM_CACHE_POINTS)
+        return cached_preview
+
+    source_path = Path(str(task.get("source_path") or "")).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        return None
+
+    preview_path = _editor_source_preview_path(task_id)
+    source_info = _probe_source(source_path)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"editor_cache_{task_id[:8]}_", dir=str(WORK_DIR)))
+    try:
+        decoded_path = _decode_audio_to_wav(source_path, temp_dir, source_info.channels)
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_preview_path = preview_path.with_suffix(".wav.tmp")
+        shutil.copy2(decoded_path, temp_preview_path)
+        temp_preview_path.replace(preview_path)
+        _cache_editor_source_waveforms(task_id, preview_path, points_values=EDITOR_SOURCE_WAVEFORM_CACHE_POINTS)
+        return preview_path
+    finally:
+        _cleanup_path(temp_dir)
+
+
+def _warm_editor_source_cache(task_id: str) -> None:
+    with contextlib.suppress(Exception):
+        _ensure_editor_source_cache(task_id)
+
+
 def _write_temp_wave(out_dir: Path, name: str, tensor: torch.Tensor) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     candidate = out_dir / name
@@ -2728,6 +3277,12 @@ def _process_rss_limit_bytes() -> int:
 
 
 def _mps_memory_limit_bytes() -> int | None:
+    # `torch.mps.recommended_max_memory()` can segfault in some non-interactive
+    # launch environments on macOS. Keep the MPS watchdog opt-in so startup and
+    # packaged launches stay stable across terminals, agents, and GUI sessions.
+    mps_watchdog_enabled = str(os.environ.get("STEMSPLAT_ENABLE_MPS_WATCHDOG") or "").strip().lower()
+    if mps_watchdog_enabled not in {"1", "true", "yes"}:
+        return None
     if not getattr(torch, "mps", None):
         return None
     with contextlib.suppress(Exception):
@@ -2754,7 +3309,7 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
     if MelBandRoformer is None:
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"Roformer import failed: {_model_import_error}")
     with config_path.open("r", encoding="utf-8") as handle:
-        cfg = yaml.unsafe_load(handle)
+        cfg = yaml.safe_load(handle)
     raw_model_cfg = dict(cfg.get("model") or {})
     valid_params = set(inspect.signature(MelBandRoformer.__init__).parameters)
     valid_params.discard("self")
@@ -2763,7 +3318,7 @@ def _load_roformer_model(model_path: Path, config_path: Path, device: torch.devi
     if ignored:
         logger.info("ignoring unsupported model config keys for %s: %s", config_path.name, ", ".join(ignored))
     model = MelBandRoformer(**model_kwargs)
-    state = _torch_load_compat(model_path, map_location="cpu", weights_only=None)
+    state = _torch_load_compat(model_path, map_location="cpu", weights_only=True)
     model.load_state_dict(state.get("state_dict", state), strict=False)
     return model.to(device).eval()
 
@@ -2772,7 +3327,7 @@ def _load_bs_roformer_model(model_path: Path, config_path: Path, device: torch.d
     if BSRoformer is None:
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"BS-Roformer import failed: {_bs_model_import_error}")
     with config_path.open("r", encoding="utf-8") as handle:
-        cfg = yaml.unsafe_load(handle)
+        cfg = yaml.safe_load(handle)
     raw_model_cfg = dict(cfg.get("model") or {})
     valid_params = set(inspect.signature(BSRoformer.__init__).parameters)
     valid_params.discard("self")
@@ -2785,7 +3340,7 @@ def _load_bs_roformer_model(model_path: Path, config_path: Path, device: torch.d
             ", ".join(ignored),
         )
     model = BSRoformer(**model_kwargs)
-    state = _torch_load_compat(model_path, map_location="cpu", weights_only=None)
+    state = _torch_load_compat(model_path, map_location="cpu", weights_only=True)
     missing, unexpected = model.load_state_dict(state.get("state_dict", state), strict=False)
     if missing or unexpected:
         raise AppError(
@@ -2799,7 +3354,7 @@ def _load_bs_roformer_model(model_path: Path, config_path: Path, device: torch.d
 
 def _load_model_config(config_path: Path) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
-        data = yaml.unsafe_load(handle) or {}
+        data = yaml.safe_load(handle) or {}
     if not isinstance(data, dict):
         raise AppError(ErrorCode.CONFIG_MISSING, f"Invalid config structure: {config_path.name}")
     return data
@@ -2819,7 +3374,7 @@ def _prepare_torch_pickle_compat() -> None:
             sys.modules[alias_name] = importlib.import_module(module_name)
 
 
-def _torch_load_compat(model_path: Path, *, map_location: str | torch.device = "cpu", weights_only: bool | None = False) -> Any:
+def _torch_load_compat(model_path: Path, *, map_location: str | torch.device = "cpu", weights_only: bool | None = True) -> Any:
     _prepare_torch_pickle_compat()
     try:
         kwargs: dict[str, Any] = {"map_location": map_location}
@@ -2834,7 +3389,13 @@ def _torch_load_compat(model_path: Path, *, map_location: str | torch.device = "
                 ErrorCode.MODEL_IMPORT_FAILED,
                 "Missing NumPy checkpoint compatibility modules in the app bundle.",
             ) from exc
-        if "incorrect header check" in lowered or "pytorchstreamreader failed" in lowered or "invalid load key" in lowered:
+        if (
+            "incorrect header check" in lowered
+            or "pytorchstreamreader failed" in lowered
+            or "invalid load key" in lowered
+            or "weights only load failed" in lowered
+            or "unsupported operand" in lowered
+        ):
             raise AppError(
                 ErrorCode.SEPARATION_FAILED,
                 f"Model file appears corrupted: {model_path.name}. Remove it and download it again.",
@@ -2878,13 +3439,31 @@ def _load_mdx23c_model(model_path: Path, config_path: Path, device: torch.device
         raise AppError(ErrorCode.MODEL_IMPORT_FAILED, f"DrumSep import failed: {_drumsep_import_error}")
     cfg = config_namespace(_load_model_config(config_path))
     model = TFC_TDF_net(cfg)
-    state = _torch_load_compat(model_path, map_location="cpu", weights_only=False)
+    state = _torch_load_compat(model_path, map_location="cpu", weights_only=True)
     load_not_compatible_weights(model, state)
     setattr(model, "_stemsplat_config", cfg)
     return model.to(device).eval()
 
 
 def _load_model_from_spec(spec: ModelSpec, model_path: Path, config_path: Path, device: torch.device) -> torch.nn.Module:
+    artifact = MODEL_MANIFEST.by_filename.get(spec.filename)
+    if artifact is None:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, "Model is not present in the signed release manifest.")
+    try:
+        MODEL_MANIFEST.verify_config(CONFIG_DIR, artifact.tag)
+        if artifact.sha256 and artifact.byte_length and artifact.spdx_license:
+            MODEL_MANIFEST.verify_checkpoint(model_path.parent, artifact.tag)
+        elif spec.kind == "demucs":
+            raise ModelManifestError(
+                "legacy Demucs pickle loading is blocked until an exact SHA-256 and license are approved"
+            )
+        else:
+            logger.warning(
+                "loading unsupported user-provided state dictionary %s; automatic distribution is disabled",
+                spec.filename,
+            )
+    except ModelManifestError as exc:
+        raise AppError(ErrorCode.MODEL_IMPORT_FAILED, str(exc)) from exc
     if spec.kind == "roformer":
         return _load_roformer_model(model_path, config_path, device)
     if spec.kind == "bs_roformer":
@@ -3868,7 +4447,8 @@ def _update_task_runtime_view(task: dict[str, Any], *, now: float | None = None)
 
 
 
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app.state.surface = "local"
 app.state.runtime_status_provider = None
 tasks_lock = threading.RLock()
 tasks: dict[str, dict[str, Any]] = {}
@@ -3917,12 +4497,73 @@ ffmpeg_status_lock = threading.RLock()
 ffmpeg_status_cache: dict[str, Any] = {"checked_at": 0.0, "available": True, "message": ""}
 
 
+def _persist_task(task: dict[str, Any], *, force: bool = False) -> None:
+    if not state_persistence_enabled:
+        return
+    try:
+        _get_state_store().save_task(task, force=force)
+    except Exception:
+        logger.exception("failed to persist task %s", task.get("id"))
+
+
+def _persist_queue() -> None:
+    if not state_persistence_enabled:
+        return
+    with task_queue.mutex:
+        ordered = list(task_queue.queue)
+    try:
+        _get_state_store().save_queue(ordered)
+    except Exception:
+        logger.exception("failed to persist task queue")
+
+
+def _restore_persisted_state() -> None:
+    global state_persistence_enabled, settings_state_version
+    if STATE_DB_PATH.parent.resolve() != SETTINGS_PATH.parent.resolve():
+        logger.debug("state migration skipped because test/override paths are not aligned")
+        return
+    store = _get_state_store()
+    store.import_legacy_once(
+        settings_path=SETTINGS_PATH,
+        history_path=PREVIOUS_FILES_INDEX_PATH,
+        eta_path=ETA_HISTORY_PATH,
+    )
+    saved_settings = store.load_settings()
+    if saved_settings is not None:
+        payload, settings_state_version = saved_settings
+        with compat_settings_lock:
+            _compat_settings.clear()
+            _compat_settings.update(_normalize_settings_payload(payload))
+    else:
+        settings_state_version = store.save_settings(_compat_settings_payload())
+    recovered = store.recover_tasks()
+    with tasks_lock:
+        for payload in recovered:
+            task_id = str(payload.get("id") or "")
+            if not task_id:
+                continue
+            payload["stop_event"] = threading.Event()
+            tasks[task_id] = payload
+    history = store.list_history(limit=100).items
+    if history:
+        with previous_files_lock:
+            previous_files_index[:] = [
+                item for item in (_normalize_previous_file_entry(entry) for entry in history) if item is not None
+            ]
+    if store.get_metadata("queue_paused") == "1":
+        queue_resume_event.clear()
+    else:
+        queue_resume_event.set()
+    state_persistence_enabled = True
+
+
 def set_runtime_status_provider(provider: Callable[[], dict[str, Any]] | None) -> None:
     app.state.runtime_status_provider = provider
 
 
 def _runtime_status_payload() -> dict[str, Any]:
     payload: dict[str, Any] = {
+        "app_version": APP_VERSION,
         "windowed": False,
         "preferred_port": DEFAULT_APP_PORT,
         "current_port": DEFAULT_APP_PORT,
@@ -3972,9 +4613,18 @@ def _ffmpeg_runtime_payload(max_age_seconds: float = 10.0) -> dict[str, Any]:
 
 def _settings_response_payload(request: Request | None = None) -> dict[str, Any]:
     payload = _compat_settings_payload()
+    payload["lan_passcode_configured"] = bool(payload.get("lan_passcode_hash"))
+    payload.pop("lan_passcode_hash", None)
+    payload["lan_passcode"] = ""
+    payload["version"] = settings_state_version
+    runtime = _runtime_status_payload()
     if _is_remote_client(request):
-        payload["lan_passcode"] = ""
-    payload["runtime"] = _runtime_status_payload()
+        # LAN clients need presentation and listener state, never host-local
+        # filesystem or process-control details.
+        payload["output_root"] = ""
+        runtime["client_url"] = ""
+        runtime["kill_command"] = ""
+    payload["runtime"] = runtime
     return payload
 
 
@@ -4034,8 +4684,18 @@ def _path_total_bytes(path: Path) -> int:
         return 0
 
 
-def _previous_file_entry_total_bytes(entry: dict[str, Any]) -> int:
+def _previous_file_storage_dir(entry: dict[str, Any]) -> Path:
     storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+    if not _path_within(storage_dir, PREVIOUS_FILES_DIR):
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    return storage_dir
+
+
+def _previous_file_entry_total_bytes(entry: dict[str, Any]) -> int:
+    try:
+        storage_dir = _previous_file_storage_dir(entry)
+    except AppError:
+        return 0
     return _path_total_bytes(storage_dir)
 
 
@@ -4063,11 +4723,17 @@ def _history_storage_payload(
 
 
 def _previous_file_output_paths(entry: dict[str, Any]) -> tuple[Path, list[Path]]:
-    storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+    storage_dir = _previous_file_storage_dir(entry)
     if not storage_dir.exists() or not storage_dir.is_dir():
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
     outputs_dir = storage_dir / "outputs"
-    outputs = [outputs_dir / str(name) for name in (entry.get("outputs") or [])]
+    if not _path_within(outputs_dir, storage_dir):
+        raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+    outputs: list[Path] = []
+    for name in entry.get("outputs") or []:
+        output_path = (outputs_dir / str(name)).expanduser()
+        if _path_within(output_path, outputs_dir):
+            outputs.append(output_path)
     existing_outputs = [path for path in outputs if path.exists() and path.is_file()]
     if outputs and not existing_outputs:
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
@@ -4105,8 +4771,14 @@ def _prune_previous_files(*, save: bool = True) -> list[dict[str, Any]]:
     removed_dirs: list[Path] = []
     with previous_files_lock:
         for entry in previous_files_index:
-            storage_dir = Path(str(entry.get("storage_dir") or "")).expanduser()
+            try:
+                storage_dir = _previous_file_storage_dir(entry)
+            except AppError:
+                continue
             source_path = Path(str(entry.get("source_path") or "")).expanduser()
+            if not _path_within(source_path, storage_dir):
+                removed_dirs.append(storage_dir)
+                continue
             if float(entry.get("finished_at") or 0.0) < cutoff:
                 removed_dirs.append(storage_dir)
                 continue
@@ -4201,6 +4873,8 @@ def _archive_previous_file(task_id: str, out_dir: Path, outputs: list[str]) -> d
     with previous_files_lock:
         previous_files_index.insert(0, entry)
         _save_previous_files_index(previous_files_index)
+        if state_persistence_enabled:
+            _get_state_store().save_history(entry)
     _prune_previous_files()
     return entry
 
@@ -4257,7 +4931,43 @@ def _selected_missing_models(selection: list[str] | None = None) -> list[str]:
         requested = [item for item in selection if item in available]
     else:
         requested = list(MODEL_SPECS)
-    return [item for item in requested if not _model_file_exists(MODEL_SPECS[item].filename)]
+    return [item for item in requested if not _model_readiness(item)[0]]
+
+
+def _model_readiness(key: str) -> tuple[bool, bool, str]:
+    """Return load-ready, cryptographically verified, and a public status reason."""
+
+    spec = MODEL_SPECS[key]
+    path = _locate_model_file(spec.filename)
+    if path is None:
+        return False, False, "missing"
+    artifact = MODEL_MANIFEST.by_tag[key]
+    if artifact.release_eligible:
+        try:
+            MODEL_MANIFEST.verify_checkpoint(path.parent, key)
+        except ModelManifestError:
+            return False, False, "installed file failed manifest verification"
+        return True, True, "verified"
+    if artifact.loader_type == "demucs-pickle":
+        return False, False, "unsupported legacy pickle; exact hash and license required"
+    return True, False, "unsupported user-provided state dictionary"
+
+
+def _model_download_descriptors(selection: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    return {str(entry.get("tag") or ""): entry for entry in describe_downloads(selection)}
+
+
+def _sum_known_descriptor_bytes(descriptors: Sequence[dict[str, Any]]) -> int:
+    total_bytes = 0
+    for entry in descriptors:
+        size_bytes = entry.get("size_bytes")
+        if isinstance(size_bytes, int) and size_bytes > 0:
+            total_bytes += size_bytes
+    return total_bytes
+
+
+def _expected_model_download_bytes(selection: list[str] | None = None) -> int:
+    return _sum_known_descriptor_bytes(list(_model_download_descriptors(selection).values()))
 
 
 def _public_model_download_status() -> dict[str, Any]:
@@ -4269,9 +4979,10 @@ def _public_model_download_status() -> dict[str, Any]:
     payload.update(
         {
             "missing": missing,
-            "models_dir": str(MODEL_DIR),
             "models": models_status["models"],
             "downloaded_total_bytes": int(models_status["downloaded_total_bytes"]),
+            "expected_total_bytes": int(models_status["expected_total_bytes"]),
+            "expected_missing_total_bytes": int(models_status["expected_missing_total_bytes"]),
             "prompt_state": MODEL_PROMPT_COMPLETE if not missing else prompt_state,
         }
     )
@@ -4281,31 +4992,47 @@ def _public_model_download_status() -> dict[str, Any]:
 def _models_status_payload() -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     total_bytes = 0
+    expected_total_bytes = 0
+    expected_missing_total_bytes = 0
     missing: list[str] = []
+    download_descriptors = _model_download_descriptors()
     for key in MODEL_SPECS:
         path = _locate_model_file(MODEL_SPECS[key].filename)
+        ready, verified, readiness_reason = _model_readiness(key)
         size_bytes = 0
         if path is not None:
             with contextlib.suppress(OSError):
                 size_bytes = max(0, int(path.stat().st_size))
-        ready = path is not None and size_bytes >= 0
+        descriptor = download_descriptors.get(key, {})
+        expected_size_bytes = descriptor.get("size_bytes")
         if not ready:
             missing.append(key)
         total_bytes += size_bytes
+        if isinstance(expected_size_bytes, int) and expected_size_bytes > 0:
+            expected_total_bytes += expected_size_bytes
+            if not ready:
+                expected_missing_total_bytes += expected_size_bytes
         details.append(
             {
                 "key": key,
                 "label": MODEL_DISPLAY_NAMES.get(key, key),
                 "ready": ready,
+                "verified": verified,
+                "status_reason": readiness_reason,
+                "user_provided_unsupported": bool(path is not None and not MODEL_MANIFEST.by_tag[key].release_eligible),
                 "size_bytes": size_bytes if ready else None,
-                "path": str(path) if path is not None else "",
+                "expected_size_bytes": expected_size_bytes if isinstance(expected_size_bytes, int) and expected_size_bytes > 0 else None,
+                "release_eligible": bool(MODEL_MANIFEST.by_tag[key].release_eligible),
+                "auto_download": bool(descriptor.get("auto_download")),
+                "blocked_reason": str(descriptor.get("blocked_reason") or ""),
             }
         )
     return {
         "missing": sorted(missing),
-        "models_dir": str(MODEL_DIR),
         "models": details,
         "downloaded_total_bytes": total_bytes,
+        "expected_total_bytes": expected_total_bytes,
+        "expected_missing_total_bytes": expected_missing_total_bytes,
     }
 
 
@@ -4358,7 +5085,7 @@ def _run_model_download(selection: list[str] | None = None) -> None:
         step="preparing downloads",
         current_model="",
         downloaded_bytes=0,
-        total_bytes=0,
+        total_bytes=_expected_model_download_bytes(missing),
         download_rate_bytes_per_sec=0.0,
         eta_seconds=None,
         retry_count=0,
@@ -4455,12 +5182,36 @@ def _start_model_download(selection: list[str] | None = None) -> dict[str, Any]:
     with model_download_lock:
         if model_download_thread is not None and model_download_thread.is_alive():
             return _public_model_download_status()
+        missing = _selected_missing_models(selection)
+        _set_model_download_state(
+            status="done" if not missing else "downloading",
+            pct=100 if not missing else 1,
+            step="models ready" if not missing else "preparing downloads",
+            current_model="",
+            downloaded_bytes=0,
+            total_bytes=_expected_model_download_bytes(missing),
+            download_rate_bytes_per_sec=0.0,
+            eta_seconds=0 if not missing else None,
+            retry_count=0,
+            retry_label="0",
+            started_at=time.time() if missing else None,
+            error="",
+        )
         model_download_thread = threading.Thread(target=_run_model_download, args=(selection,), daemon=True)
         model_download_thread.start()
     return _public_model_download_status()
 
 
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
+    duration_ms = int(round(max(0.0, float(task.get("audio_seconds") or 0.0)) * 1000.0))
+    if duration_ms > 0:
+        clip = _task_clip_snapshot(task, duration_ms=duration_ms)
+    else:
+        clip = {
+            "clip_start_ms": int(max(0, int(task.get("clip_start_ms") or 0))),
+            "clip_end_ms": _coerce_optional_ms(task.get("clip_end_ms"), default=None),
+            "clip_enabled": bool(task.get("clip_enabled")),
+        }
     return {
         "id": task["id"],
         "name": task["original_name"],
@@ -4476,12 +5227,19 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "pct": task["pct"],
         "eta_seconds": task["eta_seconds"],
         "eta_state": task.get("eta_state"),
-        "out_dir": task["out_dir"],
+        "out_dir": None,
         "outputs": list(task["outputs"]),
-        "error": task["error"],
+        "error": (
+            "Processing failed. See the local Stemsplat log for details."
+            if task.get("error")
+            else None
+        ),
         "version": task["version"],
         "preset_settings": _task_preset_settings(task),
         "can_adjust_preset": _task_can_adjust_preset(task),
+        "clip_start_ms": clip["clip_start_ms"],
+        "clip_end_ms": clip["clip_end_ms"],
+        "clip_enabled": clip["clip_enabled"],
     }
 
 
@@ -4656,6 +5414,8 @@ def _set_task_progress(task_id: str, stage: str, pct: int) -> None:
             task["last_progress_pct"] = task["pct"]
             task["last_progress_stage"] = stage
         task["version"] += 1
+        snapshot = dict(task)
+    _persist_task(snapshot)
 
 
 def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
@@ -4691,6 +5451,8 @@ def _mark_task_done(task_id: str, out_dir: Path, outputs: list[str]) -> None:
         task["version"] += 1
         if bool(task.get("cleared")):
             cleanup_snapshot = dict(task)
+        persisted_snapshot = dict(task)
+    _persist_task(persisted_snapshot, force=True)
     if cleanup_snapshot is not None:
         _forget_task(task_id, cleanup_snapshot)
         return
@@ -4716,6 +5478,8 @@ def _mark_task_error(task_id: str, message: str) -> None:
         task["version"] += 1
         if bool(task.get("cleared")):
             cleanup_snapshot = dict(task)
+        persisted_snapshot = dict(task)
+    _persist_task(persisted_snapshot, force=True)
     if cleanup_snapshot is not None:
         _forget_task(task_id, cleanup_snapshot)
         return
@@ -4734,6 +5498,27 @@ def _task_output_paths(task: dict[str, Any]) -> tuple[Path, list[Path]]:
     if outputs and not existing_outputs:
         raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
     return out_path, existing_outputs
+
+
+def _task_named_output_path(task: dict[str, Any], output_name: str | None) -> Path:
+    requested = str(output_name or "").strip()
+    if not requested or requested == "source":
+        task_id = str(task.get("id") or "").strip()
+        if task_id:
+            cached_preview = _cached_editor_source_preview_path(task_id)
+            if cached_preview is not None:
+                return cached_preview
+        source_path = Path(str(task.get("source_path") or "")).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
+        return source_path
+    out_dir, existing_outputs = _task_output_paths(task)
+    requested_path = (out_dir / requested).resolve()
+    for candidate in existing_outputs:
+        with contextlib.suppress(Exception):
+            if candidate.resolve() == requested_path:
+                return candidate
+    raise AppError(ErrorCode.INVALID_REQUEST, "file doesn't exist")
 
 
 def _archive_mode_label(mode: str) -> str:
@@ -4755,9 +5540,13 @@ def _output_subdir_for_label(mode: str, label: str) -> Path | None:
 
 
 def _relative_output_name(output_path: Path, root_dir: Path) -> str:
-    with contextlib.suppress(Exception):
-        return str(output_path.relative_to(root_dir))
-    return output_path.name
+    try:
+        relative = output_path.expanduser().resolve().relative_to(root_dir.expanduser().resolve())
+        if any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("unsafe relative output name")
+        return "/".join(relative.parts)
+    except Exception:
+        return Path(output_path.name).name
 
 
 def _unique_output_path(path: Path) -> Path:
@@ -4858,6 +5647,7 @@ def _cleanup_task_runtime(task_id: str, task: dict[str, Any]) -> None:
         for candidate in WORK_DIR.iterdir():
             if candidate.name.startswith(prefix):
                 _cleanup_path(candidate)
+        _cleanup_path(WORK_DIR / "editor_cache" / task_id)
 
     downloads_dir = RUNTIME_DIR / "downloads"
     if downloads_dir.exists():
@@ -4946,6 +5736,8 @@ def _mark_task_stopped(task_id: str) -> None:
             task["version"] += 1
         if bool(task.get("cleared")):
             cleanup_snapshot = dict(task)
+        persisted_snapshot = dict(task)
+    _persist_task(persisted_snapshot, force=True)
     if cleanup_snapshot is not None:
         _forget_task(task_id, cleanup_snapshot)
         return
@@ -4954,10 +5746,16 @@ def _mark_task_stopped(task_id: str) -> None:
 
 def _pause_queue_processing() -> None:
     queue_resume_event.clear()
+    if state_persistence_enabled:
+        with contextlib.suppress(Exception):
+            _get_state_store().set_metadata("queue_paused", "1")
 
 
 def _resume_queue_processing() -> None:
     queue_resume_event.set()
+    if state_persistence_enabled:
+        with contextlib.suppress(Exception):
+            _get_state_store().set_metadata("queue_paused", "0")
 
 
 def _queue_processing_paused() -> bool:
@@ -4997,6 +5795,8 @@ def _request_task_stop(task_id: str) -> None:
             task["stage"],
             should_terminate_runtime,
         )
+        persisted_snapshot = dict(task)
+    _persist_task(persisted_snapshot, force=True)
     if should_terminate_runtime:
         _terminate_task_runtime(task_id)
     if should_forget:
@@ -5118,6 +5918,9 @@ def _restart_task_payload(
         output_same_as_input=output_same_as_input,
         multi_stem_export=multi_stem_export,
     )
+    payload["clip_start_ms"] = int(max(0, int(old_task.get("clip_start_ms") or 0)))
+    payload["clip_end_ms"] = _coerce_optional_ms(old_task.get("clip_end_ms"), default=None)
+    payload["clip_enabled"] = bool(old_task.get("clip_enabled"))
     _enqueue_task(payload["id"], front=prioritize)
     return payload
 
@@ -5135,6 +5938,39 @@ def _update_ready_task_selection(task_id: str, stems_raw: str) -> dict[str, Any]
         if status == "queued" and float(task.get("pct") or 0) > 0:
             raise AppError(ErrorCode.INVALID_REQUEST, "Task is still processing.")
         task["mode"] = mode
+        _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
+        task["version"] += 1
+        return dict(task)
+
+
+def _update_task_clip_settings(
+    task_id: str,
+    *,
+    clip_start_ms: Any,
+    clip_end_ms: Any,
+    clip_enabled: Any,
+) -> dict[str, Any]:
+    with tasks_lock:
+        task = tasks.get(task_id)
+        if task is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid task id")
+        if str(task.get("status") or "") == "running":
+            raise AppError(ErrorCode.INVALID_REQUEST, "You can only edit a song before or after processing.")
+        duration_ms = int(round(max(0.0, float(task.get("audio_seconds") or 0.0)) * 1000.0))
+        if duration_ms > 0:
+            start_ms, end_ms, enabled = _normalize_clip_bounds_ms(
+                clip_start_ms,
+                clip_end_ms,
+                duration_ms=duration_ms,
+                enabled=bool(clip_enabled),
+            )
+        else:
+            start_ms = max(0, int(_coerce_optional_ms(clip_start_ms, default=0) or 0))
+            end_ms = _coerce_optional_ms(clip_end_ms, default=None)
+            enabled = bool(clip_enabled)
+        task["clip_start_ms"] = start_ms
+        task["clip_end_ms"] = end_ms
+        task["clip_enabled"] = enabled
         _refresh_runtime_plan(task, audio_seconds=float(task.get("audio_seconds") or 0.0))
         task["version"] += 1
         return dict(task)
@@ -5345,6 +6181,9 @@ def _build_task_payload(
         "last_progress_at": time.time(),
         "last_progress_pct": 0,
         "last_progress_stage": "Waiting in queue" if auto_start else "Ready",
+        "clip_start_ms": 0,
+        "clip_end_ms": None,
+        "clip_enabled": False,
         "finished_at": None,
         "guard_error": None,
         "cleared": False,
@@ -5394,40 +6233,90 @@ def _validate_multi_stem_export(multi_stem_export: str) -> str:
 def _validate_media_type(name: str, content_type: str | None = None) -> str:
     suffix = Path(name).suffix.lower()
     kind = (content_type or "").lower()
-    if suffix and suffix not in SUPPORTED_MEDIA_SUFFIXES and not (kind.startswith("audio/") or kind.startswith("video/")):
+    if suffix not in SUPPORTED_MEDIA_SUFFIXES:
         raise AppError(ErrorCode.INVALID_REQUEST, f"Unsupported file type: {suffix}")
-    if not suffix and not (kind.startswith("audio/") or kind.startswith("video/")):
-        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported file type. Add a supported audio or video file.")
+    if kind and not (kind.startswith("audio/") or kind.startswith("video/") or kind == "application/octet-stream"):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Unsupported upload content type.")
     return suffix
 
 
-async def _store_uploaded_file(file: UploadFile) -> tuple[str, Path]:
-    original_name = Path(file.filename or "upload").name
-    _validate_media_type(original_name, file.content_type or "")
+def _media_magic_matches(suffix: str, sample: bytes) -> bool:
+    if suffix in RIFF_MEDIA_TYPES:
+        return len(sample) >= 12 and sample[:4] == b"RIFF" and sample[8:12] == RIFF_MEDIA_TYPES[suffix]
+    if suffix in FORM_MEDIA_TYPES:
+        return len(sample) >= 12 and sample[:4] == b"FORM" and sample[8:12] == FORM_MEDIA_TYPES[suffix]
+    if suffix == ".mp3":
+        return sample.startswith(b"ID3") or (len(sample) >= 2 and sample[0] == 0xFF and (sample[1] & 0xE0) == 0xE0)
+    if suffix == ".aac":
+        return len(sample) >= 2 and sample[0] == 0xFF and (sample[1] & 0xF6) in {0xF0, 0xF2}
+    if suffix in MP4_FAMILY_SUFFIXES:
+        return len(sample) >= 12 and sample[4:8] == b"ftyp"
+    prefixes = MEDIA_MAGIC_PREFIXES.get(suffix)
+    return any(sample.startswith(prefix) for prefix in prefixes or ())
 
-    task_id = str(uuid.uuid4())
-    stored_name = f"{task_id}_{original_name}"
-    source_path = UPLOAD_DIR / stored_name
-    bytes_written = 0
+
+def _validate_media_header(path: Path, suffix: str) -> None:
+    with path.open("rb") as handle:
+        sample = handle.read(64)
+    if not _media_magic_matches(suffix, sample):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file content does not match a supported media format.")
+
+
+upload_admission_lock = threading.RLock()
+upload_admission_controller: UploadAdmissionController | None = None
+upload_admission_key: tuple[Path, int] | None = None
+
+
+def _get_upload_admission_controller() -> UploadAdmissionController:
+    global upload_admission_controller, upload_admission_key
+    key = (UPLOAD_DIR.resolve(), int(MAX_UPLOAD_BYTES))
+    with upload_admission_lock:
+        if upload_admission_controller is None or upload_admission_key != key:
+            upload_admission_controller = UploadAdmissionController(
+                UPLOAD_DIR,
+                policy=UploadPolicy(max_file_bytes=int(MAX_UPLOAD_BYTES)),
+            )
+            upload_admission_key = key
+        return upload_admission_controller
+
+
+def _lan_session_fingerprint(request: Request | None) -> str:
+    if request is None:
+        return ""
+    token = str(request.cookies.get(LAN_AUTH_COOKIE_NAME) or "")
+    return hashlib.sha256(token.encode("utf-8")).hexdigest() if token else ""
+
+
+def _outstanding_lan_tasks(session_fingerprint: str) -> int:
+    if not session_fingerprint:
+        return 0
+    with tasks_lock:
+        return sum(
+            1
+            for task in tasks.values()
+            if str(task.get("queued_by_session") or "") == session_fingerprint
+            and str(task.get("status") or "") not in TERMINAL_STATUSES
+        )
+
+
+async def _store_uploaded_file(file: UploadFile, request: Request | None = None) -> tuple[str, Path]:
+    client_host = _request_client_host(request)
+    session_id = request.cookies.get(LAN_AUTH_COOKIE_NAME) if request is not None else ""
     try:
-        with source_path.open("wb") as handle:
-            while True:
-                chunk = await file.read(UPLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                bytes_written += len(chunk)
-    except Exception as exc:
-        _cleanup_path(source_path)
-        raise AppError(ErrorCode.INVALID_REQUEST, f"Could not save upload: {exc}") from exc
-    finally:
-        with contextlib.suppress(Exception):
-            await file.close()
-
-    if bytes_written <= 0:
-        _cleanup_path(source_path)
-        raise AppError(ErrorCode.INVALID_REQUEST, "Uploaded file is empty.")
-    return original_name, source_path
+        staged = await stage_upload(
+            file,
+            UPLOAD_DIR,
+            controller=_get_upload_admission_controller(),
+            session_id=session_id or client_host or "local",
+            outstanding_tasks=_outstanding_lan_tasks(_lan_session_fingerprint(request)) if _is_remote_client(request) else 0,
+            ffprobe=_ffprobe_path(),
+        )
+    except UploadAdmissionError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return staged.display_name, staged.path
 
 
 def _store_local_media_file(path: Path) -> tuple[str, Path]:
@@ -5435,7 +6324,10 @@ def _store_local_media_file(path: Path) -> tuple[str, Path]:
     if not source.exists() or not source.is_file():
         raise AppError(ErrorCode.INVALID_REQUEST, f"file doesn't exist: {source}")
     original_name = source.name
-    _validate_media_type(original_name)
+    suffix = _validate_media_type(original_name)
+    if source.stat().st_size > MAX_UPLOAD_BYTES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Imported file is too large.")
+    _validate_media_header(source, suffix)
     task_id = str(uuid.uuid4())
     stored_name = f"{task_id}_{original_name}"
     stored_path = UPLOAD_DIR / stored_name
@@ -5471,11 +6363,28 @@ def _normalize_local_path_text(raw: Any) -> str:
 def _queue_task(task_id: str, *, front: bool = False) -> None:
     if not front:
         task_queue.put(task_id)
+        _persist_queue()
         return
     with task_queue.mutex:
         task_queue.queue.appendleft(task_id)
         task_queue.unfinished_tasks += 1
         task_queue.not_empty.notify()
+    _persist_queue()
+
+
+def _active_task_count_locked(exclude_task_id: str | None = None) -> int:
+    count = 0
+    for current_id, task in tasks.items():
+        if exclude_task_id is not None and current_id == exclude_task_id:
+            continue
+        if str(task.get("status") or "") in {"ready", "queued", "running"}:
+            count += 1
+    return count
+
+
+def _ensure_task_capacity_locked(exclude_task_id: str | None = None) -> None:
+    if _active_task_count_locked(exclude_task_id) >= MAX_ACTIVE_TASKS:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Too many active tasks. Wait for the queue to drain before adding more.")
 
 
 def _apply_task_start_settings(
@@ -5521,6 +6430,9 @@ def _register_task(
     video_handling: str,
     multi_stem_export: str | None = None,
     output_same_as_input: bool | None = None,
+    clip_start_ms: int | None = None,
+    clip_end_ms: int | None = None,
+    clip_enabled: bool | None = None,
     delivery: str = "folder",
     auto_start: bool,
     queue_front: bool = False,
@@ -5544,9 +6456,19 @@ def _register_task(
         multi_stem_export=multi_stem_export,
         output_same_as_input=output_same_as_input,
     )
+    if clip_start_ms is not None:
+        payload["clip_start_ms"] = max(0, int(clip_start_ms))
+    if clip_end_ms is not None:
+        payload["clip_end_ms"] = max(0, int(clip_end_ms))
+    if clip_enabled is not None:
+        payload["clip_enabled"] = bool(clip_enabled)
     with tasks_lock:
+        if auto_start:
+            _ensure_task_capacity_locked()
         tasks[task_id] = payload
+    _persist_task(payload, force=True)
     threading.Thread(target=_extract_task_artwork, args=(task_id,), daemon=True).start()
+    threading.Thread(target=_warm_editor_source_cache, args=(task_id,), daemon=True).start()
     if auto_start:
         _queue_task(task_id, front=queue_front)
     return payload
@@ -5563,6 +6485,7 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
             return task
         if task["status"] in TERMINAL_STATUSES:
             return task
+        _ensure_task_capacity_locked(exclude_task_id=task_id)
         task["status"] = "queued"
         task["stage"] = "Waiting in queue"
         task["eta_seconds"] = None
@@ -5579,6 +6502,8 @@ def _enqueue_task(task_id: str, *, front: bool = False) -> dict[str, Any]:
         task["last_progress_stage"] = task["stage"]
         task["guard_error"] = None
         task["version"] += 1
+        persisted_snapshot = dict(task)
+    _persist_task(persisted_snapshot, force=True)
     _queue_task(task_id, front=front)
     return task
 
@@ -5597,6 +6522,9 @@ def _remove_task(task_id: str) -> dict[str, Any]:
         tasks.pop(task_id, None)
     if snapshot is not None:
         _cleanup_task_runtime(task_id, snapshot)
+    if state_persistence_enabled:
+        with contextlib.suppress(Exception):
+            _get_state_store().delete_task(task_id)
     return snapshot or {}
 
 
@@ -5636,6 +6564,9 @@ def _compat_public_task(task: dict[str, Any]) -> dict[str, Any]:
         "outputs": public["outputs"],
         "preset_settings": public["preset_settings"],
         "can_adjust_preset": public["can_adjust_preset"],
+        "clip_start_ms": public["clip_start_ms"],
+        "clip_end_ms": public["clip_end_ms"],
+        "clip_enabled": public["clip_enabled"],
         "artwork_url": f"/api/tasks/{public['id']}/artwork",
     }
 
@@ -5653,7 +6584,7 @@ def _extract_task_artwork(task_id: str) -> Path | None:
     if embedded is not None:
         payload, suffix = embedded
         cached_path = ARTWORK_DIR / f"{task_id}{suffix}"
-        cached_path.write_bytes(payload)
+        atomic_write_bytes(cached_path, payload)
         return cached_path
 
     temp_path = ARTWORK_DIR / f"{task_id}.tmp.jpg"
@@ -5663,7 +6594,7 @@ def _extract_task_artwork(task_id: str) -> Path | None:
     try:
         subprocess.run(
             [
-                _ffmpeg_path(),
+                _ensure_ffmpeg(),
                 "-hide_banner",
                 "-loglevel",
                 "error",
@@ -5764,17 +6695,28 @@ def _process_task(task_id: str) -> None:
 
         work_dir = Path(tempfile.mkdtemp(prefix=f"stemsplat_{task_id[:8]}_", dir=str(WORK_DIR)))
         _set_task_progress(task_id, "Preparing audio", 4)
-        decoded_path = _decode_audio_to_wav(
-            source_path,
-            work_dir,
-            source_info.channels,
-            stop_check=lambda: _stop_check(task_id),
-        )
+        decoded_path = _cached_editor_source_preview_path(task_id)
+        if decoded_path is None:
+            decoded_path = _decode_audio_to_wav(
+                source_path,
+                work_dir,
+                source_info.channels,
+                stop_check=lambda: _stop_check(task_id),
+            )
+            with contextlib.suppress(Exception):
+                preview_path = _editor_source_preview_path(task_id)
+                preview_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(decoded_path, preview_path)
+                _cache_editor_source_waveforms(task_id, preview_path, points_values=EDITOR_SOURCE_WAVEFORM_CACHE_POINTS)
         _stop_check(task_id)
         waveform = _load_waveform(decoded_path)
+        waveform, clip_snapshot = _apply_clip_to_waveform(task, waveform)
         mode = task["mode"]
         audio_seconds = waveform.shape[1] / 44100.0 if waveform.shape[1] > 0 else 0.0
         with tasks_lock:
+            tasks[task_id]["clip_start_ms"] = clip_snapshot["clip_start_ms"]
+            tasks[task_id]["clip_end_ms"] = clip_snapshot["clip_end_ms"]
+            tasks[task_id]["clip_enabled"] = clip_snapshot["clip_enabled"]
             tasks[task_id]["audio_seconds"] = audio_seconds
             _refresh_runtime_plan(tasks[task_id], audio_seconds=audio_seconds)
             tasks[task_id]["predicted_total_seconds"] = _predict_task_runtime_seconds(mode, audio_seconds)
@@ -6592,7 +7534,26 @@ if _background_threads_enabled():
 
 @app.on_event("startup")
 async def _startup_cleanup() -> None:
-    _close_installer_ui()
+    required_ui = tuple(
+        WEB_DIR / name
+        for name in (
+            "index.html",
+            "mobile.html",
+            "lan_login.html",
+            "app.css",
+            "app.js",
+            "mobile.js",
+            "index-boot.js",
+            "mobile-boot.js",
+            "lan-login.js",
+        )
+    )
+    missing_ui = [path.name for path in required_ui if not path.is_file()]
+    if missing_ui:
+        raise RuntimeError(f"packaged UI resources are missing: {', '.join(missing_ui)}")
+    for artifact in MODEL_MANIFEST.by_tag.values():
+        MODEL_MANIFEST.verify_config(CONFIG_DIR, artifact.tag)
+    _restore_persisted_state()
     _cleanup_old_runtime_entries(WORK_DIR)
     _cleanup_old_runtime_entries(UPLOAD_DIR)
     _cleanup_old_runtime_entries(INTERMEDIATE_CACHE_DIR, INTERMEDIATE_CACHE_RETENTION_SECONDS)
@@ -6634,10 +7595,50 @@ async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
 
 
-@app.middleware("http")
-async def _log_requests(request: Request, call_next):
+def _allowed_request_host(request: Request) -> bool:
+    host = normalized_host(request.headers.get("host", ""))
+    surface = str(getattr(request.app.state, "surface", "local"))
+    if surface == "local":
+        return host in {"localhost", "127.0.0.1", "::1", "testserver"}
+    hostname, addresses = _lan_certificate_inputs()
+    allowed = {hostname.strip().lower().rstrip("."), *(address.strip().lower() for address in addresses)}
+    certificate_sans = _get_certificate_manager().public_status().get("san_names") or []
+    allowed.update(str(value).strip().lower().rstrip(".") for value in certificate_sans)
+    return host.rstrip(".") in allowed
+
+
+async def _request_pipeline(request: Request, call_next):
     started = time.time()
-    if _lan_passcode_required(request):
+    surface = str(getattr(request.app.state, "surface", "local"))
+    header_pairs = [(name.decode("latin-1"), value.decode("latin-1")) for name, value in request.scope.get("headers", [])]
+    if request_has_forwarded_identity(header_pairs):
+        response = JSONResponse(status_code=400, content={"error": "forwarded proxy headers are unsupported"})
+    elif request.url.path in {"/upload", "/api/tasks"} and request.headers.get("content-length", "").isdigit() and (
+        int(request.headers["content-length"]) > int(MAX_UPLOAD_BYTES) + 1024 * 1024
+    ):
+        response = JSONResponse(status_code=413, content={"error": "upload exceeds the file-size limit"})
+    elif not _allowed_request_host(request):
+        response = JSONResponse(status_code=400, content={"error": "host is not allowed"})
+    elif request.method.upper() in MUTATING_METHODS and (
+        (surface == "lan" and not origin_matches(
+            request.headers.get("origin", ""),
+            scheme="https",
+            host_header=request.headers.get("host", ""),
+        ))
+        or (
+            surface == "local"
+            and bool(request.headers.get("origin"))
+            and not origin_matches(
+                request.headers.get("origin", ""),
+                scheme=request.url.scheme,
+                host_header=request.headers.get("host", ""),
+            )
+        )
+    ):
+        response = JSONResponse(status_code=403, content={"error": "same-origin request required"})
+    elif surface == "lan" and not bool(_compat_settings_payload().get("lan_access_enabled")):
+        response = JSONResponse(status_code=403, content={"error": "LAN access is disabled"})
+    elif _lan_passcode_required(request):
         path = request.url.path
         allowed = path in LAN_AUTH_ALLOWED_PATHS
         authorized = _request_has_valid_lan_session(request)
@@ -6651,7 +7652,16 @@ async def _log_requests(request: Request, call_next):
         response = await call_next(request)
     elapsed_ms = (time.time() - started) * 1000
     logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    if surface == "lan":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    if request.url.path.startswith("/api/") or request.url.path in {"/settings", "/upload"}:
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
+
+
+app.middleware("http")(_request_pipeline)
 
 
 def _pick_directory_dialog() -> Path | None:
@@ -6733,12 +7743,105 @@ async def release_status(refresh: bool = False) -> dict[str, Any]:
 
 
 @app.get("/api/runtime_status")
-async def runtime_status() -> dict[str, Any]:
-    return _runtime_status_payload()
+async def runtime_status(request: Request) -> dict[str, Any]:
+    payload = _runtime_status_payload()
+    if _is_remote_client(request):
+        payload["client_url"] = ""
+        payload["kill_command"] = ""
+    return payload
 
 
-@app.post("/api/lan_auth")
-async def lan_auth(request: Request) -> JSONResponse:
+def _lan_certificate_inputs() -> tuple[str, list[str]]:
+    status = _runtime_status_payload()
+    hostname = str(status.get("lan_local_display") or "").split(":", 1)[0].strip()
+    if not hostname:
+        hostname = socket.gethostname().split(".", 1)[0].strip() + ".local"
+    addresses = [str(status.get("lan_display") or "").split(":", 1)[0].strip()]
+    return hostname, [value for value in addresses if value]
+
+
+@app.get("/api/lan/status")
+async def lan_status(request: Request) -> dict[str, Any]:
+    settings = _compat_settings_payload()
+    certificate = _get_certificate_manager().public_status()
+    return {
+        "enabled": bool(settings.get("lan_access_enabled")),
+        "passcode_configured": bool(settings.get("lan_passcode_hash")),
+        "session_ttl": str(settings.get("lan_passcode_ttl") or "1d"),
+        "listener": _runtime_status_payload().get("lan_url") or "",
+        "certificate": certificate,
+        "authenticated": _request_has_valid_lan_session(request) if _is_remote_client(request) else True,
+    }
+
+
+@app.post("/api/lan/config")
+async def lan_config(request: Request) -> dict[str, Any]:
+    _require_local_request(request, "LAN configuration is local-only.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN configuration.").to_http(400)
+    enabled = bool(body.get("enabled"))
+    ttl = str(body.get("session_ttl") or _compat_settings_payload().get("lan_passcode_ttl") or "1d")
+    if ttl not in LAN_AUTH_TTL_CHOICES:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN session lifetime.").to_http(400)
+    passcode = str(body.get("passcode") or "")
+    existing_hash = str(_compat_settings_payload().get("lan_passcode_hash") or "")
+    if passcode and not 8 <= len(passcode) <= 128:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "LAN passcodes must be between 8 and 128 characters.",
+        ).to_http(400)
+    if enabled and not passcode and not existing_hash:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Set a passcode before enabling LAN access.").to_http(400)
+    patch: dict[str, Any] = {
+        "lan_access_enabled": enabled,
+        "lan_passcode_enabled": enabled,
+        "lan_passcode_ttl": ttl,
+    }
+    if passcode:
+        patch["lan_passcode"] = passcode
+    if bool(body.get("clear_passcode")):
+        if enabled:
+            raise AppError(ErrorCode.INVALID_REQUEST, "LAN access cannot be enabled without a passcode.").to_http(400)
+        patch["lan_passcode"] = ""
+    certificate = None
+    if enabled:
+        hostname, addresses = _lan_certificate_inputs()
+        certificate = _get_certificate_manager().ensure(hostname, addresses)
+    _set_compat_settings(patch)
+    if lan_runtime_controller is not None:
+        try:
+            lan_runtime_controller.sync()
+        except Exception as exc:
+            logger.exception("LAN listener reconfiguration failed")
+            _set_compat_settings({"lan_access_enabled": False})
+            raise AppError(
+                ErrorCode.INVALID_REQUEST,
+                "LAN listener could not be started. LAN access was disabled.",
+            ).to_http(500) from exc
+    payload = await lan_status(request)
+    payload["certificate_renewed"] = bool(certificate and certificate.renewed)
+    return payload
+
+
+@app.get("/api/lan/ca")
+async def lan_ca(request: Request):
+    _require_local_request(request, "The LAN CA can only be exported from the host Mac.")
+    manager = _get_certificate_manager()
+    if not manager.ca_cert_path.is_file():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Enable LAN access to create the local CA first.").to_http(404)
+    return FileResponse(
+        manager.ca_cert_path,
+        media_type="application/x-pem-file",
+        filename="stemsplat-local-ca.pem",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _perform_lan_auth(request: Request) -> JSONResponse:
     if not _lan_passcode_required(request):
         return JSONResponse({"ok": True, "required": False})
     try:
@@ -6749,34 +7852,63 @@ async def lan_auth(request: Request) -> JSONResponse:
         body = {}
     submitted = str(body.get("passcode") or "")
     settings = _compat_settings_payload()
-    expected = str(settings.get("lan_passcode") or "")
-    if not expected or not secrets.compare_digest(submitted, expected):
+    encoded_hash = str(settings.get("lan_passcode_hash") or "")
+    ttl_name = str(settings.get("lan_passcode_ttl") or "1d")
+    try:
+        token, ttl_seconds = lan_auth_manager.authenticate(
+            _request_client_host(request),
+            submitted,
+            encoded_hash,
+            ttl_name,
+        )
+    except PermissionError as exc:
+        retry_after = max(1, int(str(exc) or "900"))
+        return JSONResponse(
+            status_code=429,
+            content={"ok": False, "error": "too many failed attempts", "retry_after": retry_after},
+            headers={"Retry-After": str(retry_after)},
+        )
+    except ValueError:
         return JSONResponse(status_code=401, content={"ok": False, "error": "incorrect passcode"})
-    ttl_seconds = _lan_auth_ttl_seconds(str(settings.get("lan_passcode_ttl") or "1d"))
-    token = secrets.token_urlsafe(32)
-    expires_at = None if ttl_seconds is None else time.time() + ttl_seconds
-    with lan_auth_lock:
-        _prune_lan_auth_sessions_locked()
-        lan_auth_sessions[token] = {
-            "host": _request_client_host(request),
-            "expires_at": expires_at,
-            "created_at": time.time(),
-        }
     response = JSONResponse(
         {
             "ok": True,
             "required": True,
-            "ttl": str(settings.get("lan_passcode_ttl") or "1d"),
+            "ttl": ttl_name,
         }
     )
     response.set_cookie(
         key=LAN_AUTH_COOKIE_NAME,
         value=token,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite="strict",
+        secure=True,
         max_age=ttl_seconds,
         path="/",
+    )
+    return response
+
+
+@app.post("/api/lan_auth")
+async def lan_auth(request: Request) -> JSONResponse:
+    return await _perform_lan_auth(request)
+
+
+@app.post("/api/lan/auth")
+async def lan_auth_v2(request: Request) -> JSONResponse:
+    return await _perform_lan_auth(request)
+
+
+@app.post("/api/lan/logout")
+async def lan_logout(request: Request) -> JSONResponse:
+    lan_auth_manager.sessions.revoke(request.cookies.get(LAN_AUTH_COOKIE_NAME))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(
+        LAN_AUTH_COOKIE_NAME,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
     )
     return response
 
@@ -6897,29 +8029,53 @@ async def import_paths(request: Request) -> dict[str, Any]:
     mode = _stems_to_mode(raw_stems)
     _validate_mode_and_output_format(mode, output_format)
     delivery = "folder"
-    created: list[dict[str, Any]] = []
+    source_paths: list[Path] = []
+    normalized_source_dirs: list[str] = []
     for index, item in enumerate(raw_paths):
         path_text = _normalize_local_path_text(item)
         if not path_text:
             continue
         source_original = Path(path_text).expanduser()
-        original_name, source_path = _store_local_media_file(source_original)
+        source_paths.append(source_original)
         source_dir_text = _normalize_local_path_text(source_dirs[index] if index < len(source_dirs) else "")
-        if not source_dir_text:
-            source_dir_text = str(source_original.parent)
-        payload = _register_task(
-            original_name=original_name,
-            source_path=source_path,
-            source_dir=source_dir_text,
-            mode=mode,
-            output_format=output_format,
-            video_handling=video_handling,
-            multi_stem_export=multi_stem_export,
-            output_same_as_input=output_same_as_input,
-            delivery=delivery,
-            auto_start=False,
+        normalized_source_dirs.append(source_dir_text or str(source_original.parent))
+    try:
+        staged_batch = stage_local_batch(
+            source_paths,
+            UPLOAD_DIR,
+            policy=UploadPolicy(max_file_bytes=int(MAX_UPLOAD_BYTES)),
+            ffprobe=_ffprobe_path(),
         )
-        created.append(_compat_public_task(payload))
+    except UploadAdmissionError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    created: list[dict[str, Any]] = []
+    registered_ids: list[str] = []
+    try:
+        for staged, source_dir_text in zip(staged_batch, normalized_source_dirs):
+            payload = _register_task(
+                original_name=staged.display_name,
+                source_path=staged.path,
+                source_dir=source_dir_text,
+                mode=mode,
+                output_format=output_format,
+                video_handling=video_handling,
+                multi_stem_export=multi_stem_export,
+                output_same_as_input=output_same_as_input,
+                delivery=delivery,
+                auto_start=False,
+            )
+            registered_ids.append(str(payload["id"]))
+            created.append(_compat_public_task(payload))
+    except Exception:
+        for task_id in registered_ids:
+            with contextlib.suppress(Exception):
+                _remove_task(task_id)
+        for staged in staged_batch:
+            _cleanup_path(staged.path)
+        raise
     return {"tasks": created}
 
 
@@ -6932,12 +8088,15 @@ async def create_task(
     multi_stem_export: str = Form("zip"),
     video_handling: str = Form("audio_only"),
     source_dir: str | None = Form(None),
+    clip_start_ms: int | None = Form(None),
+    clip_end_ms: int | None = Form(None),
+    clip_enabled: bool | None = Form(None),
 ):
     try:
         _validate_mode_and_output_format(mode, output_format)
         multi_stem_export = _validate_multi_stem_export(multi_stem_export)
         video_handling = _validate_video_handling(video_handling)
-        original_name, source_path = await _store_uploaded_file(file)
+        original_name, source_path = await _store_uploaded_file(file, request)
         payload = _register_task(
             original_name=original_name,
             source_path=source_path,
@@ -6946,12 +8105,42 @@ async def create_task(
             output_format=output_format,
             video_handling=video_handling,
             multi_stem_export=multi_stem_export,
+            clip_start_ms=clip_start_ms,
+            clip_end_ms=clip_end_ms,
+            clip_enabled=clip_enabled,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=True,
         )
+        if _is_remote_client(request):
+            payload["queued_by_host"] = _request_client_host(request)
+            payload["queued_by_session"] = _lan_session_fingerprint(request)
+            _persist_task(payload, force=True)
         return _public_task(payload)
     except AppError as exc:
         raise exc.to_http()
+
+
+@app.get("/api/tasks")
+async def list_tasks(
+    status: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    if status and status not in {"ready", "queued", "running", "done", "error", "stopped", "interrupted"}:
+        raise AppError(ErrorCode.INVALID_REQUEST, "Invalid task status filter.").to_http(400)
+    if state_persistence_enabled:
+        page = _get_state_store().list_tasks(status=status, cursor=cursor, limit=limit)
+        items = [_public_task({**item, "stop_event": threading.Event()}) for item in page.items]
+        return {"items": items, "next_cursor": page.next_cursor}
+    with tasks_lock:
+        selected = [
+            dict(task)
+            for task in tasks.values()
+            if status is None or str(task.get("status") or "") == status
+        ]
+    selected.sort(key=lambda task: float(task.get("created_at") or 0.0), reverse=True)
+    bounded = max(1, min(100, int(limit)))
+    return {"items": [_public_task(task) for task in selected[:bounded]], "next_cursor": None}
 
 
 @app.get("/api/tasks/{task_id}/events")
@@ -6990,6 +8179,74 @@ async def get_task(task_id: str):
     return _public_task(_require_task(task_id))
 
 
+@app.post("/api/tasks/{task_id}/edit")
+async def edit_task(task_id: str, request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        task = _update_task_clip_settings(
+            task_id,
+            clip_start_ms=body.get("clip_start_ms"),
+            clip_end_ms=body.get("clip_end_ms"),
+            clip_enabled=body.get("clip_enabled"),
+        )
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    return _public_task(task)
+
+
+@app.get("/api/tasks/{task_id}/preview_audio")
+async def task_preview_audio(task_id: str, output: str | None = None):
+    try:
+        task = _require_task(task_id)
+        audio_path = _preview_audio_path_for_task(task, output)
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    media_type, _encoding = mimetypes.guess_type(str(audio_path))
+    return FileResponse(
+        audio_path,
+        media_type=media_type or "audio/mpeg",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/api/tasks/{task_id}/waveform")
+async def task_waveform(task_id: str, output: str | None = None, points: int | None = None) -> dict[str, Any]:
+    try:
+        task = _require_task(task_id)
+    except AppError as exc:
+        status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+        raise exc.to_http(status)
+    requested = str(output or "").strip()
+    normalized_points = _coerce_editor_waveform_points(points)
+    if not requested or requested == "source":
+        payload = _cached_or_resampled_editor_source_waveform_payload(task_id, normalized_points)
+        if payload is None:
+            preview_path = _ensure_editor_source_cache(task_id)
+            if preview_path is not None:
+                payload = _cached_or_resampled_editor_source_waveform_payload(task_id, normalized_points)
+                if payload is None:
+                    payload = _cache_editor_source_waveform(task_id, preview_path, points=normalized_points)
+        if payload is None:
+            audio_path = _task_named_output_path(task, output)
+            payload = _editor_waveform_payload_for_path(audio_path, points=normalized_points)
+    else:
+        try:
+            audio_path = _task_named_output_path(task, output)
+        except AppError as exc:
+            status = 404 if exc.code == ErrorCode.TASK_NOT_FOUND else 400
+            raise exc.to_http(status)
+        payload = _editor_waveform_payload_for_path(audio_path, points=normalized_points)
+    payload.update(_task_clip_snapshot(task, duration_ms=int(payload.get("duration_ms") or 0)))
+    return payload
+
+
 @app.get("/api/tasks/{task_id}/artwork")
 async def task_artwork(task_id: str):
     _require_task(task_id)
@@ -7011,7 +8268,20 @@ async def task_artwork(task_id: str):
 async def stop_task(task_id: str):
     _require_task(task_id)
     _request_task_stop(task_id)
-    return _public_task(_require_task(task_id))
+    payload = _public_task(_require_task(task_id))
+    payload["queue_paused"] = True
+    return payload
+
+
+@app.get("/api/queue/status")
+async def queue_status() -> dict[str, bool]:
+    return {"paused": _queue_processing_paused()}
+
+
+@app.post("/api/queue/resume")
+async def resume_queue() -> dict[str, bool]:
+    _resume_queue_processing()
+    return {"paused": False}
 
 
 @app.post("/api/tasks/{task_id}/retry")
@@ -7162,13 +8432,38 @@ async def download_output(task_id: str):
 
 
 @app.get("/api/history")
-async def list_previous_files() -> dict[str, Any]:
+async def list_previous_files(cursor: str | None = None, limit: int = 50) -> dict[str, Any]:
     entries = _prune_previous_files()
     entries.sort(key=lambda entry: float(entry.get("finished_at") or 0.0), reverse=True)
+    next_cursor = None
+    if state_persistence_enabled:
+        page = _get_state_store().list_history(cursor=cursor, limit=limit)
+        entries = page.items
+        next_cursor = page.next_cursor
+    else:
+        entries = entries[: max(1, min(100, int(limit)))]
     return {
         "items": [_public_previous_file(entry) for entry in entries],
         "storage": _history_storage_payload(entries),
+        "next_cursor": next_cursor,
     }
+
+
+@app.delete("/api/history/{entry_id}")
+async def delete_previous_file(entry_id: str) -> dict[str, Any]:
+    entry = _require_previous_file(entry_id)
+    storage_dir = _previous_file_storage_dir(entry)
+    if state_persistence_enabled:
+        deleted = _get_state_store().delete_history(entry_id)
+        if deleted is None:
+            raise AppError(ErrorCode.TASK_NOT_FOUND, "Invalid previous file id").to_http(404)
+    with previous_files_lock:
+        previous_files_index[:] = [
+            item for item in previous_files_index if str(item.get("id") or "") != entry_id
+        ]
+        _save_previous_files_index(previous_files_index)
+    _cleanup_path(storage_dir)
+    return {"status": "removed", "id": entry_id}
 
 
 @app.get("/api/history/{entry_id}/artwork")
@@ -7378,10 +8673,29 @@ async def update_settings(request: Request) -> dict[str, Any]:
             if ttl_value not in LAN_AUTH_TTL_CHOICES:
                 raise AppError(ErrorCode.INVALID_REQUEST, "Invalid LAN passcode ttl.").to_http()
             patch["lan_passcode_ttl"] = ttl_value
-    _set_compat_settings(patch)
+    expected_version: int | None = None
+    if "version" in body:
+        try:
+            expected_version = int(body.get("version"))
+        except (TypeError, ValueError) as exc:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Invalid settings version.").to_http(400) from exc
+    try:
+        _set_compat_settings(patch, expected_version=expected_version)
+    except StateConflictError as exc:
+        raise AppError(ErrorCode.INVALID_REQUEST, str(exc)).to_http(409) from exc
     if {"previous_files_retention", "previous_files_limit_gb", "previous_files_warn_gb"} & set(patch):
         _prune_previous_files()
     return _settings_response_payload(request)
+
+
+@app.get("/api/settings")
+async def get_settings_v2(request: Request) -> dict[str, Any]:
+    return await get_settings(request)
+
+
+@app.patch("/api/settings")
+async def update_settings_v2(request: Request) -> dict[str, Any]:
+    return await update_settings(request)
 
 
 @app.post("/upload")
@@ -7393,6 +8707,9 @@ async def compat_upload(
     multi_stem_export: str | None = Form(None),
     video_handling: str | None = Form(None),
     source_dir: str | None = Form(None),
+    clip_start_ms: int | None = Form(None),
+    clip_end_ms: int | None = Form(None),
+    clip_enabled: bool | None = Form(None),
 ):
     try:
         mode = _stems_to_mode(stems)
@@ -7402,7 +8719,7 @@ async def compat_upload(
         )
         resolved_video_handling = _validate_video_handling(video_handling or _compat_settings_payload()["video_handling"])
         _validate_mode_and_output_format(mode, resolved_output_format)
-        original_name, source_path = await _store_uploaded_file(file)
+        original_name, source_path = await _store_uploaded_file(file, request)
         payload = _register_task(
             original_name=original_name,
             source_path=source_path,
@@ -7411,9 +8728,15 @@ async def compat_upload(
             output_format=resolved_output_format,
             video_handling=resolved_video_handling,
             multi_stem_export=resolved_multi_stem_export,
+            clip_start_ms=clip_start_ms,
+            clip_end_ms=clip_end_ms,
+            clip_enabled=clip_enabled,
             delivery="browser_download" if _is_remote_client(request) else "folder",
             auto_start=False,
         )
+        if _is_remote_client(request):
+            payload["queued_by_host"] = _request_client_host(request)
+            _persist_task(payload, force=True)
         public = _compat_public_task(payload)
         return public
     except AppError as exc:
@@ -7521,7 +8844,9 @@ async def compat_stop(task_id: str) -> dict[str, Any]:
     _require_task(task_id)
     logger.info("received /stop request for %s", task_id)
     _request_task_stop(task_id)
-    return _compat_public_task(_require_task(task_id))
+    payload = _compat_public_task(_require_task(task_id))
+    payload["queue_paused"] = True
+    return payload
 
 
 @app.delete("/api/tasks/{task_id}")
@@ -7614,17 +8939,16 @@ async def index(request: Request) -> HTMLResponse:
     index_path = WEB_DIR / candidate
     if index_path.exists():
         return HTMLResponse(index_path.read_text(encoding="utf-8"))
-    fallback_path = WEB_DIR / "index.html"
-    if fallback_path.exists():
-        return HTMLResponse(fallback_path.read_text(encoding="utf-8"))
-    return HTMLResponse(INDEX_HTML)
+    raise AppError(ErrorCode.INVALID_REQUEST, "Packaged application UI is missing.").to_http(500)
 
-@app.get("/favicon.ico")
-async def favicon():
-    icon_path = BASE_DIR / "web" / "favicon.ico"
-    if icon_path.exists():
-        return FileResponse(icon_path, media_type="image/x-icon")
-    raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
+
+@app.get("/mobile-preview", response_class=HTMLResponse)
+async def mobile_preview(request: Request) -> HTMLResponse:
+    _require_local_request(request, "The mobile preview is available only on the host Mac.")
+    path = WEB_DIR / "mobile.html"
+    if not path.is_file():
+        raise RuntimeError("packaged mobile UI is missing")
+    return HTMLResponse(path.read_text(encoding="utf-8"))
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -7634,11 +8958,26 @@ async def favicon():
     raise AppError(ErrorCode.INVALID_REQUEST, "favicon missing").to_http(404)
 
 
+@app.get("/assets/{asset_name}")
+async def packaged_asset(asset_name: str):
+    allowed = {
+        "app.js": ("application/javascript", WEB_DIR / "app.js"),
+        "index-boot.js": ("application/javascript", WEB_DIR / "index-boot.js"),
+        "mobile.js": ("application/javascript", WEB_DIR / "mobile.js"),
+        "mobile-boot.js": ("application/javascript", WEB_DIR / "mobile-boot.js"),
+        "lan-login.js": ("application/javascript", WEB_DIR / "lan-login.js"),
+        "app.css": ("text/css", WEB_DIR / "app.css"),
+    }
+    entry = allowed.get(asset_name)
+    if entry is None or not entry[1].is_file():
+        raise AppError(ErrorCode.INVALID_REQUEST, "Packaged UI asset is missing.").to_http(404)
+    return FileResponse(entry[1], media_type=entry[0], headers={"Cache-Control": "no-cache"})
+
+
 @app.api_route("/shutdown", methods=["POST", "GET"])
 async def shutdown(request: Request):
     _require_local_request(request, "LAN clients cannot control the host machine.")
     logger.warning("shutdown requested; exiting process")
-    _close_installer_ui()
 
     def _exit_soon() -> None:
         time.sleep(0.25)
@@ -7648,9 +8987,51 @@ async def shutdown(request: Request):
     return {"status": "shutting down"}
 
 
+LAN_EXCLUDED_ROUTE_NAMES = {
+    "ack_release_status",
+    "copy_previous_file",
+    "dismiss_model_download_prompt",
+    "download_latest_release",
+    "export_task_preset_mix",
+    "lan_ca",
+    "lan_config",
+    "mobile_preview",
+    "open_models_folder",
+    "open_output_root",
+    "open_terminal",
+    "pick_output_root",
+    "reveal_output",
+    "reveal_previous_file",
+    "shutdown",
+    "skip_release_status",
+    "start_model_download",
+    "update_settings",
+    "update_settings_v2",
+    "import_paths",
+}
+
+
+def create_lan_app() -> FastAPI:
+    """Build the separately scoped HTTPS LAN surface.
+
+    Local-only routes are omitted from this router, so authorization does not
+    depend on source-IP heuristics.
+    """
+
+    lan = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    lan.state.surface = "lan"
+    for route in app.router.routes:
+        if getattr(route, "name", "") in LAN_EXCLUDED_ROUTE_NAMES:
+            continue
+        lan.router.routes.append(route)
+    lan.add_exception_handler(AppError, _handle_app_error)
+    lan.middleware("http")(_request_pipeline)
+    return lan
+
+
 def cli_main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Run the stemsplat server.")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT)
     parser.add_argument("--task-runner-input", default="")
     args = parser.parse_args(argv)
@@ -7659,1415 +9040,15 @@ def cli_main(argv: Optional[list[str]] = None) -> None:
         _task_runner_main(Path(args.task_runner_input).expanduser())
         return
 
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        parser.error("the desktop listener is local-only; enable LAN HTTPS in settings")
+
     import uvicorn
 
-    _close_installer_ui()
     if not _port_available(args.port):
         raise SystemExit(f"Port {args.port} is already in use.")
     uvicorn.run("main:app", host=args.host, port=args.port, reload=False)
 
-
-INDEX_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>stemsplat</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg-1: #0F2027;
-      --bg-2: #2C5364;
-      --text: #E7ECEF;
-      --muted: #B8C4CC;
-      --accent: #8ED8FF;
-      --accent-strong: #b5ffd8;
-      --accent-soft: #96c5d6;
-      --icon: #9BB6C2;
-      --card: rgba(23, 35, 41, 0.55);
-      --card-done: rgba(40, 66, 77, 0.7);
-      --border: rgba(255,255,255,0.06);
-      --danger: #f57a6d;
-    }
-
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      font-family: "Nunito Sans", sans-serif;
-      color: var(--text);
-      text-transform: lowercase;
-      background: linear-gradient(135deg, #0B1A1F 0%, var(--bg-1) 35%, var(--bg-2) 100%);
-      padding: 56px 0;
-    }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.035"/></svg>') repeat;
-      opacity: .18;
-    }
-
-    body::after {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background:
-        repeating-linear-gradient(0deg, rgba(255,255,255,0.022) 0 1px, transparent 1px 2px),
-        repeating-linear-gradient(90deg, rgba(0,0,0,0.024) 0 1px, transparent 1px 2px);
-      opacity: .14;
-      mix-blend-mode: soft-light;
-    }
-
-    @keyframes fadeUpIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .fade-in {
-      opacity: 0;
-      animation: fadeUpIn 0.55s ease forwards;
-    }
-
-    .delay-1 { animation-delay: 0.04s; }
-    .delay-2 { animation-delay: 0.12s; }
-    .delay-3 { animation-delay: 0.2s; }
-    .delay-4 { animation-delay: 0.28s; }
-
-    @keyframes overlayBlurIn {
-      from {
-        backdrop-filter: blur(0px);
-        -webkit-backdrop-filter: blur(0px);
-        background-color: rgba(4, 10, 13, 0);
-      }
-      to {
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        background-color: rgba(4, 10, 13, 0.56);
-      }
-    }
-
-    @keyframes overlayBlurOut {
-      from {
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        background-color: rgba(4, 10, 13, 0.56);
-      }
-      to {
-        backdrop-filter: blur(0px);
-        -webkit-backdrop-filter: blur(0px);
-        background-color: rgba(4, 10, 13, 0);
-      }
-    }
-
-    @keyframes settingsCardIn {
-      from { opacity: 0; transform: translateY(8px) scale(0.98); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
-
-    @keyframes settingsCardOut {
-      from { opacity: 1; transform: translateY(0) scale(1); }
-      to { opacity: 0; transform: translateY(6px) scale(0.98); }
-    }
-
-    button, input, select {
-      font: inherit;
-    }
-
-    .shell {
-      width: min(980px, calc(100vw - 28px));
-      margin: auto;
-      padding: 0;
-    }
-
-    .shade {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background: rgba(0,0,0,0.24);
-      z-index: -1;
-    }
-
-    .title {
-      margin: 0 0 26px;
-      text-align: center;
-      font-size: clamp(2.7rem, 5vw, 4.6rem);
-      font-weight: 300;
-      letter-spacing: 0.5px;
-      text-shadow: 0 8px 40px rgba(0,0,0,.45);
-    }
-
-    .close-button {
-      position: fixed;
-      top: 14px;
-      left: 14px;
-      width: 40px;
-      height: 40px;
-      display: grid;
-      place-items: center;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.14);
-      color: var(--text);
-      font-size: 18px;
-      margin: 0;
-      box-shadow: 0 10px 30px rgba(0,0,0,.25);
-      backdrop-filter: blur(10px) saturate(120%);
-      -webkit-backdrop-filter: blur(10px) saturate(120%);
-      z-index: 20;
-    }
-
-    .close-button:hover {
-      background: rgba(255,255,255,0.22);
-    }
-
-    .controls {
-      display: flex;
-      gap: 18px;
-      align-items: stretch;
-    }
-
-    .glass {
-      background: var(--card);
-      backdrop-filter: blur(12px) saturate(110%);
-      -webkit-backdrop-filter: blur(12px) saturate(110%);
-      border: 1px solid var(--border);
-      box-shadow: 0 8px 26px rgba(0,0,0,.28);
-    }
-
-    .glass-light {
-      background: rgba(255,255,255,0.12);
-      backdrop-filter: blur(10px) saturate(110%);
-      -webkit-backdrop-filter: blur(10px) saturate(110%);
-      border: 1px solid rgba(255,255,255,0.18);
-      box-shadow: 0 8px 26px rgba(0,0,0,.28);
-    }
-
-    .dropzone {
-      flex: 1 1 auto;
-      min-height: 292px;
-      padding: 26px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      gap: 16px;
-      border-radius: 28px;
-      text-align: center;
-      cursor: pointer;
-      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-    }
-
-    .dropzone:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 12px 32px rgba(0,0,0,.32);
-    }
-
-    .dropzone.dragging {
-      transform: translateY(-2px);
-      border-color: rgba(255,255,255,.16);
-    }
-
-    .dropzone svg {
-      width: 54px;
-      height: 54px;
-      color: var(--icon);
-    }
-
-    .dropzone h3 {
-      margin: 0;
-      font-size: 1.25rem;
-      font-weight: 400;
-      letter-spacing: 0;
-    }
-
-    .dropzone p {
-      margin: 0;
-      color: var(--muted);
-      line-height: 1.55;
-      font-size: 1rem;
-    }
-
-    .dropzone .note {
-      font-size: 0.88rem;
-    }
-
-    .hidden-input {
-      display: none;
-    }
-
-    .controls-side {
-      width: 270px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    .split-card {
-      position: relative;
-      border-radius: 28px;
-      padding: 20px 18px 18px;
-      color: var(--text);
-    }
-
-    .split-head {
-      display: flex;
-      justify-content: flex-end;
-      align-items: flex-start;
-      margin-bottom: 10px;
-    }
-
-    .icon-button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 34px;
-      height: 34px;
-      padding: 0;
-      border-radius: 12px;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-    }
-
-    .icon-button:hover {
-      background: rgba(255,255,255,0.08);
-    }
-
-    .icon-button svg {
-      width: 18px;
-      height: 18px;
-    }
-
-    .modes {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .mode-card {
-      position: relative;
-      display: flex;
-      gap: 10px;
-      align-items: flex-start;
-      cursor: pointer;
-      padding: 2px 0;
-    }
-
-    .mode-card input {
-      position: absolute;
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .mode-card:hover {
-      opacity: 0.92;
-    }
-
-    .mode-card .checkbox {
-      width: 18px;
-      height: 18px;
-      border-radius: 6px;
-      border: 1.5px solid rgba(255,255,255,.35);
-      margin-top: 2px;
-      display: grid;
-      place-items: center;
-      flex-shrink: 0;
-    }
-
-    .mode-card.active .checkbox {
-      background: linear-gradient(135deg, var(--accent-soft), #5fa3b5);
-      border-color: transparent;
-    }
-
-    .mode-card.active .checkbox::after {
-      content: "";
-      width: 6px;
-      height: 10px;
-      border: 2px solid #0F2027;
-      border-top: 0;
-      border-left: 0;
-      transform: rotate(45deg);
-    }
-
-    .mode-card strong {
-      display: block;
-      font-size: 0.95rem;
-      margin-bottom: 0;
-    }
-
-    .mode-card span {
-      display: block;
-      color: var(--muted);
-      font-size: 0.84rem;
-      line-height: 1.45;
-    }
-
-    .small-note {
-      margin: 12px 0 0;
-      color: var(--muted);
-      font-size: 0.82rem;
-      line-height: 1.45;
-    }
-
-    .small-note strong {
-      color: var(--text);
-      font-weight: 700;
-    }
-
-    .warning {
-      display: none;
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      background: rgba(245,122,109,0.12);
-      border: 1px solid rgba(245,122,109,0.16);
-      color: #ffd7d2;
-      font-size: 0.85rem;
-      line-height: 1.45;
-    }
-
-    .warning.show {
-      display: flex;
-    }
-
-    .warning-text {
-      flex: 1 1 280px;
-    }
-
-    .warning-action {
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.08);
-      color: inherit;
-      border-radius: 999px;
-      padding: 8px 12px;
-      font: inherit;
-      cursor: pointer;
-    }
-
-    .warning-action:hover {
-      background: rgba(255,255,255,0.14);
-    }
-
-    .start-button {
-      border-radius: 28px;
-      padding: 18px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      color: white;
-      text-align: center;
-      min-height: 88px;
-    }
-
-    .start-button .start-icon {
-      font-size: 1.15rem;
-      line-height: 1;
-    }
-
-    .start-button .start-text {
-      font-size: 0.92rem;
-      font-weight: 700;
-    }
-
-    .queue-panel {
-      margin-top: 18px;
-      padding: 0;
-      background: transparent;
-      border: 0;
-      box-shadow: none;
-      backdrop-filter: none;
-    }
-
-    .queue-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-
-    .queue-head h2 {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 600;
-      letter-spacing: 0;
-    }
-
-    .queue-head p {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: 0.92rem;
-      line-height: 1.5;
-    }
-
-    .queue-list {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    .queue-item {
-      padding: 16px 18px;
-      border-radius: 22px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      box-shadow: 0 8px 26px rgba(0,0,0,.28);
-      backdrop-filter: blur(12px) saturate(110%);
-      -webkit-backdrop-filter: blur(12px) saturate(110%);
-    }
-
-    .queue-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 14px;
-    }
-
-    .queue-main {
-      flex: 1 1 auto;
-      min-width: 0;
-    }
-
-    .queue-name {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      word-break: break-word;
-    }
-
-    .queue-subline {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 0.9rem;
-      line-height: 1.45;
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 5px 10px;
-      border-radius: 999px;
-      font-size: 0.78rem;
-      font-weight: 700;
-      background: rgba(255,255,255,0.1);
-      color: var(--muted);
-      margin-top: 10px;
-    }
-
-    .status-badge.status-running,
-    .status-badge.status-queued,
-    .status-badge.status-uploading {
-      color: var(--accent-strong);
-      border: 1px solid rgba(181,255,216,0.18);
-    }
-
-    .status-badge.status-done {
-      color: #dfffe5;
-      background: rgba(106, 189, 128, 0.12);
-    }
-
-    .status-badge.status-error,
-    .status-badge.status-stopped {
-      color: #ffd7d2;
-      background: rgba(245,122,109,0.12);
-    }
-
-    .queue-stage {
-      margin-top: 12px;
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      color: var(--muted);
-      font-size: 0.92rem;
-      line-height: 1.4;
-    }
-
-    .queue-stage.progress-only {
-      justify-content: flex-end;
-    }
-
-    .queue-stage strong {
-      color: var(--text);
-      font-weight: 700;
-    }
-
-    .progress-shell {
-      margin-top: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.08);
-      overflow: hidden;
-    }
-
-    .progress-fill {
-      height: 100%;
-      border-radius: inherit;
-      width: 100%;
-      transform: scaleX(0);
-      transform-origin: left center;
-      transition: transform 0.52s cubic-bezier(.22,.61,.36,1);
-      will-change: transform;
-      background: linear-gradient(90deg, #76cfba 0%, #baf7d8 55%, #e0fff3 100%);
-      box-shadow: inset 0 0 16px rgba(255,255,255,0.22);
-    }
-
-    .queue-actions {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      gap: 8px;
-      min-width: 160px;
-    }
-
-    .button {
-      border-radius: 14px;
-      padding: 10px 14px;
-      font-weight: 700;
-    }
-
-    .button:hover { transform: translateY(-1px); }
-    .button:disabled { cursor: not-allowed; opacity: 0.5; transform: none; }
-
-    .button.primary {
-      background: linear-gradient(135deg, #89dbc2, #baffde);
-      color: #081116;
-      box-shadow: 0 14px 34px rgba(132, 213, 191, 0.22);
-    }
-
-    .button.secondary {
-      background: rgba(255,255,255,0.07);
-      color: var(--text);
-      border: 1px solid rgba(255,255,255,0.08);
-    }
-
-    .button.ghost {
-      background: transparent;
-      color: var(--muted);
-      border: 1px solid rgba(255,255,255,0.08);
-    }
-
-    .button.danger {
-      background: rgba(245,122,109,0.12);
-      color: #ffd7d2;
-      border: 1px solid rgba(245,122,109,0.16);
-    }
-
-    .empty {
-      padding: 34px 20px;
-      text-align: center;
-      color: var(--muted);
-      border-radius: 20px;
-      border: 1px dashed rgba(255,255,255,0.08);
-      background: rgba(255,255,255,0.02);
-    }
-
-    .modal-shell {
-      position: fixed;
-      inset: 0;
-      display: none;
-      place-items: center;
-      background: rgba(4, 10, 13, 0.56);
-      backdrop-filter: blur(10px);
-      padding: 24px;
-    }
-
-    .modal-shell.open {
-      display: grid;
-      animation: overlayBlurIn .28s ease both;
-    }
-
-    .modal-shell.closing {
-      display: grid;
-      animation: overlayBlurOut .18s ease both;
-    }
-
-    .modal {
-      width: min(460px, 100%);
-      padding: 24px;
-    }
-
-    .settings-card-in {
-      animation: settingsCardIn .28s cubic-bezier(.2,.7,.2,1) both;
-    }
-
-    .settings-card-out {
-      animation: settingsCardOut .18s ease both;
-    }
-
-    .modal h3 {
-      margin: 0;
-      font-size: 1.35rem;
-      letter-spacing: -0.04em;
-    }
-
-    .modal p {
-      color: var(--muted);
-      line-height: 1.5;
-    }
-
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-top: 18px;
-    }
-
-    .field label {
-      font-size: 0.88rem;
-      color: var(--muted);
-      text-transform: lowercase;
-      letter-spacing: 0.08em;
-    }
-
-    .field select {
-      width: 100%;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 16px;
-      background: rgba(255,255,255,0.05);
-      color: var(--text);
-      padding: 14px;
-    }
-
-    .modal-actions {
-      margin-top: 22px;
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    }
-
-    @media (max-width: 900px) {
-      .controls {
-        flex-direction: column;
-      }
-      .controls-side {
-        width: 100%;
-      }
-      .queue-row {
-        flex-direction: column;
-      }
-      .queue-actions {
-        width: 100%;
-        justify-content: flex-start;
-      }
-    }
-
-    @media (max-width: 620px) {
-      .shell {
-        width: min(100vw, calc(100vw - 18px));
-      }
-      body {
-        padding: 40px 0;
-      }
-      .button {
-        width: 100%;
-        justify-content: center;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="shade"></div>
-  <button id="close-button" class="close-button" type="button" aria-label="Quit">×</button>
-
-  <main class="shell">
-    <h1 class="title fade-in delay-1">stemsplat</h1>
-
-    <section class="controls">
-      <label id="dropzone" class="dropzone glass fade-in delay-2" for="file-input" role="button" tabindex="0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M12 15V9m0 0l3 3m-3-3L9 12m3 9a9 9 0 110-18 9 9 0 010 18z"></path>
-        </svg>
-        <div>
-          <h3>drop songs here</h3>
-          <p>or click to choose files</p>
-        </div>
-        <input id="file-input" class="hidden-input" type="file" accept=".wav,.wave,.mp3,.m4a,.aac,.flac,.ogg,.oga,.aif,.aiff,.alac,.opus,audio/*" multiple>
-      </label>
-
-      <div class="controls-side">
-        <section class="split-card glass fade-in delay-3">
-          <div class="split-head">
-            <button id="settings-button" class="icon-button" type="button" aria-label="Open settings">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33A1.65 1.65 0 0 0 9 3.09V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.51a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.47.47-.61 1.18-.33 1.82.27.6.86.97 1.51.97H21a2 2 0 1 1 0 4h-.09c-.65 0-1.24.38-1.51.97Z"></path>
-              </svg>
-            </button>
-          </div>
-
-          <div class="modes" id="mode-picker">
-            <label class="mode-card active" data-mode="vocals">
-              <input type="radio" name="split-mode" value="vocals" checked>
-              <div class="checkbox"></div>
-              <div>
-                <strong>vocals</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="instrumental">
-              <input type="radio" name="split-mode" value="instrumental">
-              <div class="checkbox"></div>
-              <div>
-                <strong>instrumental</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="both_deux">
-              <input type="radio" name="split-mode" value="both_deux">
-              <div class="checkbox"></div>
-              <div>
-                <strong>both (deux)</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="both_separate">
-              <input type="radio" name="split-mode" value="both_separate">
-              <div class="checkbox"></div>
-              <div>
-                <strong>both (separate)</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="guitar">
-              <input type="radio" name="split-mode" value="guitar">
-              <div class="checkbox"></div>
-              <div>
-                <strong>mel-band guitar</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="mel_band_karaoke">
-              <input type="radio" name="split-mode" value="mel_band_karaoke">
-              <div class="checkbox"></div>
-              <div>
-                <strong>bg vocal</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="bs_roformer_6s">
-              <input type="radio" name="split-mode" value="bs_roformer_6s">
-              <div class="checkbox"></div>
-              <div>
-                <strong>full mix</strong>
-              </div>
-            </label>
-            <label class="mode-card" data-mode="preset_denoise">
-              <input type="radio" name="split-mode" value="preset_denoise">
-              <div class="checkbox"></div>
-              <div>
-                <strong>denoise</strong>
-              </div>
-            </label>
-          </div>
-
-        </section>
-
-        <button id="start-button" class="start-button glass-light fade-in delay-4" type="button" disabled>start</button>
-        <div id="models-warning" class="warning">
-          <span id="models-warning-text" class="warning-text"></span>
-          <button id="models-folder-button" class="warning-action" type="button" hidden>open models folder</button>
-        </div>
-      </div>
-    </section>
-
-    <section id="queue-panel" class="queue-panel fade-in delay-4">
-      <div id="empty-state" class="empty">nothing queued yet.</div>
-      <div id="queue" class="queue-list"></div>
-    </section>
-  </main>
-
-  <div id="settings-modal" class="modal-shell" aria-hidden="true">
-    <div class="modal glass" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <h3 id="settings-title">settings</h3>
-      <p>Choose the format for exported stems.</p>
-      <div class="field">
-        <label for="output-format">output format</label>
-        <select id="output-format">
-          <option value="same_as_input">same as input</option>
-          <option value="mp3_320">320kb mp3</option>
-          <option value="mp3_128">128kb mp3</option>
-          <option value="wav">wav</option>
-          <option value="m4a">m4a</option>
-          <option value="flac">flac</option>
-        </select>
-      </div>
-      <div class="modal-actions">
-        <button id="settings-cancel" class="button ghost" type="button">cancel</button>
-        <button id="settings-save" class="button primary" type="button">save</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const MODE_LABELS = {
-      vocals: 'vocals',
-      instrumental: 'instrumental',
-      both_deux: 'both (deux)',
-      both_separate: 'both (separate)',
-      guitar: 'mel-band guitar',
-      mel_band_karaoke: 'bg vocal',
-      bs_roformer_6s: 'full mix',
-      preset_denoise: 'denoise',
-    };
-
-    const OUTPUT_LABELS = {
-      same_as_input: 'same as input',
-      mp3_320: '320kb mp3',
-      mp3_128: '128kb mp3',
-      wav: 'wav',
-      m4a: 'm4a',
-      flac: 'flac',
-    };
-
-    const queueEl = document.getElementById('queue');
-    const queuePanelEl = document.getElementById('queue-panel');
-    const emptyStateEl = document.getElementById('empty-state');
-    const startButton = document.getElementById('start-button');
-    const fileInput = document.getElementById('file-input');
-    const dropzone = document.getElementById('dropzone');
-    const settingsButton = document.getElementById('settings-button');
-    const settingsModal = document.getElementById('settings-modal');
-    const settingsCancel = document.getElementById('settings-cancel');
-    const settingsSave = document.getElementById('settings-save');
-    const outputFormatSelect = document.getElementById('output-format');
-    const closeButton = document.getElementById('close-button');
-    const modelsWarning = document.getElementById('models-warning');
-    const modelsWarningText = document.getElementById('models-warning-text');
-    const modelsFolderButton = document.getElementById('models-folder-button');
-    const settingsCard = settingsModal.querySelector('.modal');
-
-    const settings = {
-      output_format: localStorage.getItem('stemsplat.output_format') || 'same_as_input',
-    };
-
-    let selectedMode = 'vocals';
-    let tasks = [];
-    let startBusy = false;
-    let settingsCloseTimer = null;
-    let missingModels = [];
-    let modelsDir = '';
-
-    function missingForMode(mode) {
-      if (mode === 'vocals') return missingModels.includes('vocals') ? ['vocals'] : [];
-      if (mode === 'instrumental') return missingModels.includes('instrumental') ? ['instrumental'] : [];
-      if (mode === 'both_deux') return missingModels.includes('deux') ? ['deux'] : [];
-      if (mode === 'both_separate') {
-        return ['vocals', 'instrumental'].filter((name) => missingModels.includes(name));
-      }
-      if (mode === 'guitar') return missingModels.includes('guitar') ? ['guitar'] : [];
-      if (mode === 'mel_band_karaoke') {
-        return ['vocals', 'mel_band_karaoke'].filter((name) => missingModels.includes(name));
-      }
-      if (mode === 'bs_roformer_6s') return missingModels.includes('bs_roformer_6s') ? ['bs_roformer_6s'] : [];
-      if (mode === 'preset_denoise') return missingModels.includes('denoise') ? ['denoise'] : [];
-      return [];
-    }
-
-    function pendingMissingModels() {
-      const missing = new Set();
-      tasks
-        .filter((task) => task.status === 'pending')
-        .forEach((task) => missingForMode(task.mode).forEach((name) => missing.add(name)));
-      return Array.from(missing);
-    }
-
-    function updateOutputSummary() {
-      outputFormatSelect.value = settings.output_format;
-    }
-
-    function setMode(mode) {
-      selectedMode = mode;
-      document.querySelectorAll('.mode-card').forEach((card) => {
-        const active = card.dataset.mode === mode;
-        card.classList.toggle('active', active);
-        const input = card.querySelector('input');
-        if (input) input.checked = active;
-      });
-      showModelsWarning(missingModels);
-    }
-
-    function humanEta(seconds) {
-      if (!Number.isFinite(seconds) || seconds <= 0) return '';
-      const mins = Math.floor(seconds / 60);
-      const secs = seconds % 60;
-      if (mins >= 60) {
-        const hours = Math.floor(mins / 60);
-        const remMins = mins % 60;
-        return `${hours}h ${remMins}m remaining`;
-      }
-      if (mins > 0) return `${mins}m ${secs}s remaining`;
-      return `${secs}s remaining`;
-    }
-
-    function statusLabel(status) {
-      if (status === 'queued') return 'queued';
-      if (status === 'running') return 'running';
-      if (status === 'done') return 'done';
-      if (status === 'error') return 'error';
-      if (status === 'stopped') return 'stopped';
-      if (status === 'uploading') return 'uploading';
-      return 'ready';
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    function isTerminal(task) {
-      return ['done', 'error', 'stopped'].includes(task.status);
-    }
-
-    function makeLocalTask(file) {
-      return {
-        localId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        id: null,
-        file,
-        name: file.name,
-        mode: selectedMode,
-        output_format: settings.output_format,
-        status: 'pending',
-        stage: 'ready',
-        pct: 0,
-        eta_seconds: null,
-        out_dir: null,
-        outputs: [],
-        error: null,
-        eventSource: null,
-        abortController: null,
-        removed: false,
-      };
-    }
-
-    function updateStartButton() {
-      const pendingCount = tasks.filter((task) => task.status === 'pending').length;
-      startButton.disabled = startBusy || pendingCount === 0 || pendingMissingModels().length > 0;
-      startButton.textContent = startBusy ? 'starting...' : 'start';
-    }
-
-    function updateQueueSummary() {
-      const queueSummaryEl = document.getElementById('queue-summary');
-      if (!queueSummaryEl) {
-        return;
-      }
-      if (tasks.length === 0) {
-        queueSummaryEl.textContent = 'add songs, then press start.';
-        return;
-      }
-      const pending = tasks.filter((task) => task.status === 'pending').length;
-      const active = tasks.filter((task) => ['queued', 'running', 'uploading'].includes(task.status)).length;
-      const done = tasks.filter((task) => task.status === 'done').length;
-      queueSummaryEl.textContent = `${tasks.length} song${tasks.length === 1 ? '' : 's'} • ${pending} waiting • ${active} working • ${done} done`;
-    }
-
-    function renderQueue() {
-      queueEl.innerHTML = '';
-      if (queuePanelEl) {
-        queuePanelEl.style.display = tasks.length === 0 ? 'none' : 'block';
-      }
-      emptyStateEl.style.display = 'none';
-
-      tasks.forEach((task) => {
-        const item = document.createElement('article');
-        item.className = 'queue-item';
-
-        const pct = Math.max(0, Math.min(100, task.pct || 0));
-        const eta = humanEta(task.eta_seconds);
-        const stageText = task.error ? task.error : '';
-        const modeLabel = MODE_LABELS[task.mode] || task.mode;
-        const outputLabel = task.output_format === 'same_as_input'
-          ? ''
-          : (OUTPUT_LABELS[task.output_format] || task.output_format);
-        const queueMeta = outputLabel ? `${modeLabel} • ${outputLabel}` : modeLabel;
-        // Keep ETA calculation in place, but suppress it from the visible UI.
-        const progressSide = `${pct}%`;
-        const badgeText = statusLabel(task.status);
-        const showStatusBadge = ['error', 'stopped'].includes(task.status)
-          || (task.status === 'done' && stageText.trim().toLowerCase() !== badgeText);
-        const statusBadgeHtml = showStatusBadge
-          ? `<div class="status-badge status-${task.status}">${badgeText}</div>`
-          : '';
-        const stageHtml = stageText
-          ? `
-              <div class="queue-stage">
-                <strong>${escapeHtml(stageText)}</strong>
-                <span>${escapeHtml(progressSide)}</span>
-              </div>
-            `
-          : `
-              <div class="queue-stage progress-only">
-                <span>${escapeHtml(progressSide)}</span>
-              </div>
-            `;
-
-        item.innerHTML = `
-          <div class="queue-row">
-            <div class="queue-main">
-              <p class="queue-name">${escapeHtml(task.name)}</p>
-              <div class="queue-subline">${escapeHtml(queueMeta)}</div>
-              ${statusBadgeHtml}
-              ${stageHtml}
-              <div class="progress-shell">
-                <div class="progress-fill" style="transform:scaleX(${pct / 100})"></div>
-              </div>
-            </div>
-            <div class="queue-actions" data-actions="${task.localId}">
-            </div>
-          </div>
-        `;
-
-        const actions = item.querySelector('.queue-actions');
-        if (task.status === 'pending') {
-          const remove = document.createElement('button');
-          remove.className = 'button ghost';
-          remove.textContent = 'remove';
-          remove.addEventListener('click', () => {
-            task.removed = true;
-            tasks = tasks.filter((entry) => entry.localId !== task.localId);
-            renderQueue();
-          });
-          actions.appendChild(remove);
-        } else {
-          if (!task.id) {
-            const remove = document.createElement('button');
-            remove.className = 'button ghost';
-            remove.textContent = 'remove';
-            remove.addEventListener('click', () => {
-              task.removed = true;
-              if (task.abortController) {
-                task.abortController.abort();
-                task.abortController = null;
-              }
-              tasks = tasks.filter((entry) => entry.localId !== task.localId);
-              renderQueue();
-            });
-            actions.appendChild(remove);
-          }
-
-          if (['queued', 'running', 'uploading'].includes(task.status) && task.id) {
-            const stop = document.createElement('button');
-            stop.className = 'button danger';
-            stop.textContent = 'stop';
-            stop.disabled = task.status === 'uploading';
-            stop.addEventListener('click', async () => {
-              try {
-                await fetch(`/api/tasks/${task.id}/stop`, { method: 'POST' });
-              } catch (error) {
-                console.error(error);
-              }
-            });
-            actions.appendChild(stop);
-          }
-
-          if (task.status === 'done' && task.id) {
-            const reveal = document.createElement('button');
-            reveal.className = 'button secondary';
-            reveal.textContent = (task.outputs || []).length === 1 ? 'show song' : 'show files';
-            reveal.addEventListener('click', async () => {
-              try {
-                await fetch(`/api/tasks/${task.id}/reveal`, { method: 'POST' });
-              } catch (error) {
-                console.error(error);
-              }
-            });
-            actions.appendChild(reveal);
-          }
-
-          if (task.id && isTerminal(task)) {
-            const retry = document.createElement('button');
-            retry.className = 'button ghost';
-            retry.textContent = 'retry';
-            retry.addEventListener('click', async () => {
-              try {
-                const res = await fetch(`/api/tasks/${task.id}/retry`, { method: 'POST' });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.message || data.detail?.message || 'Retry failed');
-                if (task.eventSource) task.eventSource.close();
-                Object.assign(task, {
-                  id: data.id,
-                  status: data.status,
-                  stage: data.stage,
-                  pct: data.pct,
-                  eta_seconds: data.eta_seconds,
-                  out_dir: data.out_dir,
-                  outputs: data.outputs,
-                  error: data.error,
-                });
-                subscribeToTask(task);
-                renderQueue();
-              } catch (error) {
-                console.error(error);
-              }
-            });
-            actions.appendChild(retry);
-          }
-        }
-
-        queueEl.appendChild(item);
-      });
-
-      showModelsWarning(missingModels);
-      updateQueueSummary();
-      updateStartButton();
-    }
-
-    function subscribeToTask(task) {
-      if (!task.id) return;
-      if (task.eventSource) task.eventSource.close();
-      const source = new EventSource(`/api/tasks/${task.id}/events`);
-      task.eventSource = source;
-      source.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        Object.assign(task, {
-          id: data.id,
-          status: data.status,
-          stage: data.stage,
-          pct: data.pct,
-          eta_seconds: data.eta_seconds,
-          out_dir: data.out_dir,
-          outputs: data.outputs || [],
-          error: data.error,
-        });
-        renderQueue();
-        if (isTerminal(task)) {
-          source.close();
-          task.eventSource = null;
-        }
-      };
-      source.onerror = () => {
-        if (isTerminal(task)) {
-          source.close();
-          task.eventSource = null;
-        }
-      };
-    }
-
-    async function addFiles(fileList) {
-      const incoming = Array.from(fileList || []).filter(Boolean);
-      fileInput.value = '';
-      if (incoming.length === 0) return;
-      incoming.forEach((file) => tasks.push(makeLocalTask(file)));
-      renderQueue();
-    }
-
-    async function startPending() {
-      const pending = tasks.filter((task) => task.status === 'pending' && task.file);
-      if (pending.length === 0) return;
-      if (pendingMissingModels().length > 0) {
-        renderQueue();
-        return;
-      }
-      startBusy = true;
-      updateStartButton();
-      try {
-        for (const task of pending) {
-          if (task.removed || !tasks.includes(task)) {
-            continue;
-          }
-          try {
-            task.status = 'uploading';
-            task.stage = 'uploading';
-            task.pct = 0;
-            task.error = null;
-            renderQueue();
-
-            const body = new FormData();
-            body.append('file', task.file);
-            body.append('mode', task.mode);
-            body.append('output_format', task.output_format);
-            task.abortController = new AbortController();
-
-            const res = await fetch('/api/tasks', { method: 'POST', body, signal: task.abortController.signal });
-            const data = await res.json();
-            task.abortController = null;
-            if (!res.ok) {
-              throw new Error(data.message || data.detail?.message || 'Upload failed');
-            }
-            if (task.removed || !tasks.includes(task)) {
-              if (data.id) {
-                fetch(`/api/tasks/${data.id}/stop`, { method: 'POST' }).catch(() => {});
-              }
-              continue;
-            }
-
-            task.file = null;
-            task.id = data.id;
-            task.status = data.status;
-            task.stage = data.stage;
-            task.pct = data.pct;
-            task.eta_seconds = data.eta_seconds;
-            task.out_dir = data.out_dir;
-            task.outputs = data.outputs || [];
-            task.error = data.error;
-            subscribeToTask(task);
-            renderQueue();
-          } catch (error) {
-            task.abortController = null;
-            if (error?.name === 'AbortError' || task.removed) {
-              continue;
-            }
-            task.status = 'error';
-            task.stage = 'error';
-            task.error = error?.message || 'Upload failed';
-            renderQueue();
-          }
-        }
-      } finally {
-        startBusy = false;
-        updateStartButton();
-      }
-    }
-
-    function openSettings() {
-      if (settingsCloseTimer) {
-        clearTimeout(settingsCloseTimer);
-        settingsCloseTimer = null;
-      }
-      settingsModal.classList.add('open');
-      settingsModal.classList.remove('closing');
-      settingsModal.setAttribute('aria-hidden', 'false');
-      if (settingsCard) {
-        settingsCard.classList.remove('settings-card-out');
-        void settingsCard.offsetWidth;
-        settingsCard.classList.add('settings-card-in');
-      }
-      outputFormatSelect.value = settings.output_format;
-    }
-
-    function closeSettings() {
-      if (!settingsModal.classList.contains('open')) return;
-      settingsModal.classList.add('closing');
-      settingsModal.setAttribute('aria-hidden', 'true');
-      if (settingsCard) {
-        settingsCard.classList.remove('settings-card-in');
-        settingsCard.classList.add('settings-card-out');
-      }
-      settingsCloseTimer = window.setTimeout(() => {
-        settingsModal.classList.remove('open', 'closing');
-        if (settingsCard) {
-          settingsCard.classList.remove('settings-card-out');
-        }
-        settingsCloseTimer = null;
-      }, 180);
-    }
-
-    function showModelsWarning(missing, nextModelsDir = modelsDir) {
-      missingModels = Array.isArray(missing) ? [...missing] : [];
-      modelsDir = nextModelsDir || modelsDir || '';
-      const relevantMissing = pendingMissingModels().length > 0 ? pendingMissingModels() : missingForMode(selectedMode);
-      if (relevantMissing.length === 0) {
-        modelsWarning.classList.remove('show');
-        modelsWarningText.textContent = '';
-        modelsFolderButton.hidden = true;
-        updateStartButton();
-        return;
-      }
-      modelsWarning.classList.add('show');
-      modelsWarningText.textContent = modelsDir
-        ? `missing models: ${relevantMissing.join(', ')}. add them to ${modelsDir} before starting.`
-        : `missing models: ${relevantMissing.join(', ')}. add them to the models folder before starting.`;
-      modelsFolderButton.hidden = !modelsDir;
-      updateStartButton();
-    }
-
-    async function loadModelsWarning() {
-      try {
-        const res = await fetch('/api/models_status');
-        if (!res.ok) return;
-        const data = await res.json();
-        showModelsWarning(data.missing || [], data.models_dir || '');
-      } catch (error) {
-        console.error(error);
-      }
-    }
-
-    fileInput.addEventListener('change', (event) => addFiles(event.target.files));
-    dropzone.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        fileInput.click();
-      }
-    });
-    dropzone.addEventListener('dragover', (event) => {
-      event.preventDefault();
-      dropzone.classList.add('dragging');
-    });
-    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragging'));
-    dropzone.addEventListener('drop', (event) => {
-      event.preventDefault();
-      dropzone.classList.remove('dragging');
-      addFiles(event.dataTransfer.files);
-    });
-
-    document.querySelectorAll('.mode-card').forEach((card) => {
-      card.addEventListener('click', () => setMode(card.dataset.mode));
-    });
-
-    modelsFolderButton.addEventListener('click', async () => {
-      try {
-        await fetch('/api/open_models_folder', { method: 'POST' });
-      } catch (error) {
-        console.error(error);
-      }
-    });
-    document.querySelectorAll('.mode-card input').forEach((input) => {
-      input.addEventListener('change', (event) => setMode(event.target.value));
-    });
-
-    startButton.addEventListener('click', startPending);
-
-    settingsButton.addEventListener('click', openSettings);
-    settingsCancel.addEventListener('click', closeSettings);
-    settingsSave.addEventListener('click', () => {
-      settings.output_format = outputFormatSelect.value;
-      localStorage.setItem('stemsplat.output_format', settings.output_format);
-      updateOutputSummary();
-      closeSettings();
-    });
-
-    settingsModal.addEventListener('click', (event) => {
-      if (event.target === settingsModal) closeSettings();
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && settingsModal.classList.contains('open')) {
-        closeSettings();
-      }
-    });
-
-    closeButton.addEventListener('click', async () => {
-      try {
-        await fetch('/shutdown', { method: 'POST', keepalive: true });
-      } catch (error) {
-        console.error(error);
-      }
-      setTimeout(() => {
-        try { window.close(); } catch (_) {}
-        window.location.replace('about:blank');
-      }, 250);
-    });
-
-    updateOutputSummary();
-    setMode(selectedMode);
-    renderQueue();
-    loadModelsWarning();
-  </script>
-</body>
-</html>
-"""
 
 
 if __name__ == "__main__":  # pragma: no cover

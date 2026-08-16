@@ -12,6 +12,9 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app_paths import RESOURCE_DIR
+from stemsplat.model_manifest import ModelManifest
+
 try:  # noqa: SIM105 - allow offline environments
     import certifi
 except Exception:  # pragma: no cover - optional dependency
@@ -23,85 +26,20 @@ MIN_FREE_SPACE_BUFFER_BYTES = 64 * 1024 * 1024
 SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where()) if certifi else ssl.create_default_context()
 HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 
+# Model downloads are derived only from the release manifest; no mutable URL is retained.
+_MODEL_MANIFEST = ModelManifest(RESOURCE_DIR / "models" / "manifest.json")
 FILES = [
     {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/main/mel_band_roformer_vocals_becruily.ckpt?download=true",
+        "url": artifact.url or "",
         "subdir": "models",
-        "filename": "mel_band_roformer_vocals_becruily.ckpt",
-        "tag": "vocals",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-instrumental/resolve/main/mel_band_roformer_instrumental_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_instrumental_becruily.ckpt",
-        "tag": "instrumental",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-deux/resolve/main/becruily_deux.ckpt?download=true",
-        "subdir": "models",
-        "filename": "becruily_deux.ckpt",
-        "tag": "deux",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-guitar/resolve/main/becruily_guitar.ckpt?download=true",
-        "subdir": "models",
-        "filename": "becruily_guitar.ckpt",
-        "tag": "guitar",
-    },
-    {
-        "url": "https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/main/mel_band_roformer_karaoke_becruily.ckpt?download=true",
-        "subdir": "models",
-        "filename": "mel_band_roformer_karaoke_becruily.ckpt",
-        "tag": "mel_band_karaoke",
-    },
-    {
-        "url": "https://huggingface.co/jarredou/aufr33_MelBand_Denoise/resolve/main/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt?download=true",
-        "subdir": "models",
-        "filename": "denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt",
-        "tag": "denoise",
-    },
-    {
-        "url": "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true",
-        "subdir": "models",
-        "filename": "BS-Rofo-SW-Fixed.ckpt",
-        "tag": "bs_roformer_6s",
-    },
-    {
-        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
-        "subdir": "models",
-        "filename": "f7e0c4bc-ba3fe64a.th",
-        "tag": "htdemucs_ft_drums",
-    },
-    {
-        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
-        "subdir": "models",
-        "filename": "d12395a8-e57c48e6.th",
-        "tag": "htdemucs_ft_bass",
-    },
-    {
-        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
-        "subdir": "models",
-        "filename": "92cfc3b6-ef3bcb9c.th",
-        "tag": "htdemucs_ft_other",
-    },
-    {
-        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
-        "subdir": "models",
-        "filename": "5c90dfd2-34c22ccb.th",
-        "tag": "htdemucs_6s",
-    },
-    {
-        "url": "https://github.com/jarredou/models/releases/download/aufr33-jarredou_MDX23C_DrumSep_model_v0.1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
-        "subdir": "models",
-        "filename": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
-        "tag": "drumsep_6s",
-    },
-    {
-        "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.5/model_drumsep.th",
-        "subdir": "models",
-        "filename": "model_drumsep.th",
-        "tag": "drumsep_4s",
-    },
+        "filename": artifact.filename,
+        "tag": artifact.tag,
+        "expected_size": artifact.byte_length,
+        "sha256": artifact.sha256,
+        "auto_download": artifact.auto_download,
+        "blocked_reason": artifact.blocked_reason or "",
+    }
+    for artifact in _MODEL_MANIFEST.by_tag.values()
 ]
 
 
@@ -170,6 +108,13 @@ def _merge_remote_metadata(primary: RemoteFileMetadata, fallback: RemoteFileMeta
         size=primary.size if primary.size is not None else fallback.size,
         sha256=primary.sha256 if primary.sha256 is not None else fallback.sha256,
     )
+
+
+def _selected_items(selected: list[str] | None = None) -> list[Mapping[str, Any]]:
+    available_by_tag = {str(item.get("tag") or ""): item for item in FILES if item.get("tag")}
+    if selected:
+        return [available_by_tag[tag] for tag in dict.fromkeys(str(tag) for tag in selected) if tag in available_by_tag]
+    return list(FILES)
 
 
 def _format_bytes(value: int) -> str:
@@ -310,6 +255,23 @@ def get_remote_file_metadata(url: str) -> RemoteFileMetadata:
         return RemoteFileMetadata()
 
 
+def describe_downloads(selected: list[str] | None = None) -> list[dict[str, Any]]:
+    descriptions: list[dict[str, Any]] = []
+    for item in _selected_items(selected):
+        expected_size = item.get("expected_size")
+        descriptions.append(
+            {
+                "tag": str(item.get("tag") or ""),
+                "filename": str(item.get("filename") or ""),
+                "url": str(item.get("url") or ""),
+                "size_bytes": int(expected_size) if isinstance(expected_size, int) and expected_size > 0 else None,
+                "auto_download": bool(item.get("auto_download")),
+                "blocked_reason": str(item.get("blocked_reason") or ""),
+            }
+        )
+    return descriptions
+
+
 def _emit_progress(
     progress_cb: Callable[[dict[str, Any]], None] | None,
     *,
@@ -347,11 +309,7 @@ def download_to(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     base_dir = base_dir.resolve()
-    available_by_tag = {str(item.get("tag") or ""): item for item in FILES if item.get("tag")}
-    if selected:
-        selected_items = [available_by_tag[tag] for tag in dict.fromkeys(str(tag) for tag in selected) if tag in available_by_tag]
-    else:
-        selected_items = list(FILES)
+    selected_items = _selected_items(selected)
     if not selected_items:
         _emit_progress(
             progress_cb,
@@ -370,6 +328,14 @@ def download_to(
     completed_bytes = 0
     for item in selected_items:
         tag = str(item.get("tag") or "")
+        if not bool(item.get("auto_download", True)):
+            reason = str(item.get("blocked_reason") or "license and immutable hash review is incomplete")
+            raise _download_error(
+                "unlicensed-model",
+                f"automatic download is blocked for {item['filename']}: {reason}",
+                retryable=False,
+                item=item,
+            )
         url, _dest = _validate_item(item, base_dir=base_dir)
         remote_sha256 = _normalize_sha256(str(item.get("sha256") or "")) if item.get("sha256") else None
         if item.get("sha256") and remote_sha256 is None:
