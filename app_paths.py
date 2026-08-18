@@ -47,6 +47,8 @@ OUTPUT_ROOT = (Path.home() / "Downloads").expanduser()
 SETTINGS_PATH = APP_SUPPORT_DIR / "settings.json"
 ETA_HISTORY_PATH = APP_SUPPORT_DIR / "eta_history.json"
 PREVIOUS_FILES_INDEX_PATH = APP_SUPPORT_DIR / "previous_files.json"
+STATE_DB_PATH = APP_SUPPORT_DIR / "state.sqlite3"
+LAN_DIR = APP_SUPPORT_DIR / "lan"
 
 
 def ensure_app_dirs() -> None:
@@ -60,6 +62,7 @@ def ensure_app_dirs() -> None:
         ARTWORK_DIR,
         INTERMEDIATE_CACHE_DIR,
         PREVIOUS_FILES_DIR,
+        LAN_DIR,
         OUTPUT_ROOT,
     ):
         path.mkdir(parents=True, exist_ok=True)

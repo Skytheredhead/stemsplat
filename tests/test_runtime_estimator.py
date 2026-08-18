@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import queue
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -382,6 +384,27 @@ class RuntimeEstimatorTests(unittest.TestCase):
         main.task_queue.task_done()
         self.assertEqual(main.task_queue.get_nowait(), "queued-later")
         main.task_queue.task_done()
+
+    def test_queue_capacity_rejects_excess_active_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "song.wav"
+            source_path.write_bytes(b"data")
+            existing = self._build_task("task-1", source_path)
+            existing["status"] = "queued"
+            candidate = self._build_task("task-2", source_path)
+            with main.tasks_lock:
+                main.tasks["task-1"] = existing
+                main.tasks["task-2"] = candidate
+            with mock.patch.object(main, "MAX_ACTIVE_TASKS", 1):
+                with self.assertRaises(main.AppError):
+                    main._enqueue_task("task-2")
+
+    def test_interruptible_subprocess_times_out_and_terminates(self) -> None:
+        with self.assertRaises(subprocess.TimeoutExpired):
+            main._run_interruptible_subprocess(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                timeout_seconds=0.1,
+            )
 
     def test_restart_task_rejects_retry_while_original_is_still_processing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

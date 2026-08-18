@@ -44,8 +44,7 @@ choice_event = threading.Event()
 shutdown_event = threading.Event()
 PORT = 6060
 MAIN_PORT = 9876
-MODEL_URLS = [(item["filename"], item["url"]) for item in DL_FILES]
-TOTAL_BYTES = int(2.60 * 1024**3)
+RUNTIME_LOCK = BASE_DIR / "requirements-macos-arm64.lock"
 
 ALIAS_MAP = {
     "models": {
@@ -66,6 +65,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):  # noqa: A003 - match base signature
         logger.info("HTTP %s", format % args)
+
+    def end_headers(self):
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:9876 http://localhost:9876; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        super().end_headers()
 
     def do_GET(self):
         if self.path == "/progress":
@@ -238,7 +244,7 @@ def _models_missing() -> bool:
 
 
 def _start_server():
-    logger.info("starting main server with uvicorn on port %s", MAIN_PORT)
+    logger.info("starting local-only main server on port %s", MAIN_PORT)
     if not _port_available(MAIN_PORT):
         logger.info("main server already running on port %s; opening browser", MAIN_PORT)
         progress["main_running"] = True
@@ -246,7 +252,7 @@ def _start_server():
         shutdown_event.set()
         return
     subprocess.Popen(
-        [str(python_path()), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(MAIN_PORT)],
+        [str(python_path()), "launcher.py", "--no-browser", "--host", "127.0.0.1", "--port", str(MAIN_PORT)],
         cwd=BASE_DIR,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -279,19 +285,12 @@ def install():
         progress["models_missing"] = _missing_required_models()
         if _installed():
             logger.info("virtual environment already present")
-        steps = []
-        steps.append(('preparing virtual environment', None))
-        steps.append(('upgrading pip', pip_cmd('install', '--upgrade', 'pip')))
-        reqs = []
-        req_file = BASE_DIR / 'requirements.txt'
-        if req_file.exists():
-            for line in req_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    reqs.append(line)
-        steps.extend([
-            (f'installing {pkg}', pip_cmd('install', pkg)) for pkg in reqs
-        ])
+        if not RUNTIME_LOCK.is_file():
+            raise FileNotFoundError(f"locked runtime requirements missing at {RUNTIME_LOCK}")
+        steps = [
+            ('preparing virtual environment', None),
+            ('installing locked runtime', pip_cmd('install', '--require-hashes', '-r', str(RUNTIME_LOCK))),
+        ]
 
         total = max(1, len(steps))
         for i, (msg, cmd) in enumerate(steps, start=1):

@@ -11,7 +11,15 @@ dist/
 Stemsplat.spec
 models/*
 !models/.gitkeep
+!models/manifest.json
 uploads/*
 !uploads/.gitkeep
 *.pyc
 .DS_Store
+node_modules/
+test-results/
+.mypy_cache/
+.ruff_cache/
+quality/private-corpus.json
+reports/quality/*.json
+!reports/quality/.gitkeep

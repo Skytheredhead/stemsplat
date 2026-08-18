@@ -1,0 +1,5136 @@
+    /* helpers */
+    const MAX_TASKS = 50;
+    const STORAGE_WARN_GB = 1;
+    const STORAGE_BLOCK_GB = 0.5;
+    const MEMORY_LIMIT_RATIO = 0.9;
+    const MEMORY_LIMIT_MB = 700;
+    const FIVE_HOURS_SEC = 5 * 60 * 60;
+    const LONG_TRACK_SEC = 15 * 60;
+
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('file-input');
+    const modeSwitcher = document.getElementById('mode-switcher');
+    const modeSwitcherPill = document.getElementById('mode-switcher-pill');
+    const modeChoices = document.getElementById('mode-choices');
+    const modesCard = document.getElementById('modes-card');
+    const queue     = document.getElementById('queue');
+    const clearBtn  = document.getElementById('clear-btn');
+    const resumeQueueBtn = document.getElementById('resume-queue-btn');
+    const topVig    = document.getElementById('top-vig');
+    const botVig    = document.getElementById('bot-vig');
+    const bottomPad = document.getElementById('queue-bottom-pad');
+    const template  = document.getElementById('item-template');
+    const title     = document.getElementById('title');
+    const spacer    = document.getElementById('queue-spacer');
+    const appShell  = document.getElementById('app-shell');
+    const historyBtn  = document.getElementById('history-btn');
+    const startBtn  = document.getElementById('start-btn');
+    const windowCloseBtn = document.getElementById('window-close-btn');
+    const windowMinimizeBtn = document.getElementById('window-minimize-btn');
+    const windowFullscreenBtn = document.getElementById('window-fullscreen-btn');
+    let outputFormatSelect = null;
+    let multiStemExportSelect = null;
+    let previousFilesRetentionSelect = null;
+    let previousFilesLimitInput = null;
+    let previousFilesWarnInput = null;
+    let outputFolderInput = null;
+    let outputSameAsInput = null;
+    let outputFolderChoose = null;
+    let outputFolderOpen = null;
+    let videoAudioOnly = null;
+    let nerdStuffToggle = null;
+    let nerdStuffWrap = null;
+    let lanAccessHeading = null;
+    let lanAccessText = null;
+    let lanCopyBtn = null;
+    let portStatusText = null;
+    let modelsList = null;
+    let modelsNote = null;
+    let modelsDownloadBtn = null;
+    let modelsCtaWrap = null;
+    let modelsFolderBtn = null;
+    let modelsProgressWrap = null;
+    let modelsTotal = null;
+    let modelsProgressBar = null;
+    let modelsProgressMeta = null;
+    let presetSettingsBtn = null;
+    let presetSettingsOverlay = null;
+    let boostHarmoniesBackgroundSlider = null;
+    let boostHarmoniesBaseSlider = null;
+    let boostHarmoniesBackgroundValue = null;
+    let boostHarmoniesBaseValue = null;
+    let boostGuitarOverlaySlider = null;
+    let boostGuitarBaseSlider = null;
+    let boostGuitarOverlayValue = null;
+    let boostGuitarBaseValue = null;
+    let detachAppShellSoftScroll = null;
+    const structureCheck = null;
+    const structurelessCheck = null;
+    let storageBlocked = false;
+    let memoryBlocked = false;
+    let modelsBlocked = false;
+    let lastStorageWarning = 0;
+    let lastMemoryWarning = 0;
+    let modelStatusPoll = null;
+    let releaseStatusPoll = null;
+    let activeReleaseOverlay = null;
+    let activeReleaseVersion = '';
+    let activePortOverlay = null;
+    let activeHostClosedOverlay = null;
+    let lanRuntimeHeartbeat = null;
+    let lanRuntimeFailures = 0;
+    let lastModelStatus = null;
+    let modelPreviewActive = false;
+    let modelPreviewTimer = null;
+    let nerdStuffExpanded = false;
+    let copyResetTimers = new WeakMap();
+    let activeReleaseOverlayUi = null;
+    let activeModelToast = null;
+    let activeReleaseToast = null;
+    let modelToastTimer = null;
+    let releaseToastTimer = null;
+    let tooltipEl = null;
+    let tooltipTimer = null;
+    let tooltipTarget = null;
+    const MODE_TAB_LABELS = {
+      single: 'single',
+      multi: 'multi',
+      presets: 'presets',
+    };
+    const BS_6S_TOOLTIP = `splits into:\n- bass\n- drums\n- other\n- vocals\n- guitar\n- piano\n- can be slow but provides good quality splits`;
+    const DRUMSEP_6S_TOOLTIP = `splits into:\n- crash\n- hh\n- kick\n- ride\n- snare\n- toms\n- slightly cleaner than 4s`;
+    const DRUMSEP_4S_TOOLTIP = `splits into:\n- cymbals\n- kick\n- snare\n- toms`;
+    const MODEL_LABELS = {
+      vocals: 'vocals',
+      instrumental: 'instrumental',
+      guitar: 'guitar',
+      mel_band_karaoke: 'bg vocal',
+      denoise: 'denoise',
+      bs_roformer_6s: 'full mix',
+      htdemucs_ft_drums: 'drums',
+      htdemucs_ft_bass: 'bass',
+      htdemucs_ft_other: 'other',
+      htdemucs_6s: 'full mix faster',
+      drumsep_6s: 'drum split - 6',
+      drumsep_4s: 'drum split - 4',
+    };
+    const MODEL_CHECKLIST_ORDER = [
+      'vocals',
+      'instrumental',
+      'guitar',
+      'mel_band_karaoke',
+      'denoise',
+      'bs_roformer_6s',
+      'htdemucs_ft_drums',
+      'htdemucs_ft_bass',
+      'htdemucs_ft_other',
+      'htdemucs_6s',
+      'drumsep_6s',
+      'drumsep_4s',
+    ];
+    const EXCLUSIVE_STEM_MODES = new Set([
+      'guitar',
+      'mel_band_karaoke',
+      'bs_roformer_6s',
+      'htdemucs_ft_drums',
+      'htdemucs_ft_bass',
+      'htdemucs_ft_other',
+      'htdemucs_6s',
+      'drumsep_6s',
+      'drumsep_4s',
+    ]);
+    const STEM_TO_REQUIRED_MODELS = {
+      vocals: ['vocals'],
+      instrumental: ['instrumental'],
+      guitar: ['guitar'],
+      mel_band_karaoke: ['vocals', 'mel_band_karaoke'],
+      bs_roformer_6s: ['bs_roformer_6s'],
+      htdemucs_ft_drums: ['htdemucs_ft_drums'],
+      htdemucs_ft_bass: ['htdemucs_ft_bass'],
+      htdemucs_ft_other: ['guitar', 'htdemucs_ft_other'],
+      htdemucs_6s: ['htdemucs_6s'],
+      drumsep_6s: ['drumsep_6s'],
+      drumsep_4s: ['drumsep_4s'],
+      all_stems: ['vocals', 'instrumental', 'mel_band_karaoke', 'bs_roformer_6s', 'drumsep_6s'],
+      denoise: ['denoise'],
+      boost_harmonies: ['vocals', 'mel_band_karaoke'],
+    };
+    const MODE_TAB_OPTIONS = {
+      single: [
+        { kind: 'stem', id: 'vocals', label: 'vocal', tooltip: 'recommended vocal split' },
+        { kind: 'stem', id: 'instrumental', label: 'instrumental', tooltip: 'recommended instrumental split' },
+        { kind: 'stem', id: 'htdemucs_ft_drums', label: 'drums', tooltip: 'fast drums' },
+        { kind: 'stem', id: 'htdemucs_ft_bass', label: 'bass', tooltip: 'fast bass' },
+        { kind: 'stem', id: 'guitar', label: 'guitar', tooltip: 'medium guitar split' },
+        { kind: 'stem', id: 'htdemucs_ft_other', label: 'other', tooltip: 'other stem with guitar removed first' },
+      ],
+      multi: [
+        { kind: 'stem', id: 'bs_roformer_6s', label: 'full mix', tooltip: BS_6S_TOOLTIP },
+        { kind: 'stem', id: 'htdemucs_6s', label: 'full mix faster', tooltip: 'faster full mix split' },
+        { kind: 'stem', id: 'drumsep_4s', label: 'drum split - 4', tooltip: DRUMSEP_4S_TOOLTIP },
+        { kind: 'stem', id: 'drumsep_6s', label: 'drum split - 6', tooltip: DRUMSEP_6S_TOOLTIP },
+      ],
+      presets: [
+        { kind: 'preset', id: 'all_stems', label: 'all stems', tooltip: 'full stem graph' },
+        { kind: 'preset', id: 'denoise', label: 'denoise', tooltip: 'denoise' },
+        { kind: 'preset', id: 'mel_band_karaoke', label: 'bg vocal', tooltip: 'background vocal split' },
+        { kind: 'preset', id: 'boost_harmonies', label: 'boost harmonies', tooltip: 'boost harmonies' },
+      ],
+    };
+    const MODE_TO_TAB = {
+      vocals: 'single',
+      instrumental: 'single',
+      guitar: 'single',
+      mel_band_karaoke: 'presets',
+      htdemucs_ft_drums: 'single',
+      htdemucs_ft_bass: 'single',
+      htdemucs_ft_other: 'single',
+      bs_roformer_6s: 'multi',
+      htdemucs_6s: 'multi',
+      drumsep_6s: 'multi',
+      drumsep_4s: 'multi',
+      all_stems: 'presets',
+      denoise: 'presets',
+      boost_harmonies: 'presets',
+    };
+    const PRESET_CONFIGS = {
+      boost_harmonies: {
+        label: 'boost harmonies',
+        stem: 'boost_harmonies',
+        overlayKey: 'boost_harmonies_background_vocals_gain_db',
+        baseKey: 'boost_harmonies_base_song_gain_db',
+        overlayLabel: 'background vocals',
+        defaultOverlayGain: 3,
+        defaultBaseGain: -3,
+      },
+    };
+    const MODEL_SOURCE_URLS = {
+      vocals: 'https://huggingface.co/becruily/mel-band-roformer-vocals',
+      instrumental: 'https://huggingface.co/becruily/mel-band-roformer-instrumental',
+      guitar: 'https://huggingface.co/becruily/mel-band-roformer-guitar',
+      mel_band_karaoke: 'https://huggingface.co/becruily/mel-band-roformer-karaoke',
+      denoise: 'https://huggingface.co/jarredou/aufr33_MelBand_Denoise',
+      bs_roformer_6s: 'https://huggingface.co/jarredou/BS-ROFO-SW-Fixed',
+      htdemucs_ft_drums: 'https://github.com/facebookresearch/demucs',
+      htdemucs_ft_bass: 'https://github.com/facebookresearch/demucs',
+      htdemucs_ft_other: 'https://github.com/facebookresearch/demucs',
+      htdemucs_6s: 'https://github.com/facebookresearch/demucs',
+      drumsep_6s: 'https://github.com/jarredou/models/releases/tag/aufr33-jarredou_MDX23C_DrumSep_model_v0.1',
+      drumsep_4s: 'https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.5',
+    };
+    const RELEASES_PAGE_URL = 'https://github.com/Skytheredhead/stemsplat/releases';
+    const RELEASE_SESSION_DISMISS_KEY = 'releaseUpdateDismissedThisSession';
+    const RELEASE_SNOOZE_STORAGE_KEY = 'releaseUpdateSnooze';
+    const isLanClient = true;
+
+    let startPressed = false;
+    let startGeneration = 0;
+    let startLock = false;
+    let queueStarted = false;
+    let activeModeTab = 'single';
+    let modesCardHeightTimer = null;
+    let modesCardHeightTransitionHandler = null;
+    let selectedStemModes = new Set(['vocals']);
+    let selectedPresetMode = null;
+    let lastStemSelectionAnchor = 'vocals';
+    let settingsState = {
+      output_root: '',
+      structure_mode: 'flat',
+      output_format: 'same_as_input',
+      multi_stem_export: 'zip',
+      previous_files_retention: '1w',
+      video_handling: 'audio_only',
+      boost_harmonies_background_vocals_gain_db: 3,
+      boost_harmonies_base_song_gain_db: -3,
+      runtime: null,
+    };
+    let defaultOutputPath = '';
+    let dirPickerInput = null;
+    let presetSettingsSaveTimer = null;
+    let previousFilesState = [];
+    let previousFilesStorageState = null;
+
+    function applyDesktopShellState(){
+      const hasDesktopApi = !!(window.pywebview && window.pywebview.api);
+      document.body.classList.toggle('desktop-shell', hasDesktopApi);
+      if(settingsBtn){
+        settingsBtn.disabled = isLanClient;
+        settingsBtn.classList.toggle('dimmed-control', isLanClient);
+      }
+      if(presetSettingsBtn){
+        presetSettingsBtn.disabled = isLanClient;
+        presetSettingsBtn.classList.toggle('dimmed-control', isLanClient);
+      }
+    }
+
+    function currentSelectedModeKey(){
+      if(selectedPresetMode){
+        return selectedPresetMode;
+      }
+      if(selectedStemModes.has('vocals') && selectedStemModes.has('instrumental')){
+        return 'both_separate';
+      }
+      return Array.from(selectedStemModes)[0] || 'vocals';
+    }
+
+    function setSelectionForModeKey(modeKey){
+      if(!modeKey) return;
+      if(MODE_TO_TAB[modeKey] === 'presets'){
+        selectedPresetMode = modeKey;
+        selectedStemModes = new Set();
+        return;
+      }
+      selectedPresetMode = null;
+      if(modeKey === 'both_separate'){
+        selectedStemModes = new Set(['vocals', 'instrumental']);
+        lastStemSelectionAnchor = 'instrumental';
+      }else{
+        selectedStemModes = new Set([modeKey]);
+        lastStemSelectionAnchor = modeKey;
+      }
+    }
+
+    function visibleStemModeIdsForTab(tabKey = activeModeTab){
+      return (MODE_TAB_OPTIONS[tabKey] || [])
+        .filter((option) => option.kind === 'stem')
+        .map((option) => option.id);
+    }
+
+    function stemSelectionAnchorForTab(tabKey = activeModeTab){
+      const visibleModeIds = visibleStemModeIdsForTab(tabKey);
+      if(visibleModeIds.includes(lastStemSelectionAnchor)){
+        return lastStemSelectionAnchor;
+      }
+      return visibleModeIds.find((modeId) => selectedStemModes.has(modeId)) || visibleModeIds[0] || null;
+    }
+
+    function selectStemModeRange(modeKey){
+      if(!modeKey) return;
+      const visibleModeIds = visibleStemModeIdsForTab();
+      const targetIndex = visibleModeIds.indexOf(modeKey);
+      if(targetIndex === -1){
+        setSelectionForModeKey(modeKey);
+        return;
+      }
+      const anchorMode = stemSelectionAnchorForTab();
+      const anchorIndex = anchorMode ? visibleModeIds.indexOf(anchorMode) : -1;
+      if(anchorIndex === -1){
+        setSelectionForModeKey(modeKey);
+        return;
+      }
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      selectedPresetMode = null;
+      selectedStemModes = new Set(visibleModeIds.slice(start, end + 1));
+      lastStemSelectionAnchor = modeKey;
+    }
+
+    function ensureSelectionForActiveTab(){
+      if(selectedPresetMode && MODE_TO_TAB[selectedPresetMode] === activeModeTab){
+        return;
+      }
+      if(Array.from(selectedStemModes).some((mode) => MODE_TO_TAB[mode] === activeModeTab)){
+        return;
+      }
+      if(selectedPresetMode || selectedStemModes.size){
+        return;
+      }
+      const currentMode = currentSelectedModeKey();
+      if(currentMode && MODE_TO_TAB[currentMode] === activeModeTab){
+        return;
+      }
+      const firstOption = (MODE_TAB_OPTIONS[activeModeTab] || [])[0];
+      if(firstOption){
+        setSelectionForModeKey(firstOption.id);
+      }
+    }
+
+    function toggleStemModeSelection(modeKey, additive = false){
+      if(!modeKey) return;
+      selectedPresetMode = null;
+      const next = new Set(selectedStemModes);
+      if(next.has(modeKey)){
+        next.delete(modeKey);
+      }else{
+        if(!additive){
+          setSelectionForModeKey(modeKey);
+          return;
+        }
+        next.add(modeKey);
+      }
+      selectedStemModes = next;
+      lastStemSelectionAnchor = modeKey;
+    }
+
+    function positionModeSwitcherPill(){
+      if(!modeSwitcher || !modeSwitcherPill) return;
+      const activeButton = modeSwitcher.querySelector(`.mode-switch-btn[data-tab="${activeModeTab}"]`) || modeSwitcher.querySelector('.mode-switch-btn.active');
+      if(!activeButton) return;
+      modeSwitcherPill.style.width = `${Math.round(activeButton.offsetWidth)}px`;
+      modeSwitcherPill.style.transform = `translateX(${Math.round(activeButton.offsetLeft)}px)`;
+    }
+
+    function updateModeTabUI(){
+      const tabs = Array.from(document.querySelectorAll('.mode-switch-btn'));
+      tabs.forEach((button) => {
+        const active = button.dataset.tab === activeModeTab;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+      if(presetSettingsBtn){
+        const visible = false;
+        presetSettingsBtn.hidden = !visible;
+        presetSettingsBtn.disabled = !visible || isLanClient;
+        presetSettingsBtn.classList.toggle('dimmed-control', visible && isLanClient);
+      }
+      requestAnimationFrame(positionModeSwitcherPill);
+    }
+
+    function updateModeChoiceUI(){
+      if(!modeChoices) return;
+      modeChoices.querySelectorAll('.stem-choice, .preset-choice').forEach((button) => {
+        const mode = button.dataset.mode || button.dataset.preset || '';
+        const active = button.dataset.preset ? selectedPresetMode === mode : selectedStemModes.has(mode);
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+
+    function clearModesCardHeightAnimation(){
+      if(modesCardHeightTimer){
+        clearTimeout(modesCardHeightTimer);
+        modesCardHeightTimer = null;
+      }
+      if(modesCard && modesCardHeightTransitionHandler){
+        modesCard.removeEventListener('transitionend', modesCardHeightTransitionHandler);
+        modesCardHeightTransitionHandler = null;
+      }
+    }
+
+    function finishModesCardHeightAnimation(){
+      clearModesCardHeightAnimation();
+      if(!modesCard) return;
+      modesCard.classList.remove('modes-card-shifting');
+      modesCard.classList.remove('modes-card-height-animating');
+      modesCard.style.height = '';
+    }
+
+    function renderModeChoices(animate = false){
+      if(!modeChoices) return;
+      let startHeight = 0;
+      if(modesCard){
+        modesCard.classList.toggle('modes-card-shifting', animate);
+        if(animate){
+          clearModesCardHeightAnimation();
+          startHeight = modesCard.getBoundingClientRect().height;
+          modesCard.classList.remove('modes-card-height-animating');
+          modesCard.style.height = `${startHeight}px`;
+          void modesCard.offsetHeight;
+        }else{
+          finishModesCardHeightAnimation();
+        }
+      }
+      modeChoices.innerHTML = '';
+      (MODE_TAB_OPTIONS[activeModeTab] || []).forEach((option, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `${option.kind === 'preset' ? 'preset-choice' : 'stem-choice'} mode-choice-enter`;
+        button.style.setProperty('--mode-item-index', String(index));
+        if(option.kind === 'preset'){
+          button.dataset.preset = option.id;
+          const title = document.createElement('span');
+          title.className = 'preset-choice-title';
+          title.textContent = option.label;
+          button.appendChild(title);
+        }else{
+          button.dataset.mode = option.id;
+          button.textContent = option.label;
+        }
+        modeChoices.appendChild(button);
+      });
+      updateModeTabUI();
+      updateModeChoiceUI();
+      if(animate && modesCard){
+        modesCard.style.height = 'auto';
+        const endHeight = modesCard.getBoundingClientRect().height;
+        modesCard.style.height = `${startHeight}px`;
+        void modesCard.offsetHeight;
+        modesCard.classList.add('modes-card-height-animating');
+        requestAnimationFrame(() => {
+          modesCardHeightTransitionHandler = (event) => {
+            if(event.target !== modesCard || event.propertyName !== 'height') return;
+            finishModesCardHeightAnimation();
+          };
+          modesCard.addEventListener('transitionend', modesCardHeightTransitionHandler);
+          modesCard.style.height = `${endHeight}px`;
+        });
+        modesCardHeightTimer = window.setTimeout(() => {
+          finishModesCardHeightAnimation();
+        }, 520);
+      }else if(modesCard){
+        finishModesCardHeightAnimation();
+      }
+    }
+
+    function formatGainDb(value){
+      const numeric = Number(value || 0);
+      const sign = numeric > 0 ? '+' : '';
+      return `${sign}${numeric.toFixed(1)} dB`;
+    }
+
+    function formatStorageSettingValue(value, fallback){
+      const numeric = Number.isFinite(Number(value)) ? Number(value) : Number(fallback);
+      return numeric.toFixed(1).replace(/\.0$/, '');
+    }
+
+    function coerceStorageSettingValue(value, fallback, minimum){
+      const parsed = Number.parseFloat(String(value ?? '').trim());
+      if(!Number.isFinite(parsed)) return Number(fallback);
+      const clamped = Math.max(minimum, Math.min(1024, parsed));
+      return Math.round(clamped * 10) / 10;
+    }
+
+    function formatStorageUsage(bytes){
+      const numeric = Number(bytes || 0);
+      return `${(numeric / (1024 ** 3)).toFixed(1).replace(/\.0$/, '')} GB`;
+    }
+
+    function formatDownloadRate(bytesPerSecond){
+      const numeric = Number(bytesPerSecond || 0);
+      if(!(numeric > 0)) return '';
+      return `${(numeric / (1024 * 1024)).toFixed(1)} mb/s`;
+    }
+
+    function ensureTooltip(){
+      if(tooltipEl) return tooltipEl;
+      tooltipEl = document.createElement('div');
+      tooltipEl.className = 'hover-tooltip';
+      tooltipEl.hidden = true;
+      document.body.appendChild(tooltipEl);
+      return tooltipEl;
+    }
+
+    function hideTooltip(){
+      if(tooltipTimer){
+        clearTimeout(tooltipTimer);
+        tooltipTimer = null;
+      }
+      tooltipTarget = null;
+      if(!tooltipEl) return;
+      tooltipEl.classList.remove('visible');
+      tooltipEl.hidden = true;
+    }
+
+    function positionTooltip(target){
+      if(!tooltipEl || !target) return;
+      const rect = target.getBoundingClientRect();
+      const pad = 12;
+      const top = Math.max(pad, rect.top - tooltipEl.offsetHeight - 10);
+      let left = rect.left + (rect.width / 2) - (tooltipEl.offsetWidth / 2);
+      left = Math.max(pad, Math.min(left, window.innerWidth - tooltipEl.offsetWidth - pad));
+      tooltipEl.style.left = `${Math.round(left)}px`;
+      tooltipEl.style.top = `${Math.round(top)}px`;
+    }
+
+    function showTooltip(target){
+      const message = target && target.dataset ? String(target.dataset.tooltip || '').trim() : '';
+      if(!message) return;
+      const el = ensureTooltip();
+      el.textContent = message;
+      el.hidden = false;
+      positionTooltip(target);
+      requestAnimationFrame(() => {
+        positionTooltip(target);
+        el.classList.add('visible');
+      });
+    }
+
+    function bindDelayedTooltip(_target){}
+
+    function bindChoiceTooltips(){
+      hideTooltip();
+    }
+
+    function updatePresetRangeVisual(input){
+      if(!input) return;
+      const min = Number(input.min || -18);
+      const max = Number(input.max || 18);
+      const value = Number(input.value || 0);
+      const pct = max === min ? 50 : ((value - min) / (max - min)) * 100;
+      input.style.setProperty('--fill', `${Math.max(0, Math.min(100, pct))}%`);
+    }
+
+    function applyPresetSettingsUI(){
+      const presetUi = {
+        boost_harmonies: {
+          overlaySlider: boostHarmoniesBackgroundSlider,
+          baseSlider: boostHarmoniesBaseSlider,
+          overlayValue: boostHarmoniesBackgroundValue,
+          baseValue: boostHarmoniesBaseValue,
+        },
+      };
+      Object.entries(PRESET_CONFIGS).forEach(([mode, config]) => {
+        const ui = presetUi[mode];
+        if(!ui) return;
+        const overlayValue = settingsState[config.overlayKey] ?? config.defaultOverlayGain;
+        const baseValue = settingsState[config.baseKey] ?? config.defaultBaseGain;
+        if(ui.overlaySlider){
+          ui.overlaySlider.value = String(overlayValue);
+          updatePresetRangeVisual(ui.overlaySlider);
+        }
+        if(ui.baseSlider){
+          ui.baseSlider.value = String(baseValue);
+          updatePresetRangeVisual(ui.baseSlider);
+        }
+        if(ui.overlayValue){
+          ui.overlayValue.textContent = formatGainDb(overlayValue);
+        }
+        if(ui.baseValue){
+          ui.baseValue.textContent = formatGainDb(baseValue);
+        }
+      });
+    }
+
+    function schedulePresetSettingsPersist(patch){
+      settingsState = { ...settingsState, ...patch };
+      applyPresetSettingsUI();
+      if(presetSettingsSaveTimer){
+        clearTimeout(presetSettingsSaveTimer);
+      }
+      presetSettingsSaveTimer = setTimeout(() => {
+        presetSettingsSaveTimer = null;
+        persistSettings(patch, { showMissingPopup: false });
+      }, 140);
+    }
+
+    function requiredModelKeysForStems(stems){
+      const needed = new Set();
+      (Array.isArray(stems) ? stems : []).forEach((stem) => {
+        (STEM_TO_REQUIRED_MODELS[stem] || []).forEach((key) => needed.add(key));
+      });
+      return Array.from(needed);
+    }
+
+    function relevantMissingModels(status = lastModelStatus){
+      const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
+      const needed = new Set(requiredModelKeysForStems(selectedStemUnion()));
+      (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+        const stage = String(task && task.stage || '').toLowerCase();
+        if(!task || !Array.isArray(task.stems) || ['done', 'error', 'stopped'].includes(stage)) return;
+        requiredModelKeysForStems(task.stems).forEach((key) => needed.add(key));
+      });
+      return Array.from(needed).filter((key) => missing.has(key));
+    }
+
+    async function callDesktopAction(actionName){
+      try{
+        if(window.pywebview && window.pywebview.api && typeof window.pywebview.api[actionName] === 'function'){
+          await window.pywebview.api[actionName]();
+          return true;
+        }
+      }catch(err){
+        console.warn(`${actionName} failed`, err);
+      }
+      return false;
+    }
+
+    updateStartButton();
+    function updateStartButton(){
+      if(!startBtn) return;
+      const hasItems = queue.children.length > 0;
+      if(!hasItems || startLock || storageBlocked || memoryBlocked || modelsBlocked){
+        startBtn.disabled = true;
+        const icon = startBtn.querySelector('svg');
+        if(icon){ icon.style.animation = 'none'; }
+      }else{
+        startBtn.disabled = false;
+        const icon = startBtn.querySelector('svg');
+        if(icon){ icon.style.animation = ''; }
+      }
+    }
+
+    function applySettingsUI(){
+      if(outputFormatSelect){
+        outputFormatSelect.value = settingsState.output_format || 'same_as_input';
+      }
+      if(multiStemExportSelect){
+        multiStemExportSelect.value = settingsState.multi_stem_export || 'zip';
+      }
+      if(previousFilesRetentionSelect){
+        previousFilesRetentionSelect.value = settingsState.previous_files_retention || '1w';
+      }
+      if(previousFilesLimitInput){
+        previousFilesLimitInput.value = formatStorageSettingValue(settingsState.previous_files_limit_gb, 10);
+      }
+      if(previousFilesWarnInput){
+        previousFilesWarnInput.value = formatStorageSettingValue(settingsState.previous_files_warn_gb, 8);
+      }
+      if(videoAudioOnly){
+        videoAudioOnly.checked = true;
+      }
+      if(outputSameAsInput){
+        outputSameAsInput.checked = !!settingsState.output_same_as_input;
+      }
+      if(outputFolderInput){
+        outputFolderInput.value = settingsState.output_root || '';
+        outputFolderInput.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
+      }
+      if(outputFolderChoose){
+        outputFolderChoose.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
+      }
+      if(outputFolderOpen){
+        outputFolderOpen.classList.toggle('dimmed-control', !!settingsState.output_same_as_input);
+      }
+      if(settingsBtn){
+        settingsBtn.disabled = isLanClient;
+        settingsBtn.classList.toggle('dimmed-control', isLanClient);
+      }
+      if(presetSettingsBtn){
+        presetSettingsBtn.disabled = isLanClient;
+        presetSettingsBtn.classList.toggle('dimmed-control', isLanClient);
+      }
+      applyRuntimeUI(settingsState.runtime || null);
+      applyPresetSettingsUI();
+    }
+
+    function setNerdStuffExpanded(expanded, { immediate = false } = {}){
+      nerdStuffExpanded = !!expanded;
+      if(nerdStuffToggle){
+        nerdStuffToggle.setAttribute('aria-expanded', nerdStuffExpanded ? 'true' : 'false');
+      }
+      if(!nerdStuffWrap) return;
+      const targetHeight = nerdStuffExpanded ? `${nerdStuffWrap.scrollHeight}px` : '0px';
+      if(immediate){
+        nerdStuffWrap.classList.toggle('open', nerdStuffExpanded);
+        nerdStuffWrap.style.maxHeight = targetHeight;
+        return;
+      }
+      if(nerdStuffExpanded){
+        nerdStuffWrap.classList.add('open');
+        nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
+        requestAnimationFrame(() => {
+          if(nerdStuffWrap && nerdStuffExpanded){
+            nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
+          }
+        });
+      }else{
+        nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
+        requestAnimationFrame(() => {
+          if(!nerdStuffWrap) return;
+          nerdStuffWrap.classList.remove('open');
+          nerdStuffWrap.style.maxHeight = '0px';
+        });
+      }
+    }
+
+    function guardClick(el, handler, cooldown = 600){
+      if(!el || typeof handler !== 'function') return;
+      if(el.__guardedHandler){
+        el.removeEventListener('click', el.__guardedHandler);
+      }
+      let busy = false;
+      const wrapped = async (e) => {
+        if(busy){
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        busy = true;
+        try{
+          await handler(e);
+        }finally{
+          setTimeout(() => { busy = false; }, cooldown);
+        }
+      };
+      el.__guardedHandler = wrapped;
+      el.addEventListener('click', wrapped);
+    }
+
+    async function loadSettings(){
+      try{
+        const res = await fetch('/settings');
+        if(!res.ok) return;
+        const data = await res.json();
+        settingsState = { ...settingsState, ...data };
+        defaultOutputPath = data.output_root || defaultOutputPath;
+        applySettingsUI();
+      }catch(err){
+        console.warn('failed to load settings', err);
+      }
+    }
+
+    async function persistSettings(patch, {showMissingPopup = true} = {}){
+      settingsState = { ...settingsState, ...patch };
+      try{
+        const res = await fetch('/api/settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...patch, version: settingsState.version }),
+        });
+        if(!res.ok){
+          if(showMissingPopup) showPopup("folder doesn't exist");
+          await loadSettings();
+          return;
+        }
+        const data = await res.json();
+        settingsState = { ...settingsState, ...data };
+        defaultOutputPath = defaultOutputPath || data.output_root;
+        applySettingsUI();
+      }catch(err){
+        console.warn('settings update failed', err);
+        if(showMissingPopup) showPopup("folder doesn't exist");
+        await loadSettings();
+      }
+    }
+
+    async function checkStorage(){
+      if(!navigator.storage || !navigator.storage.estimate) return true;
+      try{
+        const {usage = 0, quota = 0} = await navigator.storage.estimate();
+        const free = Math.max(0, quota - usage);
+        const freeGb = free / (1024 ** 3);
+        if(freeGb < STORAGE_BLOCK_GB){
+          storageBlocked = true;
+          showPopup('storage critically low (<0.5 GB). uploads are blocked');
+          updateStartButton();
+          return false;
+        }
+        if(freeGb < STORAGE_WARN_GB){
+          const now = Date.now();
+          if(now - lastStorageWarning > 10000){
+            showPopup('storage low (<1 GB remaining)');
+            lastStorageWarning = now;
+          }
+        }
+        storageBlocked = false;
+        updateStartButton();
+      }catch(_){}
+      return !storageBlocked;
+    }
+
+    function checkMemory(){
+      const perf = performance || window.performance;
+      const mem = perf && perf.memory;
+      if(!mem) return true;
+      const { jsHeapSizeLimit = 0, usedJSHeapSize = 0 } = mem;
+      const limit = jsHeapSizeLimit ? jsHeapSizeLimit * MEMORY_LIMIT_RATIO : MEMORY_LIMIT_MB * 1024 * 1024;
+      if(usedJSHeapSize > limit){
+        memoryBlocked = true;
+        const now = Date.now();
+        if(now - lastMemoryWarning > 10000){
+          showPopup('memory use is high; uploads paused to prevent leaks');
+          lastMemoryWarning = now;
+        }
+        updateStartButton();
+        return false;
+      }
+      memoryBlocked = false;
+      updateStartButton();
+      return true;
+    }
+
+    function estimateDecodeMb(seconds){
+      // Roughly 0.34 MB/sec for 44.1kHz stereo float
+      return seconds * 0.34;
+    }
+
+    function hasMemoryForDuration(seconds){
+      if(seconds <= LONG_TRACK_SEC) return true;
+      const perf = performance || window.performance;
+      const mem = perf && perf.memory;
+      if(!mem || !mem.jsHeapSizeLimit) return true;
+      const { jsHeapSizeLimit = 0, usedJSHeapSize = 0 } = mem;
+      const freeMb = Math.max(0, jsHeapSizeLimit - usedJSHeapSize) / (1024 * 1024);
+      const needMb = estimateDecodeMb(seconds) * 1.5; // headroom
+      if(freeMb <= needMb){
+        showPopup('song is too long for available memory right now');
+        return false;
+      }
+      return true;
+    }
+
+    function getAudioDuration(file){
+      return new Promise((resolve) => {
+        let url = null;
+        try{
+          const audio = document.createElement('audio');
+          audio.preload = 'metadata';
+          url = URL.createObjectURL(file);
+          const cleanup = () => {
+            if(url){ URL.revokeObjectURL(url); url = null; }
+            audio.removeAttribute('src');
+            audio.load();
+          };
+          const timeout = setTimeout(() => { cleanup(); resolve(-1); }, 3000);
+          audio.onloadedmetadata = () => {
+            clearTimeout(timeout);
+            const d = audio.duration;
+            cleanup();
+            resolve(isFinite(d) ? d : -1);
+          };
+          audio.onerror = () => { clearTimeout(timeout); cleanup(); resolve(-1); };
+          audio.src = url;
+        }catch(_){
+          if(url){ URL.revokeObjectURL(url); }
+          resolve(-1);
+        }
+      });
+    }
+
+    const dialogReturnFocus = new WeakMap();
+
+    function dialogFocusableElements(overlay){
+      if(!overlay) return [];
+      return Array.from(overlay.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((element) => !element.hidden && element.getClientRects().length > 0);
+    }
+
+    function activateDialogAccessibility(overlay, preferredFocus){
+      if(!overlay) return;
+      if(document.activeElement instanceof HTMLElement){
+        dialogReturnFocus.set(overlay, document.activeElement);
+      }
+      requestAnimationFrame(() => {
+        const focusTarget = preferredFocus || dialogFocusableElements(overlay)[0];
+        if(focusTarget){
+          try { focusTarget.focus({ preventScroll: true }); } catch(_) { focusTarget.focus(); }
+        }
+      });
+    }
+
+    function restoreDialogFocus(overlay){
+      if(!overlay) return;
+      const focusTarget = dialogReturnFocus.get(overlay);
+      dialogReturnFocus.delete(overlay);
+      if(focusTarget && focusTarget.isConnected && !focusTarget.disabled){
+        try { focusTarget.focus({ preventScroll: true }); } catch(_) { focusTarget.focus(); }
+      }
+    }
+
+    function trapDialogFocus(event){
+      const overlay = event.currentTarget;
+      if(!overlay || overlay.classList.contains('hidden') || event.key !== 'Tab') return;
+      const focusable = dialogFocusableElements(overlay);
+      if(!focusable.length){
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if(event.shiftKey && document.activeElement === first){
+        event.preventDefault();
+        last.focus();
+      }else if(!event.shiftKey && document.activeElement === last){
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    // settings overlay refs (assigned on load)
+    let settingsOverlay = null;
+    function openPresetSettings(){
+      if(!presetSettingsOverlay) presetSettingsOverlay = document.getElementById('preset-settings-overlay');
+      const bg = document.getElementById('preset-overlay-bg');
+      const card = document.getElementById('preset-settings-card');
+      if(presetSettingsOverlay){
+        presetSettingsOverlay.classList.remove('hidden');
+        applyPresetSettingsUI();
+        activateDialogAccessibility(presetSettingsOverlay, document.getElementById('preset-settings-close'));
+        if(bg){
+          bg.classList.remove('anim-out');
+          bg.classList.remove('anim');
+          void bg.offsetWidth;
+          bg.classList.add('anim');
+        }
+        if(card){
+          card.classList.remove('settings-card-out');
+          card.classList.remove('opacity-0');
+          void card.offsetWidth;
+          card.classList.add('settings-card-in');
+        }
+      }
+    }
+    function openSettings(){
+      if(!settingsOverlay) settingsOverlay = document.getElementById('settings-overlay');
+      const bg = document.getElementById('overlay-bg');
+      const card = document.getElementById('settings-card');
+      if(settingsOverlay){
+        settingsOverlay.classList.remove('hidden');
+        activateDialogAccessibility(settingsOverlay, document.getElementById('settings-close'));
+        if(bg){
+          bg.classList.remove('anim-out');
+          bg.classList.remove('anim');
+          void bg.offsetWidth;
+          bg.classList.add('anim'); // IN
+        }
+        if(card){
+          card.classList.remove('settings-card-out');
+          card.classList.remove('opacity-0');
+          void card.offsetWidth;
+          card.classList.add('settings-card-in'); // IN
+        }
+        if(nerdStuffWrap){
+          setNerdStuffExpanded(nerdStuffExpanded, { immediate: true });
+        }
+      }
+    }
+    function closePresetSettings(){
+      if(!presetSettingsOverlay) presetSettingsOverlay = document.getElementById('preset-settings-overlay');
+      const bg = document.getElementById('preset-overlay-bg');
+      const card = document.getElementById('preset-settings-card');
+      if(presetSettingsOverlay){
+        if(bg){
+          bg.classList.remove('anim');
+          bg.classList.remove('anim-out');
+          void bg.offsetWidth;
+          bg.classList.add('anim-out');
+        }
+        if(card){
+          card.classList.remove('settings-card-in');
+          card.classList.add('settings-card-out');
+        }
+        setTimeout(() => {
+          if(card){
+            card.classList.remove('settings-card-out');
+            card.classList.add('opacity-0');
+          }
+          if(bg){ bg.classList.remove('anim-out'); }
+          presetSettingsOverlay.classList.add('hidden');
+          restoreDialogFocus(presetSettingsOverlay);
+        }, 180);
+      }
+    }
+
+    async function exportAdjustedPresetMix(task, presetSettings){
+      if(!task || !task.id) throw new Error('missing task');
+      const res = await fetch(`/api/tasks/${task.id}/preset_mix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          overlay_gain_db: presetSettings.overlay_gain_db,
+          base_song_gain_db: presetSettings.base_song_gain_db,
+        }),
+      });
+      let payload = null;
+      try { payload = await res.json(); } catch(_) { payload = null; }
+      if(!res.ok){
+        const message = payload && payload.detail && payload.detail.message
+          ? payload.detail.message
+          : 'preset export failed';
+        throw new Error(message);
+      }
+      task.preset_settings = payload && payload.preset_settings ? payload.preset_settings : { ...presetSettings };
+      task.can_adjust_preset = !!(payload && payload.can_adjust_preset);
+      task.out_dir = payload && payload.out_dir ? payload.out_dir : task.out_dir;
+      task.outputs = payload && Array.isArray(payload.outputs) ? payload.outputs : (task.outputs || []);
+      saveTasks();
+      updateUI();
+      return payload;
+    }
+
+    function taskPresetMode(task){
+      if(task && typeof task.mode === 'string' && PRESET_CONFIGS[task.mode.replace(/^preset_/, '')]){
+        return task.mode.replace(/^preset_/, '');
+      }
+      if(task && Array.isArray(task.stems)){
+        return Object.keys(PRESET_CONFIGS).find((mode) => task.stems.includes(PRESET_CONFIGS[mode].stem)) || null;
+      }
+      return null;
+    }
+
+    function openTaskPresetAdjuster(task){
+      if(!canAdjustTaskPreset(task)) return;
+      const presetMode = taskPresetMode(task);
+      const presetConfig = presetMode ? PRESET_CONFIGS[presetMode] : null;
+      if(!presetConfig) return;
+      const { overlay, card } = createOverlayCard(presetConfig.label);
+      card.style.maxWidth = '540px';
+      const settings = taskPresetSettings(task);
+
+      const shell = document.createElement('div');
+      shell.className = 'preset-slider-shell';
+      const heading = document.createElement('div');
+      heading.className = 'preset-slider-topline';
+      const headingLabel = document.createElement('div');
+      headingLabel.className = 'preset-slider-label';
+      headingLabel.textContent = presetConfig.label;
+      heading.appendChild(headingLabel);
+      const stack = document.createElement('div');
+      stack.className = 'preset-slider-stack';
+      const makeSliderBlock = (labelText, value, role) => {
+        const block = document.createElement('div');
+        block.className = 'preset-slider-block';
+        const topline = document.createElement('div');
+        topline.className = 'preset-slider-topline';
+        const label = document.createElement('div');
+        label.className = 'preset-slider-label'; label.textContent = labelText;
+        const valueLabel = document.createElement('div');
+        valueLabel.className = 'preset-slider-value'; valueLabel.dataset.role = `${role}-value`; valueLabel.textContent = formatGainDb(value);
+        topline.append(label, valueLabel);
+        const row = document.createElement('div');
+        row.className = 'preset-slider-row';
+        const lower = document.createElement('span');
+        lower.className = 'preset-slider-bound'; lower.textContent = '-18';
+        const input = document.createElement('input');
+        input.className = 'preset-range'; input.dataset.role = `${role}-slider`; input.type = 'range';
+        input.min = '-18'; input.max = '18'; input.step = '0.5'; input.value = String(value);
+        const upper = document.createElement('span');
+        upper.className = 'preset-slider-bound'; upper.textContent = '+18';
+        row.append(lower, input, upper);
+        block.append(topline, row);
+        return block;
+      };
+      stack.append(
+        makeSliderBlock(presetConfig.overlayLabel, settings.overlay_gain_db, 'overlay'),
+        makeSliderBlock('base song', settings.base_song_gain_db, 'base'),
+      );
+      shell.append(heading, stack);
+      card.appendChild(shell);
+
+      const actions = document.createElement('div');
+      actions.className = 'flex gap-2 justify-end';
+      const cancelBtn = makeActionButton('cancel');
+      const doneBtn = makeActionButton('done', 'bg-white text-black');
+      actions.append(cancelBtn, doneBtn);
+      card.appendChild(actions);
+
+      const overlaySlider = shell.querySelector('[data-role="overlay-slider"]');
+      const overlayValue = shell.querySelector('[data-role="overlay-value"]');
+      const baseSlider = shell.querySelector('[data-role="base-slider"]');
+      const baseValue = shell.querySelector('[data-role="base-value"]');
+
+      const sync = () => {
+        const overlayGain = Number(overlaySlider.value || settings.overlay_gain_db);
+        const base = Number(baseSlider.value || settings.base_song_gain_db);
+        updatePresetRangeVisual(overlaySlider);
+        updatePresetRangeVisual(baseSlider);
+        overlayValue.textContent = formatGainDb(overlayGain);
+        baseValue.textContent = formatGainDb(base);
+      };
+      overlaySlider.addEventListener('input', sync);
+      baseSlider.addEventListener('input', sync);
+      sync();
+
+      guardClick(cancelBtn, (event) => {
+        event.preventDefault();
+        closeOverlay(overlay);
+      });
+      guardClick(doneBtn, async (event) => {
+        event.preventDefault();
+        if(doneBtn.dataset.busy === '1') return;
+        doneBtn.dataset.busy = '1';
+        doneBtn.textContent = 'exporting...';
+        try{
+          const nextSettings = {
+            overlay_gain_db: Number(overlaySlider.value || settings.overlay_gain_db),
+            base_song_gain_db: Number(baseSlider.value || settings.base_song_gain_db),
+          };
+          await exportAdjustedPresetMix(task, nextSettings);
+          closeOverlay(overlay);
+          showPopup(`saved new ${presetConfig.label} export`);
+        }catch(err){
+          showPopup((err && err.message) || 'preset export failed');
+          doneBtn.dataset.busy = '';
+          doneBtn.textContent = 'done';
+        }
+      });
+    }
+
+    async function loadPreviousFiles(){
+      try{
+        const res = await fetch('/api/history', { cache: 'no-store' });
+        if(!res.ok){
+          previousFilesStorageState = null;
+          return [];
+        }
+        const data = await res.json();
+        previousFilesState = Array.isArray(data && data.items) ? data.items : [];
+        previousFilesStorageState = data && data.storage ? data.storage : null;
+        return previousFilesState;
+      }catch(err){
+        console.warn('failed to load previous files', err);
+        previousFilesStorageState = null;
+        return [];
+      }
+    }
+
+    function formatHistoryDate(value){
+      const numeric = Number(value || 0);
+      if(!numeric) return '';
+      try{
+        return new Intl.DateTimeFormat(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        }).format(new Date(numeric * 1000));
+      }catch(_){
+        return '';
+      }
+    }
+
+    async function savePreviousFileCopy(entry){
+      if(!entry || !entry.id) return;
+      try{
+        const res = await fetch(`/api/history/${entry.id}/download`);
+        if(!res.ok){
+          showPopup('could not save files');
+          return;
+        }
+        const link = document.createElement('a');
+        link.href = `/api/history/${entry.id}/download`;
+        link.rel = 'noopener';
+        link.click();
+      }catch(err){
+        showPopup((err && err.message) || 'could not save files');
+      }
+    }
+
+    async function reusePreviousFile(entry, stems){
+      const res = await fetch(`/api/history/${entry.id}/reuse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stems: stems.join(','),
+          output_format: settingsState.output_format || 'same_as_input',
+          multi_stem_export: settingsState.multi_stem_export || 'zip',
+          video_handling: settingsState.video_handling || 'audio_only',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){
+        throw new Error(data?.detail?.message || data?.message || 'could not reuse song');
+      }
+      const item = {
+        id: data.task_id || data.id || null,
+        name: data.name,
+        mode: data.mode || null,
+        pct: typeof data.pct === 'number' ? data.pct : 0,
+        stage: data.stage || 'ready',
+        stems: Array.isArray(data.stems) ? data.stems : [],
+        out_dir: data.out_dir || null,
+        preset_settings: data.preset_settings || null,
+        can_adjust_preset: !!data.can_adjust_preset,
+        downloaded: false,
+        delivery: data.delivery || 'folder',
+        autoDownloaded: false,
+        frozen: false,
+      };
+      tasks.push(item);
+      createItem(item);
+      saveTasks();
+      updateUI();
+      return item;
+    }
+
+    function openPreviousFileReusePicker(entry){
+      const { overlay, card } = createOverlayCard('choose split');
+      card.style.maxWidth = '540px';
+      const grid = document.createElement('div');
+      grid.className = 'grid grid-cols-1 gap-2';
+      const options = [
+        { label: 'drums', stems: ['htdemucs_ft_drums'], tooltip: 'fast drums' },
+        { label: 'bass', stems: ['htdemucs_ft_bass'], tooltip: 'fast bass' },
+        { label: 'other', stems: ['htdemucs_ft_other'], tooltip: 'other stem with guitar removed first' },
+        { label: 'full mix faster', stems: ['htdemucs_6s'], tooltip: 'faster full mix split' },
+        { label: 'vocals', stems: ['vocals'], tooltip: 'vocals' },
+        { label: 'instrumental', stems: ['instrumental'], tooltip: 'instrumental' },
+        { label: 'guitar', stems: ['guitar'], tooltip: 'guitar' },
+        { label: 'bg vocal', stems: ['mel_band_karaoke'], tooltip: 'background vocal split' },
+        { label: 'full mix', stems: ['bs_roformer_6s'], tooltip: BS_6S_TOOLTIP },
+        { label: 'drum split - 6', stems: ['drumsep_6s'], tooltip: DRUMSEP_6S_TOOLTIP },
+        { label: 'drum split - 4', stems: ['drumsep_4s'], tooltip: DRUMSEP_4S_TOOLTIP },
+        { label: 'all stems', stems: ['all_stems'], tooltip: 'full stem graph' },
+        { label: 'boost harmonies', stems: ['boost_harmonies'], tooltip: 'boost harmonies' },
+        { label: 'denoise', stems: ['preset_denoise'], tooltip: 'denoise' },
+      ];
+      options.forEach((option) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'preset-choice';
+        const title = document.createElement('span');
+        title.className = 'preset-choice-title';
+        title.textContent = option.label;
+        btn.appendChild(title);
+        guardClick(btn, async (event) => {
+          event.preventDefault();
+          try{
+            await reusePreviousFile(entry, option.stems);
+            closeOverlay(overlay);
+            showPopup('song added back to queue');
+          }catch(err){
+            showPopup((err && err.message) || 'could not reuse song');
+          }
+        });
+        grid.appendChild(btn);
+      });
+      card.appendChild(grid);
+    }
+
+    function createPreviousFileRow(entry){
+      const row = document.createElement('div');
+      row.className = 'previous-history-item';
+      const artworkShell = document.createElement('div');
+      artworkShell.className = 'artwork-shell';
+      const artwork = document.createElement('img');
+      artwork.className = 'artwork-img';
+      artwork.alt = '';
+      artwork.hidden = true;
+      const fallback = document.createElement('div');
+      fallback.className = 'artwork-fallback';
+      fallback.textContent = '♪';
+      artwork.onload = () => {
+        artwork.hidden = false;
+        artworkShell.classList.add('has-image');
+      };
+      artwork.onerror = () => {
+        artwork.hidden = true;
+        artworkShell.classList.remove('has-image');
+      };
+      artwork.src = `${entry.artwork_url}?r=${Date.now()}`;
+      artworkShell.append(artwork, fallback);
+
+      const body = document.createElement('div');
+      body.className = 'previous-history-body';
+      const name = document.createElement('div');
+      name.className = 'previous-history-name';
+      name.textContent = entry.name || 'untitled';
+      const meta = document.createElement('div');
+      meta.className = 'previous-history-meta';
+      const labels = document.createElement('div');
+      labels.className = 'labels';
+      applyLabels(labels, entry.stems || []);
+      const date = document.createElement('div');
+      date.className = 'previous-history-date';
+      date.textContent = formatHistoryDate(entry.finished_at);
+      meta.append(labels, date);
+      body.append(name, meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'previous-history-actions';
+      const revealBtn = document.createElement('button');
+      revealBtn.type = 'button';
+      revealBtn.className = 'history-icon-btn';
+      revealBtn.innerHTML = `<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 2h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>`;
+      guardClick(revealBtn, async (event) => {
+        event.preventDefault();
+        const res = await fetch(`/api/history/${entry.id}/reveal`, { method: 'POST' });
+        if(!res.ok){
+          showPopup('could not open folder');
+        }
+      });
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'history-icon-btn';
+      saveBtn.innerHTML = `<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>`;
+      guardClick(saveBtn, async (event) => {
+        event.preventDefault();
+        await savePreviousFileCopy(entry);
+      });
+      const reuseBtn = document.createElement('button');
+      reuseBtn.type = 'button';
+      reuseBtn.className = 'history-icon-btn';
+      reuseBtn.innerHTML = `<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`;
+      guardClick(reuseBtn, (event) => {
+        event.preventDefault();
+        openPreviousFileReusePicker(entry);
+      });
+      actions.append(revealBtn, saveBtn, reuseBtn);
+      row.append(artworkShell, body, actions);
+      return row;
+    }
+
+    async function openPreviousFilesCard(){
+      const { overlay, card } = createOverlayCard('previous files');
+      card.style.maxWidth = '760px';
+      const shell = document.createElement('div');
+      shell.className = 'overlay-scroll-shell';
+      const list = document.createElement('div');
+      list.className = 'previous-files-list';
+      const indicator = document.createElement('div');
+      indicator.className = 'overlay-scroll-indicator';
+      indicator.setAttribute('aria-hidden', 'true');
+      const thumb = document.createElement('div');
+      thumb.className = 'overlay-scroll-thumb';
+      indicator.appendChild(thumb);
+      shell.append(list, indicator);
+      card.appendChild(shell);
+      const syncScroll = () => updateScrollIndicator(list, indicator, thumb);
+      overlay.__cleanupFns = overlay.__cleanupFns || [];
+      overlay.__cleanupFns.push(attachSoftWheelScroll(list, syncScroll));
+      const items = await loadPreviousFiles();
+      if(previousFilesStorageState && (previousFilesStorageState.near_limit || previousFilesStorageState.at_limit)){
+        const alert = document.createElement('div');
+        alert.className = 'history-storage-alert';
+        const prefix = previousFilesStorageState.at_limit ? 'previous files full' : 'previous files nearly full';
+        alert.textContent = `${prefix} · ${formatStorageUsage(previousFilesStorageState.usage_bytes)} / ${formatStorageUsage(previousFilesStorageState.limit_bytes)}`;
+        list.appendChild(alert);
+      }
+      if(!items.length){
+        const empty = document.createElement('div');
+        empty.className = 'history-empty';
+        empty.textContent = 'no saved songs yet';
+        list.appendChild(empty);
+        requestAnimationFrame(syncScroll);
+        return;
+      }
+      items.forEach((entry) => {
+        list.appendChild(createPreviousFileRow(entry));
+      });
+      requestAnimationFrame(syncScroll);
+    }
+    function closeSettings(){
+      if(!settingsOverlay) settingsOverlay = document.getElementById('settings-overlay');
+      const bg = document.getElementById('overlay-bg');
+      const card = document.getElementById('settings-card');
+      if(settingsOverlay){
+        if(bg){
+          bg.classList.remove('anim');
+          bg.classList.remove('anim-out');
+          void bg.offsetWidth;
+          bg.classList.add('anim-out'); // OUT
+        }
+        if(card){
+          card.classList.remove('settings-card-in');
+          card.classList.remove('fade-in');
+          card.classList.add('settings-card-out'); // OUT
+        }
+        setTimeout(() => {
+          if(card){
+            card.classList.remove('settings-card-out');
+            card.classList.add('opacity-0');
+          }
+          if(bg){ bg.classList.remove('anim-out'); }
+          settingsOverlay.classList.add('hidden');
+          restoreDialogFocus(settingsOverlay);
+          if(modelPreviewActive){
+            restoreModelPreview();
+          }
+        }, 180);
+      }
+    }
+
+    // --- Progress Smoother Helper ---
+    function updateScrollIndicator(scrollBody, indicator, thumb){
+      if(!scrollBody || !indicator || !thumb) return;
+      const clientHeight = scrollBody.clientHeight || 0;
+      const scrollHeight = scrollBody.scrollHeight || 0;
+      const maxScroll = Math.max(0, scrollHeight - clientHeight);
+      const visible = maxScroll > 4;
+      indicator.classList.toggle('visible', visible);
+      if(!visible){
+        thumb.style.height = '0px';
+        thumb.style.transform = 'translateY(0)';
+        return;
+      }
+      const trackHeight = indicator.clientHeight || Math.max(0, clientHeight - 40);
+      const thumbHeight = Math.max(40, Math.round((clientHeight / scrollHeight) * trackHeight));
+      const thumbTravel = Math.max(0, trackHeight - thumbHeight);
+      const thumbOffset = maxScroll > 0 ? (scrollBody.scrollTop / maxScroll) * thumbTravel : 0;
+      thumb.style.height = `${thumbHeight}px`;
+      thumb.style.transform = `translateY(${thumbOffset}px)`;
+    }
+
+    function wantsSoftPanelScroll(){
+      if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+        return false;
+      }
+      return !window.matchMedia || window.matchMedia('(pointer:fine)').matches;
+    }
+
+    function attachSoftWheelScroll(scrollBody, updateIndicator = null){
+      if(!scrollBody || !wantsSoftPanelScroll()){
+        return () => {};
+      }
+      let raf = null;
+      let target = scrollBody.scrollTop || 0;
+      const syncTarget = () => {
+        if(!raf){
+          target = scrollBody.scrollTop || 0;
+        }
+        if(updateIndicator){
+          updateIndicator();
+        }
+      };
+      const step = () => {
+        const maxScroll = Math.max(0, (scrollBody.scrollHeight || 0) - (scrollBody.clientHeight || 0));
+        target = Math.max(0, Math.min(maxScroll, target));
+        const current = scrollBody.scrollTop || 0;
+        const delta = target - current;
+        if(Math.abs(delta) < 0.5){
+          scrollBody.scrollTop = target;
+          if(updateIndicator){
+            updateIndicator();
+          }
+          raf = null;
+          return;
+        }
+        scrollBody.scrollTop = current + (delta * 0.16);
+        if(updateIndicator){
+          updateIndicator();
+        }
+        raf = requestAnimationFrame(step);
+      };
+      const onWheel = (event) => {
+        if(event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)){
+          return;
+        }
+        const maxScroll = Math.max(0, (scrollBody.scrollHeight || 0) - (scrollBody.clientHeight || 0));
+        if(maxScroll <= 0){
+          return;
+        }
+        event.preventDefault();
+        target = Math.max(0, Math.min(maxScroll, target + event.deltaY));
+        if(!raf){
+          raf = requestAnimationFrame(step);
+        }
+      };
+      scrollBody.addEventListener('scroll', syncTarget, { passive: true });
+      scrollBody.addEventListener('wheel', onWheel, { passive: false });
+      return () => {
+        if(raf){
+          cancelAnimationFrame(raf);
+          raf = null;
+        }
+        scrollBody.removeEventListener('scroll', syncTarget);
+        scrollBody.removeEventListener('wheel', onWheel);
+      };
+    }
+
+    function makeProgressSmoother(bar){
+      let raf = null;
+      let value = 0;     // currently displayed percent
+      let target = 0;    // latest requested percent
+      const clamp = p => Math.max(0, Math.min(100, p));
+      const tick = () => {
+        // critically damped-ish exponential approach toward target
+        const delta = target - value;
+        // if close enough, snap to target and stop
+        if (Math.abs(delta) < 0.08) {
+          value = target;
+          bar.style.width = value + '%';
+          raf = null;
+          return;
+        }
+        // ease toward target; 0.12 controls lag/smoothness
+        value += delta * 0.12;
+        bar.style.width = value + '%';
+        raf = requestAnimationFrame(tick);
+      };
+      return {
+        setImmediate(p){ value = target = clamp(p); bar.style.width = value + '%'; },
+        setTarget(p){ target = clamp(p); if(!raf) raf = requestAnimationFrame(tick); },
+        stop(){ if(raf){ cancelAnimationFrame(raf); raf = null; } }
+      };
+    }
+
+    if(localStorage.getItem('playIntro')){
+      localStorage.removeItem('playIntro');
+      title.style.position = 'absolute';
+      title.style.left = '50%';
+      title.style.top = '45%';
+      title.style.transform = 'translate(-50%, -50%)';
+      title.style.opacity = '1';
+      setTimeout(() => {
+        title.style.transition = 'all 0.5s ease';
+        title.style.left = '';
+        title.style.top = '';
+        title.style.transform = '';
+      }, 50);
+      setTimeout(() => {
+        document.querySelectorAll('#dropzone, .glass.w-64, #queue, #clear-btn').forEach((el,i)=>{
+          setTimeout(()=>{el.classList.add('fade-in')}, i*25);
+        });
+      }, 600);
+    } else {
+      title.classList.add('fade-in');
+    }
+
+    function quarantineStorageValue(storage, key){
+      try{
+        const value = storage.getItem(key);
+        if(value !== null){ storage.setItem(`${key}.corrupt.${Date.now()}`, value.slice(0, 65536)); }
+        storage.removeItem(key);
+      }catch(_error){}
+    }
+
+    function safeStorageJson(storage, key, fallback){
+      try{
+        const raw = storage.getItem(key);
+        if(raw === null) return fallback;
+        return JSON.parse(raw);
+      }catch(_error){
+        quarantineStorageValue(storage, key);
+        return fallback;
+      }
+    }
+
+    safeStorageJson(localStorage, 'tasks', []);
+    try{ localStorage.removeItem('tasks'); }catch(_error){}
+    let tasks = [];
+    // Helper: is a task finished? (completed or stopped)
+    function isFinished(t){
+      return t && (t.pct >= 100 || t.stage === 'stopped');
+    }
+    function saveTasks(){}
+
+    function setQueuePausedUi(paused){
+      if(resumeQueueBtn){ resumeQueueBtn.hidden = !paused; }
+    }
+
+    if(resumeQueueBtn){
+      guardClick(resumeQueueBtn, async () => {
+        const response = await fetch('/api/queue/resume', { method: 'POST' });
+        if(!response.ok){ showPopup('could not resume queue'); return; }
+        setQueuePausedUi(false);
+        showPopup('queue resumed');
+      });
+      fetch('/api/queue/status').then((response) => response.json()).then((data) => setQueuePausedUi(!!data.paused)).catch(() => {});
+    }
+
+    function truncateFilename(name, max = 25){
+      const text = String(name || '');
+      if(text.length <= max) return text;
+      const dotIndex = text.lastIndexOf('.');
+      if(dotIndex > 0 && dotIndex < text.length - 1){
+        const ext = text.slice(dotIndex);
+        const reserve = max - ext.length - 1;
+        if(reserve > 6){
+          return `${text.slice(0, reserve)}…${ext}`;
+        }
+      }
+      return `${text.slice(0, Math.max(1, max - 1))}…`;
+    }
+
+    function applyFilename(el, name){
+      if(!el) return;
+      const full = String(name || '');
+      el.textContent = truncateFilename(full, 25);
+      el.title = full;
+    }
+
+    function artworkUrl(taskId){
+      return taskId ? `/api/tasks/${encodeURIComponent(taskId)}/artwork` : '';
+    }
+
+    function shouldDimArtwork(task){
+      if(!task) return false;
+      const stage = String(task.stage || '').toLowerCase();
+      if(stage === 'ready' || stage === 'done' || stage === 'stopped' || stage === 'error') return false;
+      if(stage === 'queued') return true;
+      return typeof task.pct === 'number' ? (task.pct >= 0 && task.pct < 100) : false;
+    }
+
+    function applyArtwork(row, task){
+      if(!row) return;
+      const shell = row.querySelector('.artwork-shell');
+      const img = row.querySelector('.artwork-img');
+      if(!shell || !img) return;
+      if(row.__artworkRetryTimer){
+        clearTimeout(row.__artworkRetryTimer);
+        row.__artworkRetryTimer = null;
+      }
+      shell.classList.toggle('is-dim', shouldDimArtwork(task));
+      const taskId = task && task.id ? String(task.id) : '';
+      if(!taskId){
+        img.hidden = true;
+        img.removeAttribute('src');
+        img.dataset.taskId = '';
+        shell.classList.remove('has-image');
+        return;
+      }
+      if(img.dataset.taskId === taskId && img.getAttribute('src') && !img.hidden){
+        return;
+      }
+      img.dataset.taskId = taskId;
+      img.hidden = true;
+      img.onload = () => {
+        if(img.dataset.taskId !== taskId) return;
+        if(row.__artworkRetryTimer){
+          clearTimeout(row.__artworkRetryTimer);
+          row.__artworkRetryTimer = null;
+        }
+        img.hidden = false;
+        shell.classList.add('has-image');
+      };
+      img.onerror = () => {
+        if(img.dataset.taskId !== taskId) return;
+        img.hidden = true;
+        img.removeAttribute('src');
+        shell.classList.remove('has-image');
+        row.__artworkRetryTimer = setTimeout(() => {
+          if(img.dataset.taskId !== taskId) return;
+          img.src = `${artworkUrl(taskId)}?v=${encodeURIComponent(taskId)}&r=${Date.now()}`;
+        }, 900);
+      };
+      img.src = `${artworkUrl(taskId)}?v=${encodeURIComponent(taskId)}`;
+    }
+
+    function applyRowState(row, task){
+      if(!row || !task) return;
+      applyArtwork(row, task);
+      const labels = row.querySelector('.labels');
+      if(labels){
+        const normalized = String(task.stage || '').toLowerCase();
+        const visible = !(normalized === 'ready' && Number(task.pct || 0) === 0 && !task.frozen);
+        labels.classList.toggle('hidden', !visible);
+      }
+      bindTaskPresetButton(row.querySelector('.task-preset-btn'), task);
+    }
+
+    function isBoostHarmoniesTask(task){
+      return !!(task && Array.isArray(task.stems) && task.stems.includes('boost_harmonies'));
+    }
+
+    function taskPresetSettings(task){
+      const presetMode = taskPresetMode(task);
+      const presetConfig = presetMode ? PRESET_CONFIGS[presetMode] : PRESET_CONFIGS.boost_harmonies;
+      const source = task && task.preset_settings && typeof task.preset_settings === 'object' ? task.preset_settings : {};
+      return {
+        overlay_gain_db: Number.isFinite(Number(source.overlay_gain_db)) ? Number(source.overlay_gain_db) : presetConfig.defaultOverlayGain,
+        base_song_gain_db: Number.isFinite(Number(source.base_song_gain_db)) ? Number(source.base_song_gain_db) : presetConfig.defaultBaseGain,
+      };
+    }
+
+    function canAdjustTaskPreset(task){
+      if(isLanClient) return false;
+      if(!task || !task.id) return false;
+      if(String(task.stage || '').toLowerCase() !== 'done') return false;
+      if(typeof task.can_adjust_preset === 'boolean') return task.can_adjust_preset;
+      return !!taskPresetMode(task);
+    }
+
+    function bindTaskPresetButton(btn, task){
+      if(!btn) return;
+      bindDelayedTooltip(btn);
+      const visible = canAdjustTaskPreset(task);
+      btn.hidden = !visible;
+      btn.disabled = !visible;
+      if(!visible) return;
+      guardClick(btn, (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openTaskPresetAdjuster(task);
+      });
+    }
+
+    function formatEta(seconds){
+      const value = Number(seconds);
+      if(!Number.isFinite(value) || value <= 0) return '';
+      const rounded = Math.max(1, Math.round(value));
+      if(rounded < 60){
+        return `${rounded}s`;
+      }
+      if(rounded < 3600){
+        const minutes = Math.floor(rounded / 60);
+        const remainSeconds = Math.round(rounded % 60);
+        if(minutes < 5 && remainSeconds){
+          return `${minutes}m ${remainSeconds}s`;
+        }
+        return `${minutes}m`;
+      }
+      const minutes = Math.round(rounded / 60);
+      const hours = Math.floor(minutes / 60);
+      const remain = minutes % 60;
+      return remain ? `${hours}h ${remain}m` : `${hours}h`;
+    }
+
+    function formatProgressChip(pct, etaSeconds, etaState){
+      const clamped = Math.round(Math.max(0, Math.min(100, Number(pct) || 0)));
+      const eta = formatEta(etaSeconds);
+      const state = String(etaState || '').toLowerCase();
+      // Keep ETA/state plumbing active, but hide ETA-related copy from the UI.
+      void eta;
+      void state;
+      return `${clamped}%`;
+    }
+
+    function shouldUseProgressSummary(stage){
+      const normalized = String(stage || '').toLowerCase();
+      if(['done', 'error', 'errored', 'stopped'].includes(normalized)) return false;
+      return !['ready', 'queued'].includes(normalized);
+    }
+
+    async function rehydrateTasks(){
+      try{
+        const res = await fetch('/api/tasks?limit=100');
+        if(!res.ok) return;
+        const data = await res.json();
+        tasks = data && Array.isArray(data.items) ? data.items.filter((task) => task && task.id) : [];
+      }catch(err){
+        console.debug('rehydration skipped', err);
+      }
+    }
+    // processing-state helper
+    function isProcessing(t){
+      if(!t) return false;
+      const stage = (t.stage || '').toLowerCase();
+      const inactive = ['ready','queued','done','stopped','error'];
+      if(inactive.includes(stage)) return false;
+      return typeof t.pct === 'number' ? (t.pct >= 0 && t.pct < 100) : true;
+    }
+
+    function updateClear(){
+      let hasClearable = false;
+      if (!startPressed) {
+        hasClearable = Array.isArray(tasks) && tasks.length > 0;
+      } else {
+        hasClearable = tasks && tasks.some(t => t && (t.stage === 'stopped' || (typeof t.pct === 'number' && t.pct >= 100)));
+      }
+      const itemCount = queue.children.length;
+      const manyItems = itemCount > 6;
+      const compact = itemCount <= 2;
+      spacer.style.height = hasClearable ? (compact ? '14px' : '22px') : '0px';
+      if (bottomPad) {
+        if(itemCount === 0){
+          bottomPad.style.height = '0px';
+        }else if(compact){
+          bottomPad.style.height = '10px';
+        }else{
+          bottomPad.style.height = manyItems ? '34px' : '22px';
+        }
+      }
+      if (hasClearable) {
+        clearBtn.hidden = false;
+        clearBtn.classList.add('show');
+        clearBtn.style.pointerEvents = 'auto';
+      } else {
+        clearBtn.classList.remove('show');
+        clearBtn.style.pointerEvents = 'none';
+        clearBtn.hidden = true;
+      }
+    }
+
+    function updateShellLayout(){
+      if(!appShell) return;
+      const itemCount = queue.children.length;
+      const compact = itemCount <= 2;
+      appShell.classList.toggle('compact', compact);
+      appShell.classList.toggle('expanded', !compact);
+    }
+    function updateVigs(){
+      const rect = queue.getBoundingClientRect();
+      const shellRect = appShell.getBoundingClientRect();
+      topVig.style.top = '0px';
+      topVig.style.bottom = 'auto';
+      topVig.style.transform = 'none';
+      topVig.style.opacity = appShell.scrollTop > 0 ? '0.56' : '0';
+      botVig.style.opacity = rect.bottom > shellRect.bottom ? '1' : '0';
+    }
+
+    function enforceCapacity(){
+      const activeCount = tasks.filter(t => t && !isFinished(t)).length;
+      const full = activeCount >= MAX_TASKS;
+      dropzone.classList.toggle('pointer-events-none', full);
+      dropzone.classList.toggle('opacity-60', full);
+      if(fileInput) fileInput.disabled = full;
+      if(full){
+        const now = Date.now();
+        if(!enforceCapacity._lastNotice || now - enforceCapacity._lastNotice > 8000){
+          showPopup('maximum number of songs reached! Please clear all to upload more songs');
+          enforceCapacity._lastNotice = now;
+        }
+      }
+      return full;
+    }
+
+    function updateUI(){
+      updateShellLayout();
+      updateClear();
+      updateVigs();
+      const full = enforceCapacity();
+      const blocked = full;
+      dropzone.classList.toggle('pointer-events-none', blocked);
+      dropzone.classList.toggle('opacity-60', blocked);
+      if(fileInput) fileInput.disabled = blocked;
+      updateStartButton();
+    }
+
+
+    // Helper to apply stem labels
+    function applyLabels(container, stemsList){
+      if(!container || !stemsList) return;
+      container.innerHTML='';
+      const pretty = {
+        guitar: 'guitar',
+        mel_band_karaoke: 'bg vocal',
+        all_stems: 'all stems',
+        preset_denoise: 'denoise',
+        denoise: 'denoise',
+        bs_roformer_6s: 'full mix',
+        htdemucs_ft_drums: 'drums',
+        htdemucs_ft_bass: 'bass',
+        htdemucs_ft_other: 'other',
+        htdemucs_6s: 'full mix faster',
+        drumsep_6s: 'drum split - 6',
+        drumsep_4s: 'drum split - 4',
+        boost_harmonies: 'boost harmonies',
+      };
+      stemsList.forEach(name => {
+        const base = name.split(' - ').pop() || name;
+        const stem = base.replace(/\.wav$/i,'');
+        const chip = document.createElement('span');
+        chip.className = 'chip chip-dim text-[11px]';
+        chip.textContent = pretty[stem] || stem;
+        container.appendChild(chip);
+      });
+    }
+
+    function refreshAllLabelVisibility(){
+      document.querySelectorAll('#queue .item-row').forEach((row) => {
+        const task = row.__taskId ? getTaskById(row.__taskId) : getTaskByTempKey(row.__tempKey);
+        if(task){
+          applyRowState(row, task);
+        }
+      });
+    }
+
+    function shouldShowStatus(stage){
+      const normalized = String(stage || '').toLowerCase();
+      if(!normalized || normalized === 'done') return false;
+      if(normalized === 'ready') return startPressed;
+      if(normalized === 'queued') return queueStarted || startPressed;
+      return true;
+    }
+
+    function setStatusVisibility(st, stage){
+      if(!st) return;
+      const visible = stage !== 'done' && shouldShowStatus(stage);
+      st.classList.toggle('hidden', !visible);
+    }
+
+    function hideStatus(st){
+      if(!st) return;
+      st.textContent = '';
+      st.classList.add('hidden');
+      st.style.display = 'none';
+    }
+
+    function showStatus(st){
+      if(!st) return;
+      st.style.display = '';
+    }
+
+    function setStopVisibility(stopPad, stage, forceShow = false){
+      if(!stopPad) return;
+      const normalized = String(stage || '').toLowerCase();
+      let inferredActive = false;
+      const row = stopPad.closest ? stopPad.closest('.item-row') : null;
+      if(row){
+        const id = row.__taskId;
+        const tempKey = row.__tempKey;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        inferredActive = !!task && (isProcessing(task) || (normalized === 'queued' && Number(task.pct || 0) > 0));
+      }
+      const active = forceShow || inferredActive || (normalized && !['ready','queued','done','stopped','error','errored'].includes(normalized));
+      const show = !!active;
+      stopPad.style.display = show ? '' : 'none';
+      stopPad.classList.toggle('show', show);
+      if(!show){
+        stopPad.style.pointerEvents = 'none';
+        stopPad.style.opacity = '0.6';
+      } else {
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+      }
+    }
+
+    function bindFolderButton(btn, taskRef){
+      if(!btn || !taskRef) return;
+      guardClick(btn, async (e) => {
+        e.preventDefault();
+        if(btn.dataset.busy === '1') return;
+        btn.dataset.busy = '1';
+        try{
+          const res = await fetch('/reveal/' + taskRef.id, { method: 'POST' });
+          if(!res.ok){
+            let msg = "file doesn't exist";
+            try{
+              const data = await res.json();
+              msg = (data && data.detail && data.detail.message) || msg;
+            }catch(_){}
+            showPopup(msg);
+          }
+        }catch(err){
+          showPopup("file doesn't exist");
+        }
+        setTimeout(() => { btn.dataset.busy = ''; }, 250);
+      });
+    }
+
+    // --- Helper to set rerun and stop icons ---
+
+    function setRetryIcon(stopPad){
+      if(!stopPad) return;
+      while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
+      stopPad.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="#0F2027" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>');
+    }
+
+    function setStopSquareIcon(stopPad){
+      if(!stopPad) return;
+      while (stopPad.firstChild) stopPad.removeChild(stopPad.firstChild);
+      stopPad.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="#0F2027" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.75" ry="1.75"/></svg>');
+    }
+
+    function setDownloadIcon(btn){
+      if(!btn) return;
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS,'svg');
+      svg.setAttribute('viewBox','0 0 24 24');
+      svg.classList.add('w-7','h-7');
+      svg.setAttribute('fill','none');
+      svg.setAttribute('stroke','#0F2027');
+      svg.setAttribute('stroke-width','2.2');
+      svg.setAttribute('stroke-linecap','round');
+      svg.setAttribute('stroke-linejoin','round');
+      const arr = document.createElementNS(NS,'path');
+      arr.setAttribute('d','M12 5v10m0 0l-4-4m4 4l4-4');
+      const base = document.createElementNS(NS,'path');
+      base.setAttribute('d','M5 19h14');
+      svg.append(arr, base);
+      btn.appendChild(svg);
+    }
+
+    function setFolderIcon(btn){
+      if(!btn) return;
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      btn.insertAdjacentHTML('afterbegin', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>');
+    }
+
+    function triggerTaskDownload(taskRef){
+      if(!taskRef || !taskRef.id) return;
+      const link = document.createElement('a');
+      link.href = `/download/${taskRef.id}`;
+      link.rel = 'noopener';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    function bindDownloadButton(btn, taskRef){
+      if(!btn || !taskRef || !taskRef.id) return;
+      btn.classList.add('show');
+      if(taskRef.delivery === 'browser_download'){
+        setDownloadIcon(btn);
+        btn.title = 'download';
+        guardClick(btn, (e) => {
+          e.preventDefault();
+          triggerTaskDownload(taskRef);
+        });
+        if(!taskRef.autoDownloaded){
+          taskRef.autoDownloaded = true;
+          setTimeout(() => triggerTaskDownload(taskRef), 180);
+        }
+        return;
+      }
+      setFolderIcon(btn);
+      btn.title = 'open folder';
+      bindFolderButton(btn, taskRef);
+    }
+// --- Helper to rerun a task server-side ---
+    async function rerunTask(task, ui, options = {}){
+      const {bar, st, dl, stopPad, smooth} = ui;
+      if(!task || !task.id) return;
+      let ok = false, newId = null, payload = null;
+      const body = {};
+      if(typeof options.stems === 'string' && options.stems){
+        body.stems = options.stems;
+      }
+      if(typeof options.output_format === 'string' && options.output_format){
+        body.output_format = options.output_format;
+      }
+      if(typeof options.multi_stem_export === 'string' && options.multi_stem_export){
+        body.multi_stem_export = options.multi_stem_export;
+      }
+      if(typeof options.video_handling === 'string' && options.video_handling){
+        body.video_handling = options.video_handling;
+      }
+      try {
+        const res = await fetch('/rerun/' + task.id, {
+          method: 'POST',
+          headers: Object.keys(body).length ? { 'Content-Type': 'application/json' } : undefined,
+          body: Object.keys(body).length ? JSON.stringify(body) : undefined,
+        });
+        if (res.ok) {
+          try { payload = await res.json(); } catch(_) { payload = null; }
+          newId = payload && (payload.task_id || payload.id || null);
+          if (newId) { ok = true; }
+        }
+      } catch (_) {}
+      if (!ok || !newId) {
+        // Treat it as a stopped/error card with rerun available
+        if (st) { showStatus(st); st.textContent = 'error'; st.classList.remove('hidden'); setStatusVisibility(st, 'error'); }
+        const parent = st && st.closest ? st.closest('.card') : null;
+        if (parent) parent.classList.add('done');
+
+        if (stopPad) {
+          stopPad.title = 'rerun';
+          stopPad.innerHTML = '';          // prevent double icon
+          setRetryIcon(stopPad);
+          stopPad.style.pointerEvents = '';
+          stopPad.style.opacity = '';
+          guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(task, ui); });
+        }
+        updateUI();
+        showError('rerun failed');
+        return;
+      }
+      // reset visual state
+      if(st){ showStatus(st); st.classList.remove('hidden'); st.textContent = 'preparing (0%)'; setStatusVisibility(st, 'preparing'); }
+      if(dl){ dl.classList.remove('show'); dl.removeAttribute('href'); }
+      const card = stopPad && stopPad.closest('.card');
+      if(card){ card.classList.remove('done'); }
+      if(smooth){ smooth.setImmediate(0); }
+      // show stop square again
+      if(stopPad){
+        stopPad.title = 'stop current task and pause queue';
+        stopPad.innerHTML = '';
+        setStopSquareIcon(stopPad);
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        guardClick(stopPad, async (e) => {
+          if(stopPad.dataset.busy === '1') return;
+          stopPad.dataset.busy = '1';
+          e.preventDefault();
+          await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
+          setTimeout(() => { stopPad.dataset.busy = ''; }, 250);
+        });
+        setStopVisibility(stopPad, 'preparing');
+      }
+      task.stage = 'preparing';
+      task.pct = 0;
+      if(Array.isArray(payload && payload.stems)){
+        task.stems = payload.stems;
+      }
+      task.downloaded = false;
+      task.autoDownloaded = false;
+      task.out_dir = null;
+      saveTasks();
+      updateUI();
+      // resume tracking
+      const oldId = task.id;
+      task.id = newId;
+      if (dl) { dl.removeAttribute('href'); }
+      const row = stopPad && stopPad.closest('.item-row');
+      if (row) { row.__taskId = newId; }
+      saveTasks();
+      trackProgress(newId, bar, st, dl, null, null, task, null, smooth, stopPad);
+    }
+
+    function createItem(task){
+      const existing = task && task.tempKey ? Array.from(queue.children).find((row) => row.__tempKey === task.tempKey) : null;
+      if(existing){
+        applyLabels(existing.querySelector('.labels'), displayStemsForTask(task));
+        applyRowState(existing, task);
+        ensureTaskProgressTracking(task);
+        updateUI();
+        return taskUiForRow(existing);
+      }
+      const node = template.content.cloneNode(true);
+      const li   = node.querySelector('.filename');
+      const bar  = node.querySelector('.bar-fill');
+      const st   = node.querySelector('.chip.status');
+      const dl   = node.querySelector('.dl-pad');
+      const card = node.querySelector('.card');
+      const stopPad = node.querySelector('.stop-pad');
+      applyFilename(li, task.name);
+      const labels = node.querySelector('.labels');
+      const smooth = makeProgressSmoother(bar);
+      const initOverall = Math.max(0, Math.min(100, task.pct || 0));
+      smooth.setImmediate(initOverall);
+      if(task.stage === 'done'){
+        hideStatus(st);
+        dl.classList.add('show');
+        dl.title = 'open folder';
+        bindFolderButton(dl, task);
+        card.classList.add('done');
+        if(stopPad) stopPad.remove();
+      }
+      else if(task.stage === 'stopped'){
+        // Treat as finished visually
+        showStatus(st);
+        st.classList.add('hidden');
+        card.classList.add('done');
+        if (stopPad){
+          stopPad.style.display = '';
+          stopPad.classList.add('show');
+          stopPad.innerHTML = '';
+          setRetryIcon(stopPad);
+          stopPad.title = 'rerun';
+        guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
+      }
+      }
+      else if (task.stage === 'error' || task.pct < 0) {
+        // Treat like stopped; keep label visible for context
+        showStatus(st);
+        st.textContent = 'error';
+        const parent = st.closest('.card'); if (parent) parent.classList.add('done');
+        if (stopPad){
+          stopPad.style.display = '';
+          stopPad.classList.add('show');
+          stopPad.title = 'rerun';
+          stopPad.innerHTML = '';
+          setRetryIcon(stopPad);
+        guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
+      }
+      }
+      else {
+        const sp = Math.round(Math.max(0, Math.min(100, task.pct)));
+        showStatus(st);
+        const normalizedStage = String(task.stage || '').toLowerCase();
+        if(!shouldUseProgressSummary(normalizedStage)){
+          st.textContent = displayStage(task.stage) || 'queued';
+          smooth.setImmediate(0);
+        }else{
+          st.textContent = formatProgressChip(sp, task.eta_seconds, task.eta_state);
+          if(normalizedStage === 'ready' || normalizedStage === 'queued'){
+            smooth.setImmediate(0);
+          }else{
+            smooth.setImmediate(sp);
+          }
+        }
+        setStopVisibility(stopPad, task.stage);
+        if(stopPad && task.id && isProcessing(task)){
+          setStopSquareIcon(stopPad);
+          stopPad.style.pointerEvents = '';
+          stopPad.style.opacity = '';
+          stopPad.title = 'stop current task and pause queue';
+          guardClick(stopPad, async (e) => {
+            if(stopPad.dataset.busy === '1') return;
+            stopPad.dataset.busy = '1';
+            e.preventDefault();
+            await requestStop(task.id, task, { bar, st, dl, stopPad, smooth });
+            stopPad.dataset.busy = '';
+          });
+        }
+      }
+      if(dl && (task.stage === 'stopped' || task.stage === 'error' || task.pct < 0)){
+        dl.classList.add('show');
+        dl.title = 'retry';
+        dl.innerHTML = '';
+        setRetryIcon(dl);
+        guardClick(dl, (e) => { e.preventDefault(); rerunTask(task, { bar, st, dl, stopPad, smooth }); });
+      }
+      setStatusVisibility(st, task.stage);
+      const inserted = node.children[0];
+      inserted.classList.add('enter-pre');
+      // Attach task id for later filtering
+      inserted.__taskId = task.id;
+      queue.insertBefore(inserted, queue.firstChild);
+      // apply enter transition to the inserted card
+      requestAnimationFrame(() => {
+        inserted.classList.add('enter-active');
+      });
+      // Apply any stem labels if present
+      applyLabels(inserted.querySelector('.labels'), displayStemsForTask(task));
+      applyRowState(inserted, task);
+      ensureTaskProgressTracking(task);
+      updateUI();
+      return {bar, st, dl, stopPad, smooth};
+    }
+
+    function withPageFade(doWork){
+      const mask = document.createElement('div');
+      mask.className = 'page-mask';
+      document.body.appendChild(mask);
+      requestAnimationFrame(() => {
+        mask.classList.add('show');
+        setTimeout(() => {
+          try { doWork(); } finally {
+            mask.classList.remove('show');
+            setTimeout(() => mask.remove(), 300);
+          }
+        }, 280);
+      });
+    }
+
+    function wait(ms){
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function nextFrame(){
+      return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+
+    function closeActiveStreams(){
+      activeStreams.forEach((stream) => {
+        try{ stream.close(); } catch(_){}
+      });
+      activeStreams.clear();
+    }
+
+    function abortPendingUploads(){
+      pendingItems.forEach((pending) => {
+        if(pending && pending.xhr){
+          try{ pending.xhr.abort(); } catch(_){}
+        }
+      });
+    }
+
+    async function clearAllTasks({ showToast = false } = {}){
+      if(isClearing) return;
+      isClearing = true;
+      closeActiveStreams();
+      abortPendingUploads();
+      if(Array.isArray(tasks)){
+        tasks.forEach(t => {
+          if(t && t.id){
+            try { fetch('/stop/' + t.id, {method:'POST'}); } catch(_){}
+          }
+        });
+      }
+      if(appShell){
+        appShell.classList.remove('resetting-in');
+        appShell.classList.add('resetting-out');
+        await wait(180);
+      }
+      for (const el of Array.from(queue.children)) { el.remove(); }
+      tasks = [];
+      pendingItems.length = 0;
+      startLock = false;
+      startPressed = false;
+      queueStarted = false;
+      saveTasks();
+      updateUI();
+      if(appShell){
+        appShell.classList.remove('resetting-out');
+        appShell.classList.add('resetting-in');
+        await nextFrame();
+        await nextFrame();
+        appShell.classList.remove('resetting-in');
+      }
+      try { await fetch('/clear_all_uploads', {method:'POST'}); } catch(_){ }
+      isClearing = false;
+      if(showToast) showPopup('all tasks cleared');
+    }
+
+    guardClick(clearBtn, async () => {
+      const hasRunning = Array.isArray(tasks) && tasks.some(t => isProcessing(t));
+      if(hasRunning){
+        const ok = await showConfirm('a process is still running. clear all anyway?');
+        if(!ok) return;
+      }
+      await clearAllTasks();
+    });
+
+    rehydrateTasks().finally(() => {
+      // restore previous tasks
+      queueStarted = tasks.some(t => t && ((t.stage && t.stage !== 'ready') || (typeof t.pct === 'number' && t.pct > 0) || t.out_dir));
+      tasks.forEach(t => {
+        const {bar, st, dl, stopPad, smooth} = createItem(t);
+        const last = queue.lastElementChild;
+        if(last){
+          requestAnimationFrame(() => {
+            last.classList.add('enter-active');
+          });
+        }
+        if(t.id && t.pct < 100 && t.pct >= 0 && !activeStreams.has(t.id)){
+          trackProgress(t.id, bar, st, dl, null, null, t, null, smooth, stopPad);
+        }
+      });
+      refreshAllLabelVisibility();
+      updateUI();
+      appShell.addEventListener('scroll', updateVigs, { passive: true });
+      if(detachAppShellSoftScroll){
+        detachAppShellSoftScroll();
+      }
+      detachAppShellSoftScroll = attachSoftWheelScroll(appShell, updateVigs);
+    });
+    // settings button → open overlay
+    const settingsBtn = document.getElementById('settings-btn');
+    if(settingsBtn){ settingsBtn.addEventListener('click', openSettings); }
+    if(historyBtn){ historyBtn.addEventListener('click', openPreviousFilesCard); }
+    const localPresetSettingsBtn = document.getElementById('preset-settings-btn');
+    if(localPresetSettingsBtn){ localPresetSettingsBtn.addEventListener('click', openPresetSettings); }
+
+    // initialize overlay controls on load
+    window.addEventListener('load', async () => {
+      applyDesktopShellState();
+      bindChoiceTooltips();
+      settingsOverlay = document.getElementById('settings-overlay');
+      presetSettingsOverlay = document.getElementById('preset-settings-overlay');
+      presetSettingsBtn = document.getElementById('preset-settings-btn');
+      outputFormatSelect = document.getElementById('output-format');
+      multiStemExportSelect = document.getElementById('multi-stem-export');
+      previousFilesRetentionSelect = document.getElementById('previous-files-retention');
+      previousFilesLimitInput = document.getElementById('previous-files-limit-gb');
+      previousFilesWarnInput = document.getElementById('previous-files-warn-gb');
+      outputFolderInput = document.getElementById('output-folder-path');
+      outputSameAsInput = document.getElementById('output-same-as-input');
+      outputFolderChoose = document.getElementById('output-folder-choose');
+      outputFolderOpen = document.getElementById('output-folder-open');
+      videoAudioOnly = document.getElementById('video-audio-only');
+      nerdStuffToggle = document.getElementById('nerd-stuff-toggle');
+      nerdStuffWrap = document.getElementById('nerd-stuff-wrap');
+      lanAccessHeading = document.getElementById('lan-access-heading');
+      lanAccessText = document.getElementById('lan-access-text');
+      lanCopyBtn = document.getElementById('lan-copy-btn');
+      portStatusText = document.getElementById('port-status-text');
+      modelsList = document.getElementById('models-list');
+      modelsNote = document.getElementById('models-note');
+      modelsDownloadBtn = document.getElementById('models-download');
+      modelsCtaWrap = document.getElementById('models-cta-wrap');
+      modelsFolderBtn = document.getElementById('models-folder-open');
+      modelsProgressWrap = document.getElementById('models-progress-wrap');
+      modelsTotal = document.getElementById('models-total');
+      modelsProgressBar = document.getElementById('models-progress-bar');
+      modelsProgressMeta = document.getElementById('models-progress-meta');
+      boostHarmoniesBackgroundSlider = document.getElementById('boost-harmonies-background-slider');
+      boostHarmoniesBaseSlider = document.getElementById('boost-harmonies-base-slider');
+      boostHarmoniesBackgroundValue = document.getElementById('boost-harmonies-background-value');
+      boostHarmoniesBaseValue = document.getElementById('boost-harmonies-base-value');
+      const closeBtn = document.getElementById('settings-close');
+      const presetCloseBtn = document.getElementById('preset-settings-close');
+      const forceBtn = document.getElementById('force-clear');
+      if(settingsOverlay) settingsOverlay.addEventListener('keydown', trapDialogFocus);
+      if(presetSettingsOverlay) presetSettingsOverlay.addEventListener('keydown', trapDialogFocus);
+      if(nerdStuffToggle){
+        nerdStuffToggle.addEventListener('click', () => {
+          setNerdStuffExpanded(!nerdStuffExpanded);
+        });
+      }
+      if(nerdStuffWrap){
+        nerdStuffWrap.addEventListener('transitionend', (event) => {
+          if(event.propertyName !== 'max-height') return;
+          if(nerdStuffExpanded){
+            nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
+          }
+        });
+        setNerdStuffExpanded(false, { immediate: true });
+      }
+      if(closeBtn) closeBtn.addEventListener('click', closeSettings);
+      if(presetCloseBtn) presetCloseBtn.addEventListener('click', closePresetSettings);
+      if(settingsOverlay) settingsOverlay.addEventListener('click', (e)=>{ if(e.target === settingsOverlay) closeSettings(); });
+      if(presetSettingsOverlay) presetSettingsOverlay.addEventListener('click', (e)=>{ if(e.target === presetSettingsOverlay) closePresetSettings(); });
+      if(forceBtn) forceBtn.addEventListener('click', async ()=>{
+        try{
+          await clearAllTasks({ showToast: true });
+          closeSettings();
+        }catch(err){ showError('force clear failed'); }
+      });
+      document.addEventListener('keydown', (event) => {
+        if(event.key === 'Escape'){
+          if(presetSettingsOverlay && !presetSettingsOverlay.classList.contains('hidden')){
+            closePresetSettings();
+          }else if(settingsOverlay && !settingsOverlay.classList.contains('hidden')){
+            closeSettings();
+          }
+          return;
+        }
+        if(shouldHandleStartShortcut(event)){
+          event.preventDefault();
+          void startSequentialProcessing();
+        }
+      });
+      [
+        [boostHarmoniesBackgroundSlider, 'boost_harmonies_background_vocals_gain_db'],
+        [boostHarmoniesBaseSlider, 'boost_harmonies_base_song_gain_db'],
+      ].forEach(([slider, key]) => {
+        if(!slider) return;
+        slider.addEventListener('input', () => {
+          schedulePresetSettingsPersist({ [key]: Number(slider.value || 0) });
+        });
+      });
+      checkStorage();
+      checkMemory();
+      setInterval(checkStorage, 15000);
+      setInterval(checkMemory, 12000);
+      await loadSettings();
+      await refreshRuntimeStatus({ showPortNotice: true });
+      startLanDisconnectMonitor();
+      await refreshModelStatus();
+      await checkForReleaseUpdate();
+      setInterval(checkForReleaseUpdate, 12 * 60 * 60 * 1000);
+      if(outputFormatSelect){
+        outputFormatSelect.addEventListener('change', () => {
+          persistSettings({ output_format: outputFormatSelect.value }, { showMissingPopup:false });
+        });
+      }
+      if(multiStemExportSelect){
+        multiStemExportSelect.addEventListener('change', () => {
+          persistSettings({ multi_stem_export: multiStemExportSelect.value }, { showMissingPopup:false });
+        });
+      }
+      if(previousFilesRetentionSelect){
+        previousFilesRetentionSelect.addEventListener('change', () => {
+          persistSettings({ previous_files_retention: previousFilesRetentionSelect.value }, { showMissingPopup:false });
+        });
+      }
+      const persistPreviousFilesStorageSettings = () => {
+        const limitGb = coerceStorageSettingValue(previousFilesLimitInput ? previousFilesLimitInput.value : settingsState.previous_files_limit_gb, settingsState.previous_files_limit_gb ?? 10, 0.5);
+        let warnGb = coerceStorageSettingValue(previousFilesWarnInput ? previousFilesWarnInput.value : settingsState.previous_files_warn_gb, settingsState.previous_files_warn_gb ?? 8, 0.1);
+        warnGb = Math.min(limitGb, warnGb);
+        settingsState = { ...settingsState, previous_files_limit_gb: limitGb, previous_files_warn_gb: warnGb };
+        applySettingsUI();
+        persistSettings({ previous_files_limit_gb: limitGb, previous_files_warn_gb: warnGb }, { showMissingPopup:false });
+      };
+      [previousFilesLimitInput, previousFilesWarnInput].forEach((input) => {
+        if(!input) return;
+        input.addEventListener('change', persistPreviousFilesStorageSettings);
+        input.addEventListener('blur', persistPreviousFilesStorageSettings);
+      });
+      if(outputSameAsInput){
+        outputSameAsInput.addEventListener('change', () => {
+          persistSettings({ output_same_as_input: outputSameAsInput.checked }, { showMissingPopup:false });
+        });
+      }
+      if(videoAudioOnly){
+        videoAudioOnly.addEventListener('change', () => {
+          if(videoAudioOnly.checked){
+            persistSettings({ video_handling: 'audio_only' }, { showMissingPopup:false });
+          }
+        });
+      }
+      if(outputFolderChoose){
+        outputFolderChoose.addEventListener('click', async () => {
+          if(settingsState.output_same_as_input) return;
+          try{
+            const res = await fetch('/api/settings/output_root/pick', { method: 'POST' });
+            if(!res.ok) return;
+            const data = await res.json();
+            if(!data.cancelled && data.output_root){
+              settingsState = { ...settingsState, output_root: data.output_root };
+              applySettingsUI();
+            }
+          }catch(err){
+            showPopup('could not choose folder');
+          }
+        });
+      }
+      if(outputFolderOpen){
+        outputFolderOpen.addEventListener('click', async () => {
+          if(settingsState.output_same_as_input) return;
+          try{
+            await fetch('/api/settings/output_root/open', { method: 'POST' });
+          }catch(err){
+            showPopup('could not open folder');
+          }
+        });
+      }
+      if(lanCopyBtn){
+        lanCopyBtn.innerHTML = createCopyIconMarkup();
+        lanCopyBtn.dataset.copied = '0';
+        lanCopyBtn.addEventListener('click', async () => {
+          const runtime = settingsState.runtime || {};
+          const target = runtime.lan_local_display || runtime.lan_display || '';
+          if(!target) return;
+          const ok = await copyText(target);
+          if(ok){
+            pulseCopiedState(lanCopyBtn);
+          }
+        });
+      }
+      if(modelsDownloadBtn){
+        modelsDownloadBtn.addEventListener('click', async () => {
+          stopModelDownloadAttention(modelsDownloadBtn);
+          if(modelPreviewActive){
+            simulateModelPreviewDownload();
+            return;
+          }
+          await dismissModelPrompt();
+          const missing = Array.isArray(lastModelStatus && lastModelStatus.missing) ? lastModelStatus.missing : null;
+          syncModelDownloadToast({
+            status: 'downloading',
+            pct: 0,
+            current_model: '',
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            eta_seconds: null,
+            eta_state: null,
+            missing: missing && missing.length ? missing : [],
+          });
+          startModelDownload(missing && missing.length ? missing : null);
+        });
+      }
+      if(modelsFolderBtn){
+        modelsFolderBtn.addEventListener('click', () => openModelsFolderAction());
+      }
+      if(structureCheck){
+        structureCheck.addEventListener('change', () => {
+          if(structureCheck.checked){
+            persistSettings({ structure_mode: 'structured' });
+          }
+        });
+      }
+      if(structurelessCheck){
+        structurelessCheck.addEventListener('change', () => {
+          if(structurelessCheck.checked){
+            persistSettings({ structure_mode: 'flat' });
+          }
+        });
+      }
+    });
+    window.addEventListener('pywebviewready', applyDesktopShellState);
+    if(windowCloseBtn){
+      windowCloseBtn.addEventListener('click', async () => {
+        const handled = await callDesktopAction('close_window');
+        if(!handled) window.close();
+      });
+    }
+    if(windowMinimizeBtn){
+      windowMinimizeBtn.addEventListener('click', () => {
+        callDesktopAction('minimize_window');
+      });
+    }
+    if(windowFullscreenBtn){
+      windowFullscreenBtn.addEventListener('click', () => {
+        callDesktopAction('toggle_fullscreen_window');
+      });
+    }
+    window.addEventListener('resize', positionModeSwitcherPill);
+
+    // drag-and-drop highlights
+    ['dragenter','dragover'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.add('ring-2','ring-[var(--accent)]');
+      }));
+    ['dragleave','drop'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove('ring-2','ring-[var(--accent)]');
+      }));
+
+    // open file picker on click/keyboard
+    const triggerPicker = async () => {
+      if(window.pywebview && window.pywebview.api && window.pywebview.api.pick_media_files){
+        const picked = await window.pywebview.api.pick_media_files();
+        await handleDesktopPickedPaths(Array.isArray(picked) ? picked : []);
+        return;
+      }
+      try {
+        if (fileInput.showPicker) { fileInput.showPicker(); return; }
+      } catch(_) {}
+      fileInput.click();
+    };
+    dropzone.addEventListener('click', (e) => {
+      e.preventDefault();
+      triggerPicker();
+    });
+    dropzone.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        void triggerPicker();
+      }
+    });
+
+    // handle both dropped and picked files
+    dropzone.addEventListener('drop', e => {
+      captureDroppedSourceDirs(e);
+      handleFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', e => handleFiles(e.target.files));
+    if(modeSwitcher){
+      modeSwitcher.addEventListener('click', (event) => {
+        const button = event.target.closest('.mode-switch-btn');
+        if(!button) return;
+        const nextTab = button.dataset.tab || 'single';
+        if(nextTab === activeModeTab) return;
+        activeModeTab = nextTab;
+        ensureSelectionForActiveTab();
+        renderModeChoices(true);
+        Promise.resolve(syncQueuedStemSelection()).catch(() => {});
+      });
+    }
+    if(modeChoices){
+      modeChoices.addEventListener('click', (event) => {
+        const button = event.target.closest('.stem-choice, .preset-choice');
+        if(!button) return;
+        if(button.dataset.preset){
+          const nextPreset = button.dataset.preset || '';
+          if(selectedPresetMode === nextPreset){
+            ensureSelectionForActiveTab();
+          }else{
+            selectedPresetMode = nextPreset || null;
+            selectedStemModes = new Set();
+          }
+          updateModeChoiceUI();
+          Promise.resolve(syncQueuedStemSelection()).catch(() => {});
+          return;
+        }
+        const nextMode = button.dataset.mode || 'vocals';
+        if(event.shiftKey){
+          selectStemModeRange(nextMode);
+        }else{
+          toggleStemModeSelection(nextMode, !!(event.metaKey || event.ctrlKey));
+        }
+        updateModeChoiceUI();
+        Promise.resolve(syncQueuedStemSelection()).catch(() => {});
+      });
+    }
+    ensureSelectionForActiveTab();
+    renderModeChoices();
+
+    function showError(msg){
+      const message = String(msg || 'unknown error');
+      const { overlay, card } = createOverlayCard('upload failed');
+      const copy = document.createElement('p');
+      copy.className = 'text-sm leading-relaxed text-[var(--txt-main)]/85';
+      copy.textContent = message;
+      const actions = document.createElement('div');
+      actions.className = 'flex justify-end gap-2';
+      const okBtn = makeActionButton('ok', 'bg-white text-black');
+      actions.append(okBtn);
+      card.append(copy, actions);
+      let settled = false;
+      const finish = () => {
+        if(settled) return;
+        settled = true;
+        closeOverlay(overlay);
+      };
+      okBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        finish();
+      });
+      overlay.addEventListener('click', (event) => {
+        if(event.target === overlay || (event.target && event.target.classList && event.target.classList.contains('overlay-bg'))){
+          finish();
+        }
+      }, true);
+      overlay.addEventListener('keydown', (event) => {
+        if(event.key === 'Escape' || event.key === 'Enter'){
+          event.preventDefault();
+          event.stopPropagation();
+          finish();
+        }
+      }, true);
+    }
+
+    function ensureToastWrap(){
+      let wrap = document.getElementById('toast-wrap');
+      if(!wrap){
+        wrap = document.createElement('div');
+        wrap.id = 'toast-wrap';
+        document.body.appendChild(wrap);
+      }
+      return wrap;
+    }
+
+    function showPopup(msg){
+      const wrap = ensureToastWrap();
+      const card = document.createElement('div');
+      card.textContent = msg;
+      card.className = 'toast-card glass text-[var(--txt-main)]';
+      wrap.appendChild(card);
+      const isErrorLike = /errorcode\.|failed|error/i.test(String(msg || ''));
+      setTimeout(() => dismissToastCard(card), isErrorLike ? 8000 : 3000);
+    }
+    const reopenParam = new URLSearchParams(window.location.search).get('reopen');
+    if(reopenParam === '1'){
+      showPopup("sorry, it appears stemsplat wasn't shut down. please restart the app.");
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    function showConfirm(msg){
+      return new Promise((resolve) => {
+        const { overlay, card } = createOverlayCard('confirm action');
+        const copy = document.createElement('p');
+        copy.className = 'text-sm leading-relaxed text-[var(--txt-main)]/85';
+        copy.textContent = String(msg || '');
+        const actions = document.createElement('div');
+        actions.className = 'flex justify-end gap-2';
+        const cancelBtn = makeActionButton('cancel', 'bg-white/10 text-white');
+        const okBtn = makeActionButton('yes', 'bg-white text-black');
+        actions.append(cancelBtn, okBtn);
+        card.append(copy, actions);
+        let settled = false;
+        const finish = (result) => {
+          if(settled) return;
+          settled = true;
+          closeOverlay(overlay);
+          resolve(result);
+        };
+        cancelBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          finish(false);
+        });
+        okBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          finish(true);
+        });
+        overlay.addEventListener('click', (event) => {
+          if(event.target === overlay || (event.target && event.target.classList && event.target.classList.contains('overlay-bg'))){
+            finish(false);
+          }
+        }, true);
+        overlay.addEventListener('keydown', (event) => {
+          if(event.key === 'Escape'){
+            event.preventDefault();
+            event.stopPropagation();
+            finish(false);
+          }else if(event.key === 'Enter'){
+            event.preventDefault();
+            event.stopPropagation();
+            finish(true);
+          }
+        }, true);
+      });
+    }
+
+    function dismissToastCard(card, { immediate = false } = {}){
+      if(!card) return;
+      if(immediate){
+        if(card.parentNode) card.parentNode.removeChild(card);
+        return;
+      }
+      if(card.dataset.toastClosing === '1') return;
+      card.dataset.toastClosing = '1';
+      card.classList.add('toast-card-closing');
+      setTimeout(() => {
+        if(card.parentNode) card.parentNode.removeChild(card);
+      }, 190);
+    }
+
+    function closeOverlay(overlay){
+      if(!overlay || !overlay.parentNode) return;
+      if(Array.isArray(overlay.__cleanupFns)){
+        overlay.__cleanupFns.forEach((cleanup) => {
+          try { cleanup(); } catch(_) {}
+        });
+        overlay.__cleanupFns = [];
+      }
+      if(overlay === activeHostClosedOverlay){
+        activeHostClosedOverlay = null;
+      }
+      const bg = overlay.querySelector('.overlay-bg');
+      const card = overlay.querySelector('.overlay-card');
+      if(bg){
+        bg.classList.remove('anim');
+        bg.classList.add('anim-out');
+      }
+      if(card){
+        card.classList.remove('settings-card-in');
+        card.classList.add('settings-card-out');
+      }
+      setTimeout(() => {
+        if(overlay.parentNode){
+          overlay.parentNode.removeChild(overlay);
+        }
+      }, 190);
+    }
+
+    async function copyText(text){
+      try{
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      }catch(_){}
+      try{
+        const input = document.createElement('textarea');
+        input.value = text;
+        input.setAttribute('readonly', '');
+        input.style.position = 'absolute';
+        input.style.left = '-9999px';
+        document.body.appendChild(input);
+        input.select();
+        const ok = document.execCommand('copy');
+        input.remove();
+        return ok;
+      }catch(_){
+        return false;
+      }
+    }
+
+    function createCopyIconMarkup(){
+      return `
+        <span class="icon-wrap" aria-hidden="true">
+          <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+            <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+          </svg>
+          <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12l4.2 4.2L19 6.5"></path>
+          </svg>
+        </span>`;
+    }
+
+    function pulseCopiedState(btn){
+      if(!btn) return;
+      const existing = copyResetTimers.get(btn);
+      if(existing){
+        clearTimeout(existing);
+      }
+      btn.dataset.copied = '1';
+      const timer = setTimeout(() => {
+        btn.dataset.copied = '0';
+        copyResetTimers.delete(btn);
+      }, 5000);
+      copyResetTimers.set(btn, timer);
+    }
+
+    function createOverlayCard(titleText){
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 z-[80] grid place-items-center px-4';
+      const bg = document.createElement('div');
+      bg.className = 'overlay-bg anim';
+      const card = document.createElement('div');
+      card.className = 'overlay-card glass settings-card-in w-full max-w-md rounded-2xl p-6 text-[var(--txt-main)] flex flex-col gap-4 relative';
+      const titleEl = document.createElement('h3');
+      titleEl.className = 'text-xl font-light';
+      titleEl.textContent = titleText;
+      card.appendChild(titleEl);
+      overlay.append(bg, card);
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => {
+        if(e.target === overlay || e.target === bg){
+          closeOverlay(overlay);
+          if(activeReleaseOverlay === overlay){
+            dismissReleaseUntilNextOpen(activeReleaseVersion);
+            activeReleaseOverlay = null;
+            activeReleaseOverlayUi = null;
+            activeReleaseVersion = '';
+            stopReleaseStatusPolling();
+          }
+          if(activePortOverlay === overlay) activePortOverlay = null;
+          if(activeHostClosedOverlay === overlay) activeHostClosedOverlay = null;
+        }
+      });
+      overlay.addEventListener('keydown', (e) => {
+        if(e.key === 'Escape'){
+          closeOverlay(overlay);
+          if(activeReleaseOverlay === overlay){
+            dismissReleaseUntilNextOpen(activeReleaseVersion);
+            activeReleaseOverlay = null;
+            activeReleaseOverlayUi = null;
+            activeReleaseVersion = '';
+            stopReleaseStatusPolling();
+          }
+          if(activePortOverlay === overlay) activePortOverlay = null;
+          if(activeHostClosedOverlay === overlay) activeHostClosedOverlay = null;
+        }
+      });
+      overlay.tabIndex = 0;
+      overlay.focus();
+      return { overlay, card };
+    }
+
+    function makeActionButton(label, extraClass = ''){
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `btn px-3 py-2 text-xs ${extraClass}`.trim();
+      btn.textContent = label;
+      return btn;
+    }
+
+    function parseReleaseHighlights(notes){
+      const text = String(notes || '').trim();
+      if(!text) return [];
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => !/^summary:/i.test(line))
+        .filter((line) => !/^highlights:/i.test(line));
+      const bulletLines = lines
+        .filter((line) => /^[-*•]/.test(line))
+        .map((line) => line.replace(/^[-*•]\s*/, '').trim())
+        .filter(Boolean);
+      if(bulletLines.length){
+        return bulletLines.slice(0, 5);
+      }
+      const plain = lines
+        .map((line) => line.replace(/^[-*•]\s*/, '').trim())
+        .filter(Boolean)
+        .join(' ');
+      if(!plain) return [];
+      return plain
+        .split(/\s*[;,]\s*/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(0, 5);
+    }
+
+    function applyRuntimeUI(runtime){
+      const data = runtime && typeof runtime === 'object' ? runtime : {};
+      const appVersion = document.getElementById('app-version');
+      if(appVersion){ appVersion.textContent = data.app_version ? `v${data.app_version}` : 'version unavailable'; }
+      const lanDisplay = data.lan_display || '';
+      const lanLocalDisplay = data.lan_local_display || '';
+      const networkName = (data.network_name || '').trim();
+      if(lanAccessHeading){
+        lanAccessHeading.textContent = networkName
+          ? `lan access - connect from other devices on the '${networkName}' network`
+          : 'lan access - connect from other devices on the local network';
+      }
+      if(lanAccessText){
+        lanAccessText.innerHTML = '';
+        if(lanLocalDisplay){
+          const preferred = document.createElement('div');
+          preferred.textContent = `${lanLocalDisplay} (recommended)`;
+          lanAccessText.appendChild(preferred);
+        }
+        if(lanDisplay){
+          const fallback = document.createElement('div');
+          fallback.textContent = lanDisplay;
+          lanAccessText.appendChild(fallback);
+        }
+        if(!lanLocalDisplay && !lanDisplay){
+          lanAccessText.textContent = 'unavailable';
+        }
+      }
+      if(lanCopyBtn){
+        const copyTarget = lanLocalDisplay || lanDisplay;
+        lanCopyBtn.disabled = !copyTarget;
+        lanCopyBtn.classList.toggle('dimmed-control', !copyTarget);
+      }
+      if(portStatusText){
+        if(data.port_conflict){
+          portStatusText.hidden = false;
+          portStatusText.textContent = `port ${data.preferred_port || 9876} is in use. currently running on ${data.current_port || data.preferred_port || 9876}.`;
+        }else{
+          portStatusText.hidden = true;
+          portStatusText.textContent = '';
+        }
+      }
+      if(nerdStuffExpanded && nerdStuffWrap){
+        nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
+      }
+    }
+
+    function renderModelChecklist(status){
+      if(!modelsList) return;
+      const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
+      const modelMap = new Map(
+        (Array.isArray(status && status.models) ? status.models : []).map((item) => [item.key, item])
+      );
+      let installedBytes = 0;
+      modelsList.innerHTML = '';
+      MODEL_CHECKLIST_ORDER.forEach((key) => {
+        const detail = modelMap.get(key) || null;
+        const row = document.createElement('div');
+        const ready = !missing.has(key);
+        row.className = `model-item${ready ? ' ready' : ''}`;
+        const main = document.createElement('div');
+        main.className = 'model-item-main';
+        const box = document.createElement('span');
+        box.className = 'model-state';
+        box.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4L9 15"></path><path d="M21 19L3 19"></path><path d="M9 15L4 10"></path></svg>`;
+        const copy = document.createElement('span');
+        copy.className = 'model-item-copy';
+        const label = document.createElement('span');
+        label.className = 'model-item-label';
+        label.textContent = MODEL_LABELS[key] || key;
+        copy.appendChild(label);
+        const displaySize = ready ? Number(detail && detail.size_bytes) : Number(detail && detail.expected_size_bytes);
+        if(ready && Number(detail && detail.size_bytes) > 0){
+          installedBytes += Number(detail.size_bytes) || 0;
+        }
+        if(displaySize > 0){
+          const size = document.createElement('span');
+          size.className = 'model-item-size';
+          size.textContent = formatBytes(displaySize);
+          copy.appendChild(size);
+        }
+        main.append(box, copy);
+        row.appendChild(main);
+        const repoUrl = MODEL_SOURCE_URLS[key];
+        if(repoUrl){
+          const actions = document.createElement('div');
+          actions.className = 'model-item-actions';
+          const repoLink = document.createElement('a');
+          repoLink.className = 'model-action-btn';
+          repoLink.href = repoUrl;
+          repoLink.target = '_blank';
+          repoLink.rel = 'noopener noreferrer';
+          repoLink.title = `open ${MODEL_LABELS[key] || key} page`;
+          repoLink.setAttribute('aria-label', `open ${MODEL_LABELS[key] || key} page`);
+          repoLink.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path></svg>`;
+          actions.appendChild(repoLink);
+          row.appendChild(actions);
+        }
+        modelsList.appendChild(row);
+      });
+      if(modelsTotal){
+        const expectedTotalBytes = Number(status && status.expected_total_bytes) || 0;
+        const totalBytes = expectedTotalBytes > 0 ? expectedTotalBytes : installedBytes;
+        if(totalBytes > 0 && installedBytes > 0 && expectedTotalBytes > installedBytes){
+          modelsTotal.textContent = `${formatBytes(installedBytes)} installed · ${formatBytes(totalBytes)} total`;
+        }else{
+          modelsTotal.textContent = totalBytes > 0 ? `total ${formatBytes(totalBytes)}` : '';
+        }
+        modelsTotal.hidden = totalBytes <= 0;
+      }
+    }
+
+    async function refreshRuntimeStatus({ showPortNotice = false } = {}){
+      try{
+        const res = await fetch('/api/runtime_status');
+        if(res.status === 401){
+          if(isLanClient){
+            window.location.reload();
+          }
+          return null;
+        }
+        if(!res.ok) return null;
+        const data = await res.json();
+        lanRuntimeFailures = 0;
+        settingsState.runtime = data;
+        applyRuntimeUI(data);
+        if(showPortNotice && data.show_port_notice){
+          showPortConflictOverlay(data);
+        }
+        return data;
+      }catch(err){
+        console.warn('runtime status failed', err);
+        return null;
+      }
+    }
+
+    function showHostClosedOverlay(){
+      if(activeHostClosedOverlay) return;
+      closeOverlay(activePortOverlay);
+      closeOverlay(activeReleaseOverlay);
+      activePortOverlay = null;
+      activeReleaseOverlay = null;
+      activeReleaseOverlayUi = null;
+      activeReleaseVersion = '';
+      stopReleaseStatusPolling();
+
+      const { overlay, card } = createOverlayCard('program was closed on host');
+      activeHostClosedOverlay = overlay;
+
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90 whitespace-pre-line';
+      info.textContent = 'the stemsplat app was closed on the host machine. reopen it on the host to continue using lan access.';
+      card.appendChild(info);
+
+      const row = document.createElement('div');
+      row.className = 'flex gap-3 justify-end flex-wrap';
+      const reloadBtn = makeActionButton('reload', 'bg-white text-black');
+      reloadBtn.onclick = () => window.location.reload();
+      row.appendChild(reloadBtn);
+      card.appendChild(row);
+    }
+
+    function startLanDisconnectMonitor(){
+      if(!isLanClient || lanRuntimeHeartbeat) return;
+      const tick = async () => {
+        if(activeHostClosedOverlay) return;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        try{
+          const res = await fetch(`/api/runtime_status?_=${Date.now()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if(res.status === 401){
+            window.location.reload();
+            return;
+          }
+          if(!res.ok){
+            throw new Error(`runtime status ${res.status}`);
+          }
+          lanRuntimeFailures = 0;
+        }catch(err){
+          clearTimeout(timer);
+          lanRuntimeFailures += 1;
+          if(lanRuntimeFailures >= 2){
+            showHostClosedOverlay();
+          }
+        }
+      };
+      tick();
+      lanRuntimeHeartbeat = setInterval(tick, 3000);
+    }
+
+    function showPortConflictOverlay(status){
+      closeOverlay(activePortOverlay);
+      const preferredPort = status.preferred_port || 9876;
+      const currentPort = status.current_port || preferredPort;
+      const { overlay, card } = createOverlayCard(`port ${preferredPort} is busy`);
+      activePortOverlay = overlay;
+
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90 whitespace-pre-line';
+      info.textContent = `stemsplat started on port ${currentPort} because port ${preferredPort} is already in use. you can stay on this port or free ${preferredPort} and retry.`;
+      card.appendChild(info);
+
+      const commandWrap = document.createElement('div');
+      commandWrap.className = 'flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2';
+      const commandCode = document.createElement('code');
+      commandCode.className = 'flex-1 text-xs break-all opacity-80';
+      commandCode.textContent = status.kill_command || `kill -9 $(lsof -ti tcp:${preferredPort})`;
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'copy-button';
+      copyBtn.title = 'copy command';
+      copyBtn.setAttribute('aria-label', 'copy command');
+      copyBtn.dataset.copied = '0';
+      copyBtn.innerHTML = createCopyIconMarkup();
+      copyBtn.onclick = async () => {
+        const ok = await copyText(commandCode.textContent || '');
+        if(ok){
+          pulseCopiedState(copyBtn);
+        }
+      };
+      commandWrap.append(commandCode, copyBtn);
+      card.appendChild(commandWrap);
+
+      const row = document.createElement('div');
+      row.className = 'grid grid-cols-1 gap-3 sm:grid-cols-3';
+      const stayBtn = makeActionButton('i just want to use the app', 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white/10 text-white');
+      const terminalBtn = makeActionButton('open terminal', 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white/10 text-white');
+      const retryBtn = makeActionButton(`retry port ${preferredPort}`, 'w-full min-w-0 whitespace-normal text-center leading-tight bg-white text-black');
+
+      terminalBtn.onclick = async () => {
+        try{
+          const res = await fetch('/api/open_terminal', { method: 'POST' });
+          if(!res.ok){
+            showPopup(await responseErrorMessage(res, 'could not open terminal'));
+          }
+        }catch(err){
+          showPopup('could not open terminal');
+        }
+      };
+
+      stayBtn.onclick = async () => {
+        let next = null;
+        try{
+          if(window.pywebview && window.pywebview.api && window.pywebview.api.acknowledge_port_conflict){
+            next = await window.pywebview.api.acknowledge_port_conflict();
+          }
+        }catch(err){
+          console.warn('port conflict acknowledge failed', err);
+        }
+        if(!next){
+          const baseRuntime = settingsState.runtime || {};
+          const lanBase = String(baseRuntime.lan_display || '').split(':')[0];
+          const lanLocalBase = String(baseRuntime.lan_local_display || '').split(':')[0];
+          next = {
+            ...baseRuntime,
+            preferred_port: preferredPort,
+            current_port: currentPort,
+            port_conflict: false,
+            show_port_notice: false,
+            lan_display: lanBase ? `${lanBase}:${currentPort}` : (status.lan_display || ''),
+            lan_local_display: lanLocalBase ? `${lanLocalBase}:${currentPort}` : (status.lan_local_display || ''),
+          };
+        }
+        settingsState.runtime = next;
+        applyRuntimeUI(next);
+        closeOverlay(activePortOverlay);
+        activePortOverlay = null;
+      };
+
+      retryBtn.onclick = async () => {
+        retryBtn.disabled = true;
+        stayBtn.disabled = true;
+        try{
+          if(!(window.pywebview && window.pywebview.api && window.pywebview.api.retry_preferred_port)){
+            showPopup('retry is only available inside the packaged app');
+            return;
+          }
+          const next = await window.pywebview.api.retry_preferred_port();
+          if(next){
+            settingsState.runtime = next;
+            applyRuntimeUI(next);
+          }
+          if(next && next.switched && next.client_url){
+            closeOverlay(activePortOverlay);
+            activePortOverlay = null;
+            window.location.replace(next.client_url);
+            return;
+          }
+          showPopup((next && next.error) || `port ${preferredPort} is still in use`);
+        }catch(err){
+          console.warn('port retry failed', err);
+          showPopup(`could not switch to port ${preferredPort}`);
+        }finally{
+          retryBtn.disabled = false;
+          stayBtn.disabled = false;
+        }
+      };
+
+      row.append(stayBtn, terminalBtn, retryBtn);
+      card.appendChild(row);
+    }
+
+    function formatBytes(bytes){
+      const value = Number(bytes || 0);
+      if(!value || value < 1024) return '0 b';
+      const units = ['kb', 'mb', 'gb', 'tb'];
+      let size = value / 1024;
+      let unit = units[0];
+      for(let i = 1; i < units.length && size >= 1024; i += 1){
+        size /= 1024;
+        unit = units[i];
+      }
+      return `${size.toFixed(size >= 100 ? 0 : 1)} ${unit}`;
+    }
+
+    function allMissingModels(status = lastModelStatus){
+      const missing = new Set(Array.isArray(status && status.missing) ? status.missing : []);
+      return (Array.isArray(status && status.models) ? status.models : [])
+        .filter((model) => model && missing.has(model.key) && model.auto_download && model.release_eligible)
+        .map((model) => model.key);
+    }
+
+    function expectedMissingModelBytes(status = lastModelStatus){
+      const value = Number(status && status.expected_missing_total_bytes);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    }
+
+    function formatDuration(seconds){
+      const value = Number(seconds);
+      if(!Number.isFinite(value) || value < 0) return '';
+      if(value < 60) return `${Math.round(value)}s left`;
+      const mins = Math.floor(value / 60);
+      const secs = Math.round(value % 60);
+      if(mins < 60) return `${mins}m ${secs}s left`;
+      const hours = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return `${hours}h ${remMins}m left`;
+    }
+
+    function stopModelDownloadAttention(...buttons){
+      buttons.forEach((button) => {
+        if(!button) return;
+        button.classList.remove('attention-sequence', 'attention-ring');
+      });
+      if(modelsDownloadBtn){
+        modelsDownloadBtn.classList.remove('attention-sequence', 'attention-ring');
+      }
+    }
+
+    function clearModelToastTimer(){
+      if(modelToastTimer){
+        clearTimeout(modelToastTimer);
+        modelToastTimer = null;
+      }
+    }
+
+    function removeModelDownloadToast({ immediate = false } = {}){
+      clearModelToastTimer();
+      if(!activeModelToast) return;
+      const card = activeModelToast.card;
+      activeModelToast = null;
+      if(!card) return;
+      dismissToastCard(card, { immediate });
+    }
+
+    function queueModelToastRemoval(delayMs){
+      clearModelToastTimer();
+      modelToastTimer = setTimeout(() => {
+        modelToastTimer = null;
+        removeModelDownloadToast();
+      }, delayMs);
+    }
+
+    function ensureModelDownloadToast(){
+      if(activeModelToast && activeModelToast.card && activeModelToast.card.isConnected){
+        return activeModelToast;
+      }
+      const wrap = ensureToastWrap();
+      const card = document.createElement('div');
+      card.className = 'toast-card glass';
+      const title = document.createElement('div');
+      title.className = 'toast-title';
+      const body = document.createElement('div');
+      body.className = 'toast-body';
+      const progress = document.createElement('div');
+      progress.className = 'toast-progress';
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      bar.appendChild(fill);
+      const meta = document.createElement('div');
+      meta.className = 'text-xs opacity-70';
+      progress.append(bar, meta);
+      card.append(title, body, progress);
+      wrap.appendChild(card);
+      activeModelToast = { card, title, body, fill, meta, progress };
+      return activeModelToast;
+    }
+
+    function syncModelDownloadToast(status){
+      const missing = Array.isArray(status && status.missing) ? status.missing : [];
+      const isDownloading = !!(status && status.status === 'downloading');
+      const isError = !!(status && status.status === 'error');
+      const isDone = !!(status && status.status === 'done' && missing.length === 0);
+      if(!isDownloading && !isError && !isDone){
+        removeModelDownloadToast({ immediate: true });
+        return;
+      }
+
+      const toast = ensureModelDownloadToast();
+      const pct = Math.max(0, Math.min(100, Number(status && status.pct) || 0));
+      toast.fill.style.width = `${isDone ? 100 : pct}%`;
+
+      if(isDownloading){
+        clearModelToastTimer();
+        const label = status.current_model || 'models';
+        toast.title.textContent = status.total_bytes ? `downloading ${label}` : 'starting model download...';
+        const bits = [];
+        if(status.total_bytes){
+          bits.push(`${pct}%`);
+          bits.push(`${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`);
+        }
+        const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
+        if(rate) bits.push(rate);
+        toast.body.textContent = bits.join(' · ');
+        toast.meta.textContent = '';
+        toast.progress.hidden = false;
+        return;
+      }
+
+      if(isError){
+        toast.title.textContent = 'model download failed';
+        toast.body.textContent = status.error || 'could not download models';
+        toast.meta.textContent = '';
+        toast.progress.hidden = false;
+        queueModelToastRemoval(8000);
+        return;
+      }
+
+      removeModelDownloadToast({ immediate: true });
+    }
+
+    function flashModelDownloadCTA(){
+      if(!modelsDownloadBtn || modelsDownloadBtn.hidden) return;
+      openSettings();
+      setNerdStuffExpanded(true);
+      modelsDownloadBtn.classList.add('attention-ring');
+      setTimeout(() => {
+        if(modelsDownloadBtn) modelsDownloadBtn.classList.remove('attention-ring');
+      }, 2200);
+    }
+
+    function stopModelStatusPolling(){
+      if(modelStatusPoll){
+        clearInterval(modelStatusPoll);
+        modelStatusPoll = null;
+      }
+    }
+
+    function clearModelPreviewTimer(){
+      if(modelPreviewTimer){
+        clearTimeout(modelPreviewTimer);
+        modelPreviewTimer = null;
+      }
+    }
+
+    function restoreModelPreview({ immediate = false } = {}){
+      clearModelPreviewTimer();
+      if(!modelPreviewActive && !immediate) return;
+      modelPreviewActive = false;
+      const doRestore = () => refreshModelStatus({ allowPrompt: false });
+      if(immediate){
+        doRestore();
+        return;
+      }
+      modelPreviewTimer = setTimeout(() => {
+        modelPreviewTimer = null;
+        doRestore();
+      }, 300);
+    }
+
+    function beginModelPreview(){
+      clearModelPreviewTimer();
+      modelPreviewActive = true;
+      openSettings();
+      setNerdStuffExpanded(true);
+        updateModelSettings({
+          status: 'idle',
+          pct: 0,
+          current_model: '',
+          downloaded_bytes: 0,
+          total_bytes: 0,
+          eta_seconds: null,
+          eta_state: null,
+          error: '',
+          missing: MODEL_CHECKLIST_ORDER,
+        });
+      flashModelDownloadCTA();
+    }
+
+    function simulateModelPreviewDownload(){
+      clearModelPreviewTimer();
+      modelPreviewActive = true;
+      openSettings();
+      setNerdStuffExpanded(true);
+      const totalBytes = 2.1 * 1024 * 1024 * 1024;
+      let pct = 0;
+      const tick = () => {
+        pct = Math.min(100, pct + 8);
+        updateModelSettings({
+          status: pct >= 100 ? 'done' : 'downloading',
+          pct,
+          current_model: pct < 34 ? 'vocals' : (pct < 68 ? 'instrumental' : 'full mix'),
+          downloaded_bytes: Math.round(totalBytes * (pct / 100)),
+          total_bytes: Math.round(totalBytes),
+          eta_seconds: pct >= 100 ? 0 : Math.max(0, Math.round((100 - pct) * 0.55)),
+          error: '',
+          missing: pct >= 100 ? [] : MODEL_CHECKLIST_ORDER,
+        });
+        if(pct >= 100){
+          modelPreviewTimer = setTimeout(() => {
+            modelPreviewTimer = null;
+            restoreModelPreview({ immediate: true });
+          }, 900);
+          return;
+        }
+        modelPreviewTimer = setTimeout(tick, 170);
+      };
+      tick();
+    }
+
+    function startModelStatusPolling(){
+      if(modelStatusPoll) return;
+      modelStatusPoll = setInterval(() => {
+        refreshModelStatus({ allowPrompt: false });
+      }, 1200);
+    }
+
+    function updateModelSettings(status){
+      lastModelStatus = status;
+      const missing = Array.isArray(status && status.missing) ? status.missing : [];
+      const relevantMissing = relevantMissingModels(status);
+      const isDownloading = !!(status && status.status === 'downloading');
+      const isError = !!(status && status.status === 'error');
+      const downloadedTotalBytes = Number(status && status.downloaded_total_bytes) || 0;
+      modelsBlocked = relevantMissing.length > 0 || isDownloading;
+      renderModelChecklist(status);
+      syncModelDownloadToast(status);
+      if(modelsNote){
+        let noteMessage = '';
+        if(isError){
+          noteMessage = status.error || 'model download failed';
+        }else if(isDownloading){
+          noteMessage = `downloading ${status.current_model || 'models'}`;
+        }else if(missing.length && allMissingModels(status).length === 0){
+          noteMessage = 'automatic model setup is blocked pending immutable hashes and license review';
+        }else if(missing.length && downloadedTotalBytes <= 0){
+          noteMessage = `${missing.length} model${missing.length === 1 ? '' : 's'} missing`;
+        }else if(missing.length){
+          noteMessage = relevantMissing.length
+            ? `${relevantMissing.length} required model${relevantMissing.length === 1 ? '' : 's'} missing`
+            : `${missing.length} optional model${missing.length === 1 ? '' : 's'} missing`;
+        }
+        modelsNote.textContent = noteMessage;
+        modelsNote.hidden = !noteMessage;
+      }
+      if(modelsProgressWrap){
+        modelsProgressWrap.hidden = !isDownloading && !isError;
+      }
+      if(modelsProgressBar){
+        modelsProgressBar.style.width = `${Math.max(0, status && status.pct ? status.pct : 0)}%`;
+      }
+      if(modelsProgressMeta){
+        if(isDownloading){
+          const bits = [
+            `${Math.max(0, status.pct || 0)}%`,
+            `${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`,
+          ];
+          const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
+          if(rate) bits.push(rate);
+          modelsProgressMeta.textContent = bits.join(' · ');
+        }else if(isError){
+          modelsProgressMeta.textContent = status.error || 'download failed';
+        }else{
+          modelsProgressMeta.textContent = '';
+        }
+      }
+      if(modelsDownloadBtn){
+        const downloadableMissing = allMissingModels(status);
+        const showDownloadButton = downloadableMissing.length > 0 && !isDownloading;
+        modelsDownloadBtn.hidden = !showDownloadButton;
+        modelsDownloadBtn.disabled = !showDownloadButton;
+        modelsDownloadBtn.classList.toggle('attention-sequence', showDownloadButton);
+        const totalMissingBytes = expectedMissingModelBytes(status);
+        modelsDownloadBtn.textContent = isError
+          ? 'retry download'
+          : (totalMissingBytes > 0 ? `download models (${formatBytes(totalMissingBytes)})` : 'download models');
+      }
+      if(modelsFolderBtn){
+        modelsFolderBtn.hidden = isLanClient;
+      }
+      if(modelsCtaWrap){
+        const allChildrenHidden = Array.from(modelsCtaWrap.children).every((child) => child.hidden);
+        modelsCtaWrap.hidden = allChildrenHidden;
+      }
+      if((isDownloading || missing.length > 0) && nerdStuffWrap){
+        setNerdStuffExpanded(true);
+      }else if(nerdStuffExpanded && nerdStuffWrap){
+        nerdStuffWrap.style.maxHeight = `${nerdStuffWrap.scrollHeight}px`;
+      }
+      updateUI();
+    }
+
+    async function openModelsFolderAction(){
+      try{
+        await fetch('/api/open_models_folder', { method: 'POST' });
+      }catch(err){
+        console.warn('open models folder failed', err);
+      }
+    }
+
+    async function dismissModelPrompt(){
+      try{
+        const res = await fetch('/api/model_download_prompt/dismiss', { method: 'POST' });
+        if(res.ok){
+          const data = await res.json();
+          updateModelSettings(data);
+        }
+      }catch(err){
+        console.warn('dismiss model prompt failed', err);
+      }
+    }
+
+    async function startModelDownload(models = null){
+      try{
+        const res = await fetch('/api/model_downloads/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(models ? { models } : {}),
+        });
+        if(!res.ok){
+          removeModelDownloadToast({ immediate: true });
+          showPopup('could not start model download');
+          return;
+        }
+        const data = await res.json();
+        updateModelSettings(data);
+        startModelStatusPolling();
+      }catch(err){
+        removeModelDownloadToast({ immediate: true });
+        console.warn('start model download failed', err);
+        showPopup('could not start model download');
+      }
+    }
+
+    async function refreshModelStatus({ allowPrompt = true } = {}){
+      try{
+        const res = await fetch('/api/model_download_status');
+        if(!res.ok) return null;
+        const data = await res.json();
+        updateModelSettings(data);
+        if(data.status === 'downloading'){
+          startModelStatusPolling();
+        }else if(data.status === 'error'){
+          stopModelStatusPolling();
+        }else{
+          stopModelStatusPolling();
+          if(data.status === 'done' && (!data.missing || data.missing.length === 0)){
+            if(modelsProgressWrap) modelsProgressWrap.hidden = true;
+          }else if(allowPrompt && data.missing && data.missing.length && data.prompt_state === 'pending'){
+            flashModelDownloadCTA();
+          }
+        }
+        return data;
+      }catch(err){
+        console.warn('model status failed', err);
+        return null;
+      }
+    }
+
+    async function acknowledgeRelease(){
+      try{
+        await fetch('/api/release_status/ack', { method: 'POST' });
+      }catch(err){
+        console.warn('release ack failed', err);
+      }
+    }
+
+    function stopReleaseStatusPolling(){
+      if(releaseStatusPoll){
+        clearInterval(releaseStatusPoll);
+        releaseStatusPoll = null;
+      }
+    }
+
+    function clearReleaseToastTimer(){
+      if(releaseToastTimer){
+        clearTimeout(releaseToastTimer);
+        releaseToastTimer = null;
+      }
+    }
+
+    function removeReleaseDownloadToast({ immediate = false } = {}){
+      clearReleaseToastTimer();
+      if(!activeReleaseToast) return;
+      const card = activeReleaseToast.card;
+      activeReleaseToast = null;
+      dismissToastCard(card, { immediate });
+    }
+
+    function queueReleaseToastRemoval(delayMs){
+      clearReleaseToastTimer();
+      releaseToastTimer = setTimeout(() => {
+        releaseToastTimer = null;
+        removeReleaseDownloadToast();
+      }, delayMs);
+    }
+
+    function ensureReleaseDownloadToast(){
+      if(activeReleaseToast && activeReleaseToast.card && activeReleaseToast.card.isConnected){
+        return activeReleaseToast;
+      }
+      const wrap = ensureToastWrap();
+      const card = document.createElement('div');
+      card.className = 'toast-card glass';
+      const title = document.createElement('div');
+      title.className = 'toast-title';
+      const body = document.createElement('div');
+      body.className = 'toast-body';
+      const progress = document.createElement('div');
+      progress.className = 'toast-progress';
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      bar.appendChild(fill);
+      const meta = document.createElement('div');
+      meta.className = 'text-xs opacity-70';
+      progress.append(bar, meta);
+      card.append(title, body, progress);
+      wrap.appendChild(card);
+      activeReleaseToast = { card, title, body, fill, meta, progress };
+      return activeReleaseToast;
+    }
+
+    function syncReleaseDownloadToast(status){
+      const statusText = String(status && status.status || '').toLowerCase();
+      const isStarting = statusText === 'starting';
+      const isDownloading = statusText === 'downloading';
+      const isBusy = isStarting || isDownloading;
+      const isError = statusText === 'error';
+      const isDone = statusText === 'done';
+      if(!isBusy && !isError && !isDone){
+        removeReleaseDownloadToast({ immediate: true });
+        return;
+      }
+
+      const toast = ensureReleaseDownloadToast();
+      const pct = Math.max(0, Math.min(100, Number(status && status.pct) || 0));
+      toast.fill.style.width = `${isDone ? 100 : pct}%`;
+
+      if(isBusy){
+        clearReleaseToastTimer();
+        const label = status.current_asset || status.filename || 'update';
+        toast.title.textContent = status.total_bytes ? `downloading ${label}` : 'starting update download...';
+        const bits = [];
+        if(Number(status.total_bytes || 0) > 0){
+          bits.push(`${Math.max(0, status.pct || 0)}%`);
+          bits.push(`${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}`);
+        }
+        const rate = formatDownloadRate(status.download_rate_bytes_per_sec);
+        if(rate) bits.push(rate);
+        const eta = formatEta(status.eta_seconds);
+        toast.body.textContent = bits.join(' · ');
+        toast.meta.textContent = eta ? `${eta} remaining` : '';
+        toast.progress.hidden = false;
+        return;
+      }
+
+      if(isError){
+        toast.title.textContent = 'update download failed';
+        toast.body.textContent = status.error || 'could not download update';
+        toast.meta.textContent = '';
+        toast.progress.hidden = false;
+        stopReleaseStatusPolling();
+        queueReleaseToastRemoval(8000);
+        return;
+      }
+
+      toast.title.textContent = 'update downloaded';
+      toast.body.textContent = `${status.filename || 'update'} · ${formatBytes(status.downloaded_bytes)} saved`;
+      toast.meta.textContent = 'Downloads';
+      toast.progress.hidden = false;
+      stopReleaseStatusPolling();
+      queueReleaseToastRemoval(3200);
+    }
+
+    async function refreshReleaseDownloadStatus(){
+      try{
+        const res = await fetch('/api/release_download_status');
+        if(!res.ok){
+          return null;
+        }
+        const data = await res.json();
+        syncReleaseDownloadToast(data);
+        return data;
+      }catch(err){
+        console.warn('release download status failed', err);
+        return null;
+      }
+    }
+
+    function startReleaseStatusPolling(){
+      if(releaseStatusPoll) return;
+      releaseStatusPoll = setInterval(() => {
+        refreshReleaseDownloadStatus();
+      }, 800);
+    }
+
+    async function downloadReleaseUpdate(){
+      stopReleaseStatusPolling();
+      closeOverlay(activeReleaseOverlay);
+      activeReleaseOverlay = null;
+      activeReleaseOverlayUi = null;
+      activeReleaseVersion = '';
+      try{
+        const res = await fetch('/api/release_download', { method: 'POST' });
+        if(!res.ok){
+          throw new Error(await responseErrorMessage(res, 'could not download update'));
+        }
+        const data = await res.json();
+        syncReleaseDownloadToast(data);
+        const statusText = String(data && data.status || '').toLowerCase();
+        if(statusText === 'starting' || statusText === 'downloading'){
+          startReleaseStatusPolling();
+        }
+      }catch(err){
+        removeReleaseDownloadToast({ immediate: true });
+        showPopup((err && err.message) || 'could not download update');
+      }
+    }
+
+    function clearLegacyReleaseSnooze(){
+      try{
+        localStorage.removeItem(RELEASE_SNOOZE_STORAGE_KEY);
+      }catch(err){
+        console.warn('release snooze clear failed', err);
+      }
+    }
+
+    function readReleaseSessionDismiss(){
+      try{
+        clearLegacyReleaseSnooze();
+        return String(sessionStorage.getItem(RELEASE_SESSION_DISMISS_KEY) || '');
+      }catch(err){
+        console.warn('release dismiss read failed', err);
+        return '';
+      }
+    }
+
+    function dismissReleaseUntilNextOpen(version){
+      try{
+        clearLegacyReleaseSnooze();
+        if(!version){
+          sessionStorage.removeItem(RELEASE_SESSION_DISMISS_KEY);
+          return;
+        }
+        sessionStorage.setItem(RELEASE_SESSION_DISMISS_KEY, version);
+      }catch(err){
+        console.warn('release dismiss write failed', err);
+      }
+    }
+
+    function showReleaseOverlay(status){
+      stopReleaseStatusPolling();
+      closeOverlay(activeReleaseOverlay);
+      activeReleaseOverlayUi = null;
+      activeReleaseVersion = '';
+      const { overlay, card } = createOverlayCard('new release available');
+      activeReleaseOverlay = overlay;
+      activeReleaseVersion = status.latest_version || '';
+      const headline = status.latest_name || status.latest_version || 'new release';
+      const info = document.createElement('div');
+      info.className = 'text-sm opacity-90';
+      info.textContent = `${headline} is ready.`;
+      card.appendChild(info);
+      const bullets = parseReleaseHighlights(status.notes);
+      if(bullets.length){
+        const list = document.createElement('ul');
+        list.className = 'list-disc pl-5 text-sm opacity-90 space-y-1';
+        bullets.forEach((item) => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          list.appendChild(li);
+        });
+        card.appendChild(list);
+      }
+      const row = document.createElement('div');
+      row.className = 'flex gap-3 justify-end flex-wrap';
+      const laterBtn = makeActionButton('later', 'bg-white/10 text-white');
+      const downloadBtn = makeActionButton('download update', 'bg-white text-black');
+      laterBtn.onclick = async () => {
+        dismissReleaseUntilNextOpen(status.latest_version || '');
+        stopReleaseStatusPolling();
+        closeOverlay(activeReleaseOverlay);
+        activeReleaseOverlay = null;
+        activeReleaseOverlayUi = null;
+        activeReleaseVersion = '';
+      };
+      downloadBtn.onclick = async () => {
+        await downloadReleaseUpdate();
+      };
+      row.append(laterBtn, downloadBtn);
+      card.appendChild(row);
+      activeReleaseOverlayUi = { overlay, laterBtn, downloadBtn };
+    }
+
+    async function checkForReleaseUpdate(){
+      try{
+        const res = await fetch('/api/release_status?refresh=1');
+        if(!res.ok) return;
+        const data = await res.json();
+        const latest = data.latest_version || '';
+        if(!data.update_available || !latest) return;
+        const dismissedVersion = readReleaseSessionDismiss();
+        if(dismissedVersion === latest) return;
+        if(dismissedVersion && dismissedVersion !== latest){
+          dismissReleaseUntilNextOpen('');
+        }
+        if(latest === (data.skipped_version || '')) return;
+        showReleaseOverlay(data);
+      }catch(err){
+        console.warn('release check failed', err);
+      }
+    }
+
+    /* === upload & progress logic === */
+    // queue of files added by user but not yet uploaded
+    const pendingItems = [];
+    const activeStreams = new Map();
+    let isClearing = false;
+    function closeTaskStream(taskId){
+      if(!taskId) return;
+      const stream = activeStreams.get(taskId);
+      if(stream){
+        try{ stream.close(); }catch(_){ }
+        activeStreams.delete(taskId);
+      }
+    }
+
+    function markTaskStopped(taskRef, ui){
+      if(!taskRef || !ui) return;
+      const {st, dl, stopPad, smooth, bar} = ui;
+      taskRef.stopRequested = false;
+      taskRef.stage = 'stopped';
+      taskRef.pct = 0;
+      saveTasks();
+      if(smooth){ smooth.setImmediate(0); }
+      if(st){ showStatus(st); st.textContent = 'stopped'; st.classList.remove('hidden'); }
+      const parent = st && st.closest ? st.closest('.card') : null;
+      if(parent){ parent.classList.add('done'); }
+      if(dl){ dl.classList.remove('show'); }
+      if(stopPad){
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        stopPad.title = 'rerun';
+        setRetryIcon(stopPad);
+        guardClick(stopPad, (ev) => { ev.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
+      }
+      if(ui.item){
+        applyRowState(ui.item, taskRef);
+      }
+      updateUI();
+    }
+
+    function markTaskStopping(taskRef, ui){
+      if(!taskRef || !ui) return;
+      const {st, dl, stopPad} = ui;
+      taskRef.stopRequested = true;
+      taskRef.stage = 'stopping';
+      saveTasks();
+      if(st){
+        showStatus(st);
+        st.textContent = 'stopping';
+        st.classList.remove('hidden');
+      }
+      if(dl){
+        dl.classList.remove('show');
+      }
+      if(stopPad){
+        stopPad.style.pointerEvents = '';
+        stopPad.style.opacity = '';
+        stopPad.title = 'rerun';
+        setRetryIcon(stopPad);
+        guardClick(stopPad, (ev) => {
+          ev.preventDefault();
+          showPopup('waiting for the current stop to finish');
+        });
+      }
+      if(ui.item){
+        applyRowState(ui.item, taskRef);
+      }
+      updateUI();
+    }
+
+    async function requestStop(taskId, taskRef, ui){
+      if(!taskId || !taskRef || !ui) return;
+      markTaskStopping(taskRef, ui);
+      try{
+        const res = await fetch('/stop/' + taskId, { method:'POST' });
+        if(res.ok){
+          const data = await res.json().catch(() => null);
+          setQueuePausedUi(true);
+          showPopup('current task stopped; queue paused');
+          if(data && data.status === 'stopped'){
+            markTaskStopped(taskRef, ui);
+          }
+        }else{
+          taskRef.stopRequested = false;
+          saveTasks();
+        }
+      }catch(_){
+        taskRef.stopRequested = false;
+        saveTasks();
+      }
+    }
+    function normalizeStemList(stems){
+      return Array.isArray(stems) ? stems.map((item) => String(item || '').toLowerCase()).filter(Boolean) : [];
+    }
+    function displayStemsForTask(task){
+      if(task && Array.isArray(task.groupStems) && task.groupStems.length){
+        return task.groupStems;
+      }
+      return Array.isArray(task && task.stems) ? task.stems : [];
+    }
+    function stemsMatch(a, b){
+      const left = normalizeStemList(a);
+      const right = normalizeStemList(b);
+      if(left.length !== right.length) return false;
+      return left.every((item, index) => item === right[index]);
+    }
+    function findRowForTask(task){
+      if(!task) return null;
+      return Array.from(queue.children).find((row) => {
+        if(task.id && row.__taskId === task.id) return true;
+        if(task.tempKey && row.__tempKey === task.tempKey) return true;
+        return false;
+      }) || null;
+    }
+    function taskUiForRow(row){
+      if(!row) return null;
+      const item = row;
+      const bar = row.querySelector('.bar-fill');
+      const st = row.querySelector('.chip.status');
+      const dl = row.querySelector('.dl-pad');
+      const card = row.querySelector('.card');
+      const stopPad = row.querySelector('.stop-pad');
+      const smooth = makeProgressSmoother(bar);
+      return { item, bar, st, dl, card, stopPad, smooth };
+    }
+    function ensureTaskProgressTracking(task){
+      if(!task || !task.id) return;
+      const stage = String(task.stage || '').toLowerCase();
+      if(['ready', 'done', 'error', 'stopped'].includes(stage)) return;
+      if(activeStreams.has(task.id)) return;
+      const row = findRowForTask(task);
+      const ui = taskUiForRow(row);
+      if(!ui) return;
+      trackProgress(task.id, ui.bar, ui.st, ui.dl, null, null, task, null, ui.smooth, ui.stopPad);
+    }
+    async function restartTaskWithSelection(task, stems){
+      if(!task || !task.id) return false;
+      const row = findRowForTask(task);
+      const ui = taskUiForRow(row);
+      if(!ui) return false;
+      await rerunTask(task, ui, {
+        stems: stems.join(','),
+        output_format: settingsState.output_format || 'same_as_input',
+        multi_stem_export: settingsState.multi_stem_export || 'zip',
+        video_handling: settingsState.video_handling || 'audio_only',
+      });
+      return true;
+    }
+    function dropPendingById(id){
+      if(!id) return;
+      const idx = pendingItems.findIndex(p => p && p.id === id);
+      if(idx >= 0) pendingItems.splice(idx,1);
+    }
+    function dropPendingByTempKey(tempKey){
+      if(!tempKey) return;
+      for(let index = pendingItems.length - 1; index >= 0; index -= 1){
+        const pending = pendingItems[index];
+        if(pending && pending.tempKey === tempKey){
+          pendingItems.splice(index, 1);
+        }
+      }
+    }
+    function getTaskById(id){
+      return tasks.find(t => t && t.id === id);
+    }
+
+    function getTaskByTempKey(tempKey){
+      if(!tempKey) return null;
+      return tasks.find(t => t && t.tempKey === tempKey && !isFinished(t) && String(t.stage || '').toLowerCase() !== 'error')
+        || tasks.find(t => t && t.tempKey === tempKey)
+        || null;
+    }
+
+    function groupHasRemainingTasks(task, excludeTaskId = null){
+      if(!task || !task.tempKey) return false;
+      return tasks.some((candidate) => {
+        if(!candidate || candidate.tempKey !== task.tempKey) return false;
+        if(excludeTaskId && candidate.id === excludeTaskId) return false;
+        const stage = String(candidate.stage || '').toLowerCase();
+        return !(candidate.pct >= 100 || stage === 'stopped' || stage === 'error');
+      });
+    }
+
+    function failPendingUpload(pending, message){
+      if(!pending) return;
+      dropPendingByTempKey(pending.tempKey);
+      const taskIndex = tasks.findIndex((task) => task && task.tempKey === pending.tempKey && !task.id);
+      if(taskIndex >= 0){
+        tasks.splice(taskIndex, 1);
+      }
+      if(pending.ui && pending.ui.smooth && typeof pending.ui.smooth.stop === 'function'){
+        pending.ui.smooth.stop();
+      }
+      const row = pending.ui && pending.ui.item;
+      if(row && row.parentElement){
+        row.classList.add('leave', 'leave-active');
+        requestAnimationFrame(() => row.classList.add('leave-to'));
+        setTimeout(() => {
+          if(row.parentElement){
+            row.remove();
+          }
+          saveTasks();
+          updateUI();
+        }, 180);
+      }else{
+        saveTasks();
+        updateUI();
+      }
+      if(message && !isClearing){
+        showPopup(message);
+      }
+    }
+
+    function revealStatusesAfterStart(){
+      queueStarted = true;
+      document.querySelectorAll('#queue .chip').forEach(chip => chip.classList.remove('hidden'));
+      refreshAllLabelVisibility();
+      document.querySelectorAll('#queue .stop-pad').forEach(pad => {
+        const row = pad.closest('.item-row');
+        const id = row ? row.__taskId : null;
+        const tempKey = row ? row.__tempKey : null;
+        const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+        const stage = task ? task.stage : null;
+        setStopVisibility(pad, stage);
+      });
+    }
+
+    async function updateReadyTaskSelection(taskId, stems){
+      if(!taskId || !Array.isArray(stems) || stems.length === 0) return null;
+      try{
+        const res = await fetch(`/api/tasks/${taskId}/selection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stems: stems.join(',') }),
+        });
+        if(!res.ok) return null;
+        return await res.json();
+      }catch(_){
+        return null;
+      }
+    }
+
+    async function syncQueuedStemSelection(){
+      const groups = selectedStemGroups();
+      if(groups.length !== 1) return;
+      const stems = groups[0].slice();
+      pendingItems.forEach((pending) => {
+        if(!pending || pending.frozen) return;
+        const linkedTask = pending.id ? getTaskById(pending.id) : getTaskByTempKey(pending.tempKey);
+        if(linkedTask && (linkedTask.stage !== 'ready' || Number(linkedTask.pct || 0) !== 0 || linkedTask.frozen)) return;
+        pending.stems = stems.slice();
+        if(pending.ui && pending.ui.item){
+          applyLabels(pending.ui.item.querySelector('.labels'), pending.stems);
+        }
+      });
+      const updates = [];
+      tasks.forEach((task) => {
+        if(!task || task.frozen || task.stage !== 'ready' || task.pct !== 0) return;
+        task.stems = stems.slice();
+        const row = findRowForTask(task);
+        if(row){
+          const labels = row.querySelector('.labels');
+          applyLabels(labels, task.stems);
+        }
+        if(task.id){
+          updates.push(updateReadyTaskSelection(task.id, stems).then((data) => {
+            if(data && Array.isArray(data.stems)){
+              task.stems = data.stems;
+              if(row){
+                const labels = row.querySelector('.labels');
+                applyLabels(labels, task.stems);
+              }
+            }
+          }));
+        }
+      });
+      saveTasks();
+      if(updates.length){
+        await Promise.all(updates);
+        saveTasks();
+      }
+    }
+
+    function selectedStemGroups(){
+      if(selectedPresetMode === 'boost_harmonies'){
+        return [['boost_harmonies']];
+      }
+      if(selectedPresetMode === 'all_stems'){
+        return [['all_stems']];
+      }
+      if(selectedPresetMode === 'denoise'){
+        return [['preset_denoise']];
+      }
+      if(selectedPresetMode === 'mel_band_karaoke'){
+        return [['mel_band_karaoke']];
+      }
+      const groups = [];
+      const pushGroup = (modeKey, stems) => {
+        if(selectedStemModes.has(modeKey)){
+          groups.push(stems.slice());
+        }
+      };
+      pushGroup('vocals', ['vocals']);
+      pushGroup('instrumental', ['instrumental']);
+      pushGroup('guitar', ['guitar']);
+      pushGroup('mel_band_karaoke', ['mel_band_karaoke']);
+      pushGroup('bs_roformer_6s', ['bs_roformer_6s']);
+      pushGroup('htdemucs_ft_drums', ['htdemucs_ft_drums']);
+      pushGroup('htdemucs_ft_bass', ['htdemucs_ft_bass']);
+      pushGroup('htdemucs_ft_other', ['htdemucs_ft_other']);
+      pushGroup('htdemucs_6s', ['htdemucs_6s']);
+      pushGroup('drumsep_6s', ['drumsep_6s']);
+      pushGroup('drumsep_4s', ['drumsep_4s']);
+      return groups;
+    }
+
+    function selectedStemUnion(){
+      const seen = new Set();
+      const stems = [];
+      selectedStemGroups().forEach((group) => {
+        group.forEach((stem) => {
+          if(seen.has(stem)) return;
+          seen.add(stem);
+          stems.push(stem);
+        });
+      });
+      return stems;
+    }
+
+    function hasQueuedUploadReadyToStart(){
+      if(pendingItems.some((pending) => !!pending)) return true;
+      return tasks.some((task) => {
+        if(!task || isFinished(task)) return false;
+        return String(task.stage || '').toLowerCase() !== 'error';
+      });
+    }
+
+    function hasOpenBlockingOverlay(){
+      if(settingsOverlay && !settingsOverlay.classList.contains('hidden')) return true;
+      if(presetSettingsOverlay && !presetSettingsOverlay.classList.contains('hidden')) return true;
+      return !!document.getElementById('cfm-ok');
+    }
+
+    function shouldHandleStartShortcut(event){
+      if(event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.repeat) return false;
+      if(event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      if(hasOpenBlockingOverlay()) return false;
+      const target = event.target;
+      if(target instanceof Element && target.closest('input, textarea, select, button, a, [contenteditable=""], [contenteditable="true"], [role="button"]')){
+        return false;
+      }
+      return hasQueuedUploadReadyToStart();
+    }
+
+    function selectedStems(){
+      const groups = selectedStemGroups();
+      return groups[0] ? groups[0].slice() : [];
+    }
+
+    function currentStartSettings(){
+      return {
+        output_format: settingsState.output_format || 'same_as_input',
+        multi_stem_export: settingsState.multi_stem_export || 'zip',
+        video_handling: settingsState.video_handling || 'audio_only',
+        output_root: settingsState.output_root || '',
+        output_same_as_input: !!settingsState.output_same_as_input,
+      };
+    }
+
+    async function responseErrorMessage(res, fallback){
+      try{
+        const payload = await res.json();
+        return payload?.message || payload?.detail?.message || payload?.detail || fallback;
+      }catch(_){
+        return fallback;
+      }
+    }
+
+    const droppedSourceDirByFile = new WeakMap();
+
+    function normalizeSourceDirPath(pathText){
+      if(typeof pathText !== 'string' || !pathText) return '';
+      const normalized = pathText.replace(/\\/g, '/');
+      const index = normalized.lastIndexOf('/');
+      return index > 0 ? normalized.slice(0, index) : '';
+    }
+
+    function normalizePickedPath(pathText){
+      if(typeof pathText !== 'string') return '';
+      let normalized = pathText.trim();
+      if(!normalized) return '';
+      if(
+        normalized.length >= 2 &&
+        ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+          (normalized.startsWith("'") && normalized.endsWith("'")))
+      ){
+        normalized = normalized.slice(1, -1).trim();
+      }
+      if(normalized.startsWith('file://')){
+        try{
+          const url = new URL(normalized);
+          let resolved = decodeURIComponent(url.pathname || '');
+          if(/^\/[A-Za-z]:\//.test(resolved)){
+            resolved = resolved.slice(1);
+          }
+          if(url.hostname && url.hostname !== 'localhost'){
+            resolved = `//${url.hostname}${resolved}`;
+          }
+          if(resolved){
+            normalized = resolved;
+          }
+        }catch(_){
+          // keep original text if parsing fails
+        }
+      }
+      return normalized;
+    }
+
+    function captureDroppedSourceDirs(event){
+      const dt = event && event.dataTransfer;
+      if(!dt) return;
+      const files = Array.from(dt.files || []);
+      if(!files.length) return;
+      const uriPayload = String(dt.getData('text/uri-list') || '').trim();
+      const plainPayload = String(dt.getData('text/plain') || '').trim();
+      const rawLines = (uriPayload || plainPayload)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'));
+      if(!rawLines.length) return;
+
+      const droppedPaths = [];
+      rawLines.forEach((line) => {
+        if(line.startsWith('file://')){
+          try{
+            const url = new URL(line);
+            let pathText = decodeURIComponent(url.pathname || '');
+            if(/^\/[A-Za-z]:\//.test(pathText)){
+              pathText = pathText.slice(1);
+            }
+            if(pathText){
+              droppedPaths.push(pathText);
+            }
+            return;
+          }catch(_){
+            // fall through to plain path parsing
+          }
+        }
+        if(line.startsWith('/')){
+          droppedPaths.push(line);
+        }
+      });
+
+      if(!droppedPaths.length) return;
+      const byName = new Map();
+      droppedPaths.forEach((pathText) => {
+        const normalized = pathText.replace(/\\/g, '/');
+        const name = normalized.slice(normalized.lastIndexOf('/') + 1);
+        if(!name) return;
+        const bucket = byName.get(name) || [];
+        bucket.push(pathText);
+        byName.set(name, bucket);
+      });
+
+      files.forEach((file, index) => {
+        if(!file || (typeof file.path === 'string' && file.path)) return;
+        const name = String(file.name || '');
+        const namedBucket = byName.get(name);
+        const matchedPath = namedBucket && namedBucket.length
+          ? namedBucket.shift()
+          : (droppedPaths[index] || '');
+        const sourceDir = normalizeSourceDirPath(matchedPath);
+        if(sourceDir){
+          droppedSourceDirByFile.set(file, sourceDir);
+        }
+      });
+    }
+
+    function sourceDirForFile(file){
+      if(!file) return '';
+      if(typeof file.path === 'string' && file.path){
+        return normalizeSourceDirPath(file.path);
+      }
+      const inferred = droppedSourceDirByFile.get(file);
+      return typeof inferred === 'string' ? inferred : '';
+    }
+
+    function createPendingQueueRow(name, stems, tempKey){
+      const frag = template.content.cloneNode(true);
+      const item = frag.firstElementChild;
+      const li   = item.querySelector('.filename');
+      const bar  = item.querySelector('.bar-fill');
+      const st   = item.querySelector('.chip.status');
+      const dl   = item.querySelector('.dl-pad');
+      const card = item.querySelector('.card');
+      const stopPad = item.querySelector('.stop-pad');
+      applyFilename(li, name);
+      applyLabels(item.querySelector('.labels'), stems);
+      st.textContent = 'ready';
+      st.classList.add('chip-dim');
+      st.classList.add('hidden');
+      if(startPressed){ st.classList.remove('hidden'); }
+      dl.classList.remove('show');
+      if (stopPad) stopPad.style.display = 'none';
+      item.classList.add('enter-pre');
+      item.__tempKey = tempKey;
+      queue.insertBefore(item, queue.firstChild);
+      requestAnimationFrame(() => {
+        item.classList.add('enter-active');
+      });
+      updateVigs();
+      const smooth = makeProgressSmoother(bar);
+      smooth.setImmediate(0);
+      applyRowState(item, { stage: 'ready', pct: 0, id: null, stems, groupStems: stems });
+      return {item, li, bar, st, dl, card, stopPad, smooth};
+    }
+
+    async function handleFiles(fileList){
+      if(modelsBlocked){
+        showPopup('download the models before splitting');
+        await refreshModelStatus({ allowPrompt: true });
+        flashModelDownloadCTA();
+        if (fileInput) fileInput.value = '';
+        return;
+      }
+      const storageOk = await checkStorage();
+      const memoryOk = checkMemory();
+      if(!storageOk || !memoryOk){
+        showPopup('cannot add songs until resources are available');
+        return;
+      }
+      const existingCount = tasks.filter(Boolean).length;
+      if(existingCount >= MAX_TASKS){
+        showPopup('you already have 50 songs queued; clear some to upload more');
+        return;
+      }
+      const makeTempKey = () => (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+      const stemGroups = selectedStemGroups();
+      const uploadStemGroups = stemGroups.length ? stemGroups : [[]];
+      const displayStems = selectedStemUnion();
+      const newPending = [];
+      const files = [...fileList];
+      const audioFiles = files.filter((file) => {
+        return (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
+      });
+      const taskCountNeeded = audioFiles.length * uploadStemGroups.length;
+      if(existingCount + taskCountNeeded > MAX_TASKS){
+        const slots = Math.max(0, MAX_TASKS - existingCount);
+        const maxSongs = Math.floor(slots / uploadStemGroups.length);
+        if(maxSongs <= 0){
+          showPopup(`you need ${uploadStemGroups.length} free slots for the selected models on one song`);
+        }else{
+          const slotLabel = maxSongs === 1 ? 'song' : 'songs';
+          showPopup(`with ${uploadStemGroups.length} selected models, you can only add ${maxSongs} more ${slotLabel}`);
+        }
+        return;
+      }
+      let availableSlots = Math.max(0, MAX_TASKS - existingCount);
+      for(const file of files){
+        if(availableSlots <= 0) break;
+        // accept common audio even when type is empty
+        const looksMedia = (file.type && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) || /\.(wav|wave|mp3|m4a|aac|flac|ogg|oga|aif|aiff|alac|opus|mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name);
+        if(!looksMedia) continue;
+
+        const duration = await getAudioDuration(file);
+        if(duration > 0){
+          if(duration > FIVE_HOURS_SEC){
+            showPopup('single song limit is 5 hours');
+            continue;
+          }
+          if(duration > LONG_TRACK_SEC && !hasMemoryForDuration(duration)){
+            continue;
+          }
+        }
+        const tempKey = makeTempKey();
+        const sharedUi = createPendingQueueRow(file.name, displayStems, tempKey);
+        for(const stems of uploadStemGroups){
+          if(availableSlots <= 0) break;
+          availableSlots -= 1;
+          // record pending entry
+          const pending = { file, ui:sharedUi, started:false, id:null, stems:stems.slice(), groupStems: displayStems.slice(), tempKey, autoStart:startPressed, startedProcessing:false, frozen:false };
+          pendingItems.push(pending);
+          newPending.push(pending);
+          // persist placeholder task (no id yet)
+          tasks.push({ id:null, name:file.name, pct:0, stage:'ready', stems:stems.slice(), groupStems: displayStems.slice(), file:null, tempKey, out_dir:null, downloaded:false, delivery:'folder', autoDownloaded:false, frozen:false });
+          saveTasks();
+          updateUI();
+        }
+      }
+      if (fileInput) fileInput.value = '';
+      await Promise.all(newPending.map((p) => p.started ? p.uploadPromise : uploadWithStems(p, p.stems)));
+      await syncQueuedStemSelection();
+      updateStartButton();
+    }
+
+    function uploadWithStems(pending, stems){
+      pending.started = true;
+      pending.uploadPromise = new Promise((resolve) => {
+        const {file, ui} = pending;
+        const {st, dl, card, stopPad, bar, smooth} = ui;
+        const data = new FormData();
+        data.append('file', file);
+        data.append('stems', stems.join(','));
+        data.append('output_format', settingsState.output_format || 'same_as_input');
+        data.append('multi_stem_export', settingsState.multi_stem_export || 'zip');
+        data.append('video_handling', settingsState.video_handling || 'audio_only');
+        const sourceDir = sourceDirForFile(file);
+        if(sourceDir){
+          data.append('source_dir', sourceDir);
+        }
+        const xhr = new XMLHttpRequest();
+        pending.xhr = xhr;
+        xhr.open('POST', '/upload');
+        xhr.upload.onprogress = (evt) => {
+          if(evt.lengthComputable){
+            const pct = Math.round(evt.loaded / evt.total * 100);
+            st.textContent = `uploading (${pct}%)`;
+            st.classList.remove('chip-dim');
+          }
+        };
+        xhr.onload = () => {
+          if(xhr.status >= 400){
+            let message = 'could not upload file';
+            try{
+              const payload = JSON.parse(xhr.responseText || '{}');
+              message = payload?.detail?.message || payload?.message || message;
+            }catch(_){}
+            failPendingUpload(pending, message);
+            return resolve();
+          }
+          st.classList.remove('chip-dim');
+          st.textContent = 'ready';
+          smooth.setImmediate(0);
+          let res = {};
+          try {
+            res = JSON.parse(xhr.responseText || '{}');
+            const msg = res.detail && res.detail.message;
+            if(msg){
+              showStatus(st);
+              st.textContent = 'error';
+              st.classList.add('chip-dim');
+              if (stopPad) stopPad.style.display = 'none';
+              else showError(msg);
+            }
+          }catch(_){ }
+          if(res.detail && res.detail.message){
+            failPendingUpload(pending, res.detail.message);
+            return resolve();
+          }
+          const parsed = res;
+          pending.id = parsed.task_id;
+          pending.stems = parsed.stems;
+          ui.item.__taskId = parsed.task_id;
+          // replace placeholder task
+          const idx = tasks.findIndex(t => t.tempKey === pending.tempKey);
+          const t = { id:parsed.task_id, name:file.name, mode: parsed.mode || null, pct:0, stage:'ready', stems:parsed.stems, groupStems: pending.groupStems || parsed.stems, tempKey: pending.tempKey, out_dir: null, preset_settings: parsed.preset_settings || null, can_adjust_preset: !!parsed.can_adjust_preset, downloaded:false, delivery: parsed.delivery || 'folder', autoDownloaded:false, frozen: !!pending.frozen };
+          if(idx>=0) tasks[idx]=t; else tasks.push(t);
+          if(startPressed || pending.autoStart){
+            t.stage = 'queued';
+            t.pct = 0;
+            t.frozen = true;
+            pending.frozen = true;
+            if(st){
+              showStatus(st);
+              st.textContent = 'queued';
+              st.classList.remove('hidden');
+            }
+          }
+          applyRowState(ui.item, t);
+          saveTasks(); updateUI();
+          // enable stop now that we have an id
+          if (stopPad){
+            setStopSquareIcon(stopPad);
+            stopPad.style.pointerEvents = '';
+            stopPad.style.opacity = '';
+            stopPad.title = 'stop current task and pause queue';
+            guardClick(stopPad, async (e) => {
+              if(stopPad.dataset.busy === '1') return;
+              stopPad.dataset.busy = '1';
+              e.preventDefault();
+              await requestStop(parsed.task_id, t, { bar, st, dl, stopPad, smooth });
+              stopPad.dataset.busy = '';
+              updateUI();
+            });
+            setStopVisibility(stopPad, (startPressed || pending.autoStart) ? 'queued' : 'ready');
+          }
+          // start polling
+          trackProgress(res.task_id, ui.bar, ui.st, ui.dl, null, null, t, null, smooth, stopPad);
+          if(!queueStarted && !startPressed){
+            Promise.resolve(syncQueuedStemSelection()).catch(() => {});
+          }
+          if(pending.autoStart){
+            startTaskWhenReady(pending);
+          }
+          resolve();
+        };
+        xhr.onerror = () => {
+          if(!isClearing){
+            failPendingUpload(pending, 'could not upload file');
+          }
+          resolve();
+        };
+        xhr.send(data);
+      });
+      return pending.uploadPromise;
+    }
+
+    function startTaskWhenReady(pending){
+      if(!pending || pending.startedProcessing) return;
+      if(!pending.uploadPromise){ return; }
+      pending.startedProcessing = true;
+      pending.uploadPromise.then(async () => {
+        if(!pending.id) return;
+        try{
+          const res = await fetch('/start/' + pending.id, {
+            method:'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(currentStartSettings()),
+          });
+          if(res.ok){
+            const payload = await res.json().catch(() => null);
+            if(payload && typeof payload.message === 'string' && payload.message.trim() && !isClearing){
+              showPopup(payload.message);
+            }
+          }
+        }catch(_){ /* ignore */ }
+      });
+    }
+
+    async function startSequentialProcessing(){
+      if(startLock || (startBtn && startBtn.disabled)) return;
+      if(modelsBlocked){
+        showPopup('download the models before splitting');
+        await refreshModelStatus({ allowPrompt: true });
+        flashModelDownloadCTA();
+        return;
+      }
+      const storageOk = await checkStorage();
+      const memoryOk = checkMemory();
+      if(!storageOk || !memoryOk){
+        showPopup('cannot start until storage and memory are sufficient');
+        return;
+      }
+      startLock = true;
+      updateStartButton();
+      let markedStarted = false;
+      const freezeReadyBatch = () => {
+        let hasStartable = false;
+        pendingItems.forEach((pending) => {
+          if(!pending || pending.frozen) return;
+          const task = pending.id ? getTaskById(pending.id) : getTaskByTempKey(pending.tempKey);
+          if(task && (task.stage !== 'ready' || Number(task.pct || 0) !== 0)) return;
+          pending.frozen = true;
+          pending.autoStart = true;
+          if(task){
+            task.frozen = true;
+          }
+          hasStartable = true;
+        });
+        tasks.forEach((task) => {
+          if(!task || !task.id || task.frozen || task.stage !== 'ready' || Number(task.pct || 0) !== 0) return;
+          task.frozen = true;
+          hasStartable = true;
+        });
+        if(hasStartable){
+          saveTasks();
+        }
+        return hasStartable;
+      };
+      const markReadyQueuedUI = () => {
+        const rows = Array.from(queue.children);
+        let changed = false;
+        rows.forEach(row => {
+          const id = row.__taskId;
+          const tempKey = row.__tempKey;
+          const task = id ? getTaskById(id) : getTaskByTempKey(tempKey);
+          const chip = row.querySelector('.chip.status');
+          if(task && (!task.stage || task.stage === 'ready' || task.stage === 'queued')){
+            if(task.stage !== 'queued' || task.pct !== 0){
+              task.stage = 'queued';
+              task.pct = 0;
+              changed = true;
+            }
+            if(chip){
+              showStatus(chip);
+              chip.textContent = 'queued';
+              chip.classList.remove('hidden');
+            }
+            applyRowState(row, task);
+            const stopPad = row.querySelector('.stop-pad');
+            setStopVisibility(stopPad, 'queued');
+            return;
+          }
+          if(chip && (chip.textContent || '').toLowerCase() === 'ready'){
+            showStatus(chip);
+            chip.textContent = 'queued';
+            chip.classList.remove('hidden');
+          }
+          const fallbackTask = task || { stage: 'queued', pct: 0, id: id || null };
+          applyRowState(row, fallbackTask);
+          const stopPad = row.querySelector('.stop-pad');
+          setStopVisibility(stopPad, fallbackTask.stage, !!task && isProcessing(task));
+        });
+        if(changed){
+          saveTasks();
+        }
+      };
+      const startReadyTasks = async () => {
+        const existing = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+        let queueNotice = '';
+        let startError = '';
+        for(const t of existing){
+          if(!t || !t.id || isProcessing(t)) continue;
+          const normalizedStage = String(t.stage || '').toLowerCase();
+          const isStartable = t.frozen && Number(t.pct || 0) === 0 && (normalizedStage === 'ready' || normalizedStage === 'queued');
+          if(isStartable){
+            try{
+              const res = await fetch('/start/' + t.id, {
+                method:'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(currentStartSettings()),
+              });
+              if(!res.ok){
+                t.stage = 'ready';
+                t.pct = 0;
+                t.frozen = false;
+                if(!startError){
+                  startError = await responseErrorMessage(res, 'could not start song');
+                }
+                continue;
+              }
+              const payload = await res.json().catch(() => null);
+              if(!queueNotice && payload && typeof payload.message === 'string' && payload.message.trim()){
+                queueNotice = payload.message;
+              }
+              t.stage = 'queued';
+              t.pct = 0;
+              t.downloaded = false;
+              t.autoDownloaded = false;
+              t.out_dir = null;
+              t.frozen = true;
+              ensureTaskProgressTracking(t);
+            }catch(err){
+              t.stage = 'ready';
+              t.pct = 0;
+              t.frozen = false;
+              if(!startError){
+                startError = err && err.message ? err.message : 'could not start song';
+              }
+            }
+          }
+        }
+        saveTasks();
+        markReadyQueuedUI();
+        if(startError && !isClearing){
+          showPopup(startError);
+        }else if(queueNotice && !isClearing){
+          showPopup(queueNotice);
+        }
+      };
+      try{
+        if(!freezeReadyBatch()){
+          showPopup('there are no songs to start');
+          return;
+        }
+        startGeneration += 1;
+        startPressed = true;
+        markedStarted = true;
+        markReadyQueuedUI();
+        revealStatusesAfterStart();
+        const pendingBatch = pendingItems.slice();
+        for(const p of pendingBatch){
+          if(!p || !p.frozen) continue;
+          if(!p.uploadPromise){
+            await uploadWithStems(p, p.stems);
+          }
+          if(p.uploadPromise){
+            await p.uploadPromise;
+          }
+          startTaskWhenReady(p);
+        }
+        await startReadyTasks();
+        startPressed = false;
+        markedStarted = false;
+        pendingItems.forEach(p => { if(p){ p.autoStart = false; } });
+        updateUI();
+      } finally {
+        if(markedStarted){
+          startPressed = false;
+        }
+        startLock = false;
+        updateStartButton();
+      }
+    }
+
+    async function handleDesktopPickedPaths(paths){
+      if(!Array.isArray(paths) || paths.length === 0){
+        return;
+      }
+      if(modelsBlocked){
+        showPopup('download the models before splitting');
+        await refreshModelStatus({ allowPrompt: true });
+        flashModelDownloadCTA();
+        return;
+      }
+      const storageOk = await checkStorage();
+      const memoryOk = checkMemory();
+      if(!storageOk || !memoryOk){
+        showPopup('cannot add songs until resources are available');
+        return;
+      }
+      const existingCount = tasks.filter(Boolean).length;
+      if(existingCount >= MAX_TASKS){
+        showPopup('you already have 50 songs queued; clear some to upload more');
+        return;
+      }
+      const stemGroups = selectedStemGroups();
+      const uploadStemGroups = stemGroups.length ? stemGroups : [[]];
+      const availableSlots = Math.max(0, MAX_TASKS - existingCount);
+      const maxSongs = Math.floor(availableSlots / uploadStemGroups.length);
+      if(maxSongs <= 0){
+        showPopup(`you need ${uploadStemGroups.length} free slots for the selected models on one song`);
+        return;
+      }
+      const normalizedPaths = paths.map(normalizePickedPath).filter((pathText) => !!pathText);
+      const trimmed = normalizedPaths.slice(0, maxSongs);
+      if(!trimmed.length){
+        return;
+      }
+      try{
+        const sourceDirs = trimmed.map((pathText) => normalizeSourceDirPath(pathText));
+        const importedTasks = [];
+        for(const stems of uploadStemGroups){
+          const res = await fetch('/api/import_paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              paths: trimmed,
+              source_dirs: sourceDirs,
+              stems: stems.join(','),
+              output_format: settingsState.output_format || 'same_as_input',
+              output_same_as_input: !!settingsState.output_same_as_input,
+              multi_stem_export: settingsState.multi_stem_export || 'zip',
+              video_handling: settingsState.video_handling || 'audio_only',
+            }),
+          });
+          const payload = await res.json().catch(() => ({}));
+          if(!res.ok){
+            const msg = payload && payload.message ? payload.message : 'could not import files';
+            showPopup(msg);
+            return;
+          }
+          importedTasks.push(...(Array.isArray(payload.tasks) ? payload.tasks : []));
+        }
+        importedTasks.forEach((task) => {
+          const item = {
+            id: task.task_id || task.id || null,
+            name: task.name,
+            mode: task.mode || null,
+            pct: typeof task.pct === 'number' ? task.pct : 0,
+            stage: task.stage || 'ready',
+            stems: Array.isArray(task.stems) ? task.stems : [],
+            out_dir: task.out_dir || null,
+            preset_settings: task.preset_settings || null,
+            can_adjust_preset: !!task.can_adjust_preset,
+            downloaded: false,
+            delivery: task.delivery || 'folder',
+            autoDownloaded: false,
+            frozen: false,
+          };
+          tasks.push(item);
+          createItem(item);
+        });
+        saveTasks();
+        updateUI();
+      }catch(err){
+        console.warn('desktop import failed', err);
+        showPopup('could not import files');
+      }
+    }
+    if(startBtn) guardClick(startBtn, startSequentialProcessing);
+
+    // --- Progress tracking for uploads (SSE) ---
+    function displayStage(stage){
+      if(!stage) return 'queued';
+      const lower = stage.toLowerCase();
+      if(lower.includes('deux')) return 'voc/inst';
+      if(lower.includes('harmon')) return 'harmonies';
+      if(lower.includes('vocals')) return 'vocals';
+      if(lower.includes('instrumental')) return 'instrumental';
+      if(lower.includes('background vocal') || lower.includes('bg vocal') || lower.includes('karaoke')) return 'bg vocal';
+      if(lower.includes('denoise')) return 'denoise';
+      if(lower.includes('drums')) return 'drums';
+      if(lower.includes('bass')) return 'bass';
+      if(lower.includes('other')) return 'other';
+      if(lower.includes('guitar')) return 'guitar';
+      if(lower.includes('piano')) return 'piano';
+      if(lower.includes('6s')) return 'full mix';
+      if(lower.includes('error')) return 'error';
+      if(lower.startsWith('prepare')) return 'preparing';
+      if(lower.startsWith('load_audio')) return 'loading';
+      if(lower.startsWith('write')) return 'finishing';
+      const parts = lower.split('.');
+      return parts[parts.length-1] || lower;
+    }
+
+    function trackProgress(taskId, bar, st, dl, _a, _b, taskRef, _c, smooth, stopPad){
+      try{
+        const es = new EventSource('/progress/' + taskId);
+        activeStreams.set(taskId, es);
+        es.addEventListener('message', (ev) => {
+          if(isClearing) return;
+          let data = null;
+          try { data = JSON.parse(ev.data); } catch(_) {}
+          if(!data) return;
+          const rawStage = data.stage;
+          const stage = rawStage === 'errored' ? 'error' : rawStage;
+          const rawPct = data.pct;
+          const previousPct = taskRef && typeof taskRef.pct === 'number' && taskRef.pct >= 0 ? taskRef.pct : 0;
+          const pct = (typeof rawPct === 'number' && rawPct >= 0 && !['done', 'error', 'stopped'].includes(String(stage || '').toLowerCase()))
+            ? Math.max(rawPct, previousPct)
+            : rawPct;
+          const stopPending = !!(taskRef && taskRef.stopRequested);
+          const stopTerminal = stage === 'stopped' || stage === 'error' || stage === 'done';
+          if(stopPending && !stopTerminal){
+            return;
+          }
+          if(taskRef){
+            taskRef.stage = stage;
+            taskRef.pct = pct;
+            if(typeof data.eta_seconds === 'number' || data.eta_seconds === null){
+              taskRef.eta_seconds = data.eta_seconds;
+            }
+            taskRef.eta_state = data.eta_state ?? taskRef.eta_state ?? null;
+            if(data.mode) taskRef.mode = data.mode;
+            if(data.stems) taskRef.stems = data.stems;
+            if(data.out_dir) taskRef.out_dir = data.out_dir;
+            if(data.zip) taskRef.zip = data.zip;
+            if(data.delivery) taskRef.delivery = data.delivery;
+            if(data.preset_settings) taskRef.preset_settings = data.preset_settings;
+            if(typeof data.can_adjust_preset === 'boolean') taskRef.can_adjust_preset = data.can_adjust_preset;
+            if(typeof taskRef.downloaded === 'undefined'){ taskRef.downloaded = false; }
+            if(typeof taskRef.autoDownloaded === 'undefined'){ taskRef.autoDownloaded = false; }
+            saveTasks();
+          }
+          const currentRow = st && st.closest ? st.closest('.item-row') : null;
+          if(currentRow){
+            applyRowState(currentRow, taskRef || { id: taskId, stage, pct });
+          }
+          if(data.stems && st){
+            const parentRow = st.closest('.item-row');
+            applyLabels(parentRow ? parentRow.querySelector('.labels') : null, displayStemsForTask(taskRef || { stems: data.stems }));
+          }
+          if(st){ showStatus(st); }
+          if(stage === 'error'){
+            if(taskRef){
+              taskRef.stopRequested = false;
+              taskRef.stage = 'error';
+              taskRef.pct = -1;
+              saveTasks();
+            }
+            st.textContent = 'error';
+            st.classList.remove('hidden');
+            if(dl){
+              dl.classList.remove('show');
+            }
+            setStatusVisibility(st, 'error');
+            const parent = st.closest('.card'); if(parent) parent.classList.add('done');
+            if (stopPad) {
+              stopPad.style.display = '';
+              stopPad.classList.add('show');
+              stopPad.title = 'rerun';
+              stopPad.innerHTML = '';
+              setRetryIcon(stopPad);
+              guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
+            }
+            dropPendingById(taskId);
+            es.close();
+            activeStreams.delete(taskId);
+            if(data.error){
+              showPopup(data.error);
+            }
+            if(currentRow){
+              applyRowState(currentRow, taskRef || { id: taskId, stage: 'error', pct: -1 });
+            }
+            updateUI(); return;
+          }
+          if(stage === 'done'){
+            const hasRemainingGroupTasks = !!(taskRef && groupHasRemainingTasks(taskRef, taskId));
+            if(taskRef){
+              taskRef.stopRequested = false;
+            }
+            smooth.setTarget(100);
+            dropPendingById(taskId);
+            es.close();
+            activeStreams.delete(taskId);
+            if(hasRemainingGroupTasks){
+              showStatus(st);
+              st.textContent = 'queued';
+              st.classList.remove('hidden');
+              smooth.setImmediate(0);
+              if(dl) dl.classList.remove('show');
+              if(stopPad){
+                stopPad.style.display = 'none';
+                stopPad.classList.remove('show');
+              }
+              const parent = st.closest('.card'); if(parent) parent.classList.remove('done');
+              if(currentRow){
+                applyLabels(currentRow.querySelector('.labels'), displayStemsForTask(taskRef));
+                applyRowState(currentRow, getTaskByTempKey(taskRef.tempKey) || taskRef);
+              }
+              updateUI(); return;
+            }
+            hideStatus(st);
+            if(dl){
+              const ref = taskRef || { id: taskId, out_dir: data.out_dir, zip: data.zip, downloaded:false, delivery: data.delivery || 'folder', autoDownloaded:false };
+              if(ref.delivery !== 'browser_download' && ref.downloaded){
+                setFolderIcon(dl);
+                dl.classList.add('show');
+                dl.title = 'open folder';
+                bindFolderButton(dl, ref);
+              }else{
+                bindDownloadButton(dl, ref);
+              }
+            }
+            if(stopPad) stopPad.remove();
+            const parent = st.closest('.card'); if(parent) parent.classList.add('done');
+            if(currentRow){
+              applyRowState(currentRow, taskRef || { id: taskId, stage: 'done', pct: 100 });
+            }
+            updateUI(); return;
+          }
+          if (stage === 'stopped') {
+            if (taskRef) {
+              taskRef.stopRequested = false;
+              taskRef.stage = 'stopped';
+              taskRef.pct = 0;
+              saveTasks();
+            }
+            showStatus(st);
+            st.textContent = 'stopped';
+            st.classList.remove('hidden');
+            const parent = st.closest('.card'); if (parent) parent.classList.add('done');
+            if (stopPad) {
+              stopPad.style.display = '';
+              stopPad.classList.add('show');
+              stopPad.title = 'rerun';
+              stopPad.innerHTML = '';
+              setRetryIcon(stopPad);
+              guardClick(stopPad, (e) => { e.preventDefault(); rerunTask(taskRef, { bar, st, dl, stopPad, smooth }); });
+            }
+            dropPendingById(taskId);
+            es.close();
+            activeStreams.delete(taskId);
+            if(currentRow){
+              applyRowState(currentRow, taskRef || { id: taskId, stage: 'stopped', pct: 0 });
+            }
+            updateUI(); return;
+          }
+          if (typeof pct === 'number' && pct >= 0) {
+            const sp = Math.round(Math.max(0, Math.min(100, pct)));
+            const normalizedStage = String(stage || '').toLowerCase();
+            if (!shouldUseProgressSummary(normalizedStage)) {
+              const friendlyStage = displayStage(stage);
+              st.textContent = friendlyStage || 'queued';
+              smooth.setImmediate(0);
+            } else {
+              const etaValue = typeof data.eta_seconds === 'number' ? data.eta_seconds : (taskRef ? taskRef.eta_seconds : null);
+              st.textContent = formatProgressChip(sp, etaValue, data.eta_state || (taskRef ? taskRef.eta_state : null));
+              if(normalizedStage === 'ready' || normalizedStage === 'queued'){
+                smooth.setImmediate(0);
+              }else{
+                smooth.setTarget(sp);
+              }
+            }
+            if(stage !== 'done' && dl){
+              dl.classList.remove('show');
+            }
+          } else {
+            st.textContent = 'queued';
+          }
+          setStatusVisibility(st, stage);
+          setStopVisibility(stopPad, stage);
+        });
+        es.addEventListener('error', (ev) => {
+          if (taskRef && taskRef.stage === 'stopped') {
+            es.close();
+            activeStreams.delete(taskId);
+            updateUI();
+            return;
+          }
+          let errPayload = null;
+          let errCode = null;
+          let errMsg = null;
+          try{
+            if(ev && ev.data){ errPayload = JSON.parse(ev.data); }
+          }catch(_){}
+          if(errPayload){
+            errCode = errPayload.code || (errPayload.detail && errPayload.detail.code);
+            errMsg = errPayload.message || (errPayload.detail && errPayload.detail.message);
+          }
+          if (taskRef) {
+            taskRef.stopRequested = false;
+            taskRef.stage = 'error';
+            taskRef.pct = -1;
+            saveTasks();
+          }
+          const currentRow = st && st.closest ? st.closest('.item-row') : null;
+          if (st) {
+            showStatus(st);
+            st.textContent = 'error';
+            st.classList.remove('hidden');
+          }
+          setStatusVisibility(st, 'error');
+          const parent = st && st.closest ? st.closest('.card') : null;
+          if (parent) parent.classList.add('done');
+
+          if (stopPad) {
+            stopPad.style.display = '';
+            stopPad.classList.add('show');
+            stopPad.title = 'rerun';
+            stopPad.innerHTML = '';
+            setRetryIcon(stopPad);
+            guardClick(stopPad, (e) => {
+              e.preventDefault();
+              if (taskRef) rerunTask(taskRef, { bar, st, dl, stopPad, smooth });
+            });
+          }
+          dropPendingById(taskId);
+          es.close();
+          activeStreams.delete(taskId);
+          if(currentRow){
+            applyRowState(currentRow, taskRef || { id: taskId, stage: 'error', pct: -1 });
+          }
+          if(errMsg){
+            showPopup(errMsg);
+          }
+          updateUI();
+        });
+      }catch(e){
+        showStatus(st);
+        st.textContent = 'error';
+        if(taskRef){
+          taskRef.stopRequested = false;
+          taskRef.stage = 'error';
+          taskRef.pct = -1;
+          saveTasks();
+        }
+        updateUI();
+      }
+    }

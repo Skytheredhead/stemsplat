@@ -1,0 +1,16 @@
+{
+  "metric": "museval_bsseval_v4",
+  "source_tool": "museval",
+  "museval_version": "0.4.1",
+  "corpora": ["MUSDB18-HQ", "Slakh2100-tiny"],
+  "failed_tracks": [],
+  "targets": {
+    "vocals": {"baseline_sdr_db": [8.0], "candidate_sdr_db": [8.0]},
+    "accompaniment": {"baseline_sdr_db": [10.0], "candidate_sdr_db": [10.0]},
+    "drums": {"baseline_sdr_db": [7.0], "candidate_sdr_db": [7.0]},
+    "bass": {"baseline_sdr_db": [6.0], "candidate_sdr_db": [6.0]},
+    "other": {"baseline_sdr_db": [5.0], "candidate_sdr_db": [5.0]},
+    "guitar": {"baseline_sdr_db": [6.0], "candidate_sdr_db": [6.0]},
+    "piano": {"baseline_sdr_db": [6.0], "candidate_sdr_db": [6.0]}
+  }
+}

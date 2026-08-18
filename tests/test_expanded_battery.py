@@ -335,6 +335,38 @@ class ExpandedBatterySmokeTests(ExpandedBatteryBase):
         self.assertIn("models", models.json())
         self.assertIn("status", downloads.json())
 
+    def test_model_status_reports_expected_download_sizes(self) -> None:
+        descriptors = [
+            {
+                "tag": "vocals",
+                "filename": main.MODEL_SPECS["vocals"].filename,
+                "url": "https://example.test/vocals",
+                "size_bytes": 123,
+            },
+            {
+                "tag": "instrumental",
+                "filename": main.MODEL_SPECS["instrumental"].filename,
+                "url": "https://example.test/instrumental",
+                "size_bytes": 456,
+            },
+        ]
+        (self.model_dir / main.MODEL_SPECS["vocals"].filename).unlink()
+        (self.model_dir / main.MODEL_SPECS["instrumental"].filename).unlink()
+        with mock.patch.object(main, "describe_downloads", return_value=descriptors):
+            models = self.client.get("/api/models_status")
+            downloads = self.client.get("/api/model_download_status")
+
+        self.assertEqual(models.status_code, 200, models.text)
+        self.assertEqual(downloads.status_code, 200, downloads.text)
+        models_payload = models.json()
+        downloads_payload = downloads.json()
+        self.assertEqual(models_payload["expected_total_bytes"], 579)
+        self.assertEqual(downloads_payload["expected_total_bytes"], 579)
+        self.assertEqual(downloads_payload["expected_missing_total_bytes"], 579)
+        by_key = {item["key"]: item for item in models_payload["models"]}
+        self.assertEqual(by_key["vocals"]["expected_size_bytes"], 123)
+        self.assertEqual(by_key["instrumental"]["expected_size_bytes"], 456)
+
 
 class ExpandedBatteryProcessingTests(ExpandedBatteryBase):
     def test_cancel_mid_processing_stops_cleanly_and_cleans_outputs(self) -> None:
@@ -517,15 +549,15 @@ class ExpandedBatteryAudioTests(ExpandedBatteryBase):
         damaged = self.root / "fixtures" / "damaged.wav"
         raw = source.read_bytes()
         damaged.write_bytes(raw[:32])
-        payload = self.upload_task(damaged)
-        task = self.run_task_to_completion(str(payload["task_id"]))
-        self.assertEqual(task["status"], "error")
-        self.assertTrue(
-            "could not decode audio" in str(task["error"]).lower()
-            or "could not read wav" in str(task["error"]).lower()
-        )
+        with damaged.open("rb") as handle:
+            response = self.client.post(
+                "/upload",
+                files={"file": (damaged.name, handle, "audio/wav")},
+                data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+            )
+        self.assertEqual(response.status_code, 415, response.text)
 
-    def test_reverse_extension_mismatch_is_content_accepted(self) -> None:
+    def test_upload_rejects_spoofed_extension_even_with_audio_mime(self) -> None:
         source = self.make_audio("mismatch.wav", seconds=1.0)
         disguised = self.root / "fixtures" / "mismatch.txt"
         disguised.write_bytes(source.read_bytes())
@@ -535,7 +567,40 @@ class ExpandedBatteryAudioTests(ExpandedBatteryBase):
                 files={"file": (disguised.name, handle, "audio/wav")},
                 data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
             )
-        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.status_code, 415, response.text)
+
+    def test_upload_rejects_path_traversal_filename(self) -> None:
+        source = self.make_audio("safe.wav", seconds=1.0)
+        with source.open("rb") as handle:
+            response = self.client.post(
+                "/upload",
+                files={"file": ("../evil.wav", handle, "audio/wav")},
+                data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+            )
+        self.assertEqual(response.status_code, 415, response.text)
+
+    def test_upload_rejects_oversized_file_before_queueing(self) -> None:
+        source = self.make_audio("too_large.wav", seconds=1.0)
+        with mock.patch.object(main, "MAX_UPLOAD_BYTES", 8):
+            with source.open("rb") as handle:
+                response = self.client.post(
+                    "/upload",
+                    files={"file": (source.name, handle, "audio/wav")},
+                    data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+                )
+        self.assertEqual(response.status_code, 413, response.text)
+
+    def test_upload_rejects_media_header_mismatch(self) -> None:
+        disguised = self.root / "fixtures" / "fake.wav"
+        disguised.parent.mkdir(parents=True, exist_ok=True)
+        disguised.write_bytes(b"<html><script>alert(1)</script></html>")
+        with disguised.open("rb") as handle:
+            response = self.client.post(
+                "/upload",
+                files={"file": (disguised.name, handle, "audio/wav")},
+                data={"stems": "vocals", "output_format": "wav", "multi_stem_export": "separate"},
+            )
+        self.assertEqual(response.status_code, 415, response.text)
 
     def test_mono_input_round_trips_as_mono_output(self) -> None:
         mono = self.make_audio("mono.wav", seconds=1.0, channels=1)
@@ -635,6 +700,34 @@ class ExpandedBatteryRecoveryTests(ExpandedBatteryBase):
         os.utime(stale, (old_time, old_time))
         asyncio.run(main._startup_cleanup())
         self.assertFalse(stale.exists())
+
+    def test_history_download_rejects_index_path_escape(self) -> None:
+        outside = self.root / "outside-history"
+        outputs = outside / "outputs"
+        outputs.mkdir(parents=True)
+        (outputs / "song.wav").write_bytes(b"unsafe")
+        with main.previous_files_lock:
+            main.previous_files_index[:] = [
+                {
+                    "id": "escape",
+                    "task_id": "task-escape",
+                    "original_name": "song.wav",
+                    "mode": "vocals",
+                    "stems": ["vocals"],
+                    "storage_dir": str(outside),
+                    "source_path": str(outside / "song.wav"),
+                    "source_name": "song.wav",
+                    "outputs": ["song.wav"],
+                    "finished_at": time.time(),
+                    "artwork_path": "",
+                    "output_format": "wav",
+                    "video_handling": "audio_only",
+                    "preset_settings": None,
+                    "total_bytes": 0,
+                }
+            ]
+        response = self.client.get("/api/history/escape/download")
+        self.assertEqual(response.status_code, 400, response.text)
 
 
 if __name__ == "__main__":

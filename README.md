@@ -16,7 +16,7 @@ The best and easiest to use ap for stem splitting.
 - Runs fully locally on your Mac
 - No cloud uploads
 - Batch queue processing
-- LAN/mobile access from other devices on your local network
+- Optional passcode-protected HTTPS LAN/mobile access (off by default)
 - Multiple export formats
 - Previous-files history so recent outputs are easy to reopen or reuse
 
@@ -78,31 +78,13 @@ email stemsplat@gmail.com for bugs/feature requests
 - ZFTurbo DrumSep 4-stem
 
 
-## Future release plans (subject to change):
 
-### v0.5.0:
-- [ ]  Having an “edit” button that opens a popup card with a full-song waveform, in/out selection, and preview
-- [ ]  Mute/solo toggles for each selected stem inside that edit flow
-- [ ]  For a large upload all at once, keep it as one stack with a unified progress bar, then expand into individual cards on click and collapse back up
-- [ ]  Make the stop button a pause button, but only if it behaves like a real queue pause and not fake task resume
-- [ ]  Add estimated processing times to songs in queue and total estimated time for the queue
-- [ ]  Add user-created presets
-- [ ]  Export album covers with instrument pictures so splits are visually differentiated
-- [ ]  Custom right click
-- [ ]  When I right click a model and hit “remove from queue,” make the scroll animation cleaner/smoother
-- [ ]  Instead of “- vocals,” include the model name like “- vocals (single)” or “- vocals (full)”
-- [ ]  Settings/nerd stuff/device toggle (mps / cpu)
-- [ ]  Settings + quit + other stuff in the top toolbar
-- [ ]  Add uninstall
-- [ ]  Add delete models
-- [ ]  Right click models to uninstall one by one in model manager
-- [ ]  Add models resuming if partially downloaded and the network fails, if you feel good about the reliability work
+## v0.4.3 hardening status
 
-### v0.6.0:
-- [ ]  BPM/key detector
-- [ ]  BPM/key shifter
-- [ ]  De-reverb model
-- [ ]  Wind model
-- [ ]  Strings model
-- [ ]  Single-channel compute optimization
-- [ ]  In-app updates instead of redownloading from GitHub
+The v0.4.3 lane is `reference_safe`: model selection, overlap, precision, output semantics, and MPS behavior remain unchanged unless the quality gates approve a later promotion.
+
+Automatic model downloads are intentionally blocked until every checkpoint has an immutable revision, exact SHA-256, and documented distribution rights in `models/manifest.json`. Existing unsupported user-provided state-dict checkpoints may be used at the owner’s risk; legacy pickle-based models require an exact approved manifest hash.
+
+A production build additionally requires the full public/private quality report, Developer ID signing/notarization credentials, and signed update metadata. Without those prerequisites, `build_app.sh` produces a development-only ad-hoc build.
+
+See `docs/qa/reconciliation-matrix.md` and `quality/README.md` for the release evidence workflow.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import tempfile
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("STEMSPLAT_DISABLE_BACKGROUND_THREADS", "1")
 
 import main
+from stemsplat.updates import UpdateManifest
 
 
 class ReleaseStatusTests(unittest.TestCase):
@@ -162,6 +164,15 @@ class ReleaseStatusTests(unittest.TestCase):
                 {"name": "Stemsplat-v0.5.0.zip", "url": "https://example.com/Stemsplat-v0.5.0.zip", "size": 100},
             ],
         }
+        selected_asset = release["assets"][1]
+        manifest = UpdateManifest(
+            version="v0.5.0",
+            asset_name=selected_asset["name"],
+            download_url=selected_asset["url"],
+            byte_length=len(b"zip-bytes"),
+            sha256=hashlib.sha256(b"zip-bytes").hexdigest(),
+            issued_at="2026-08-13T00:00:00Z",
+        )
         calls: list[tuple[str, Path, str, bool]] = []
 
         class _ImmediateThread:
@@ -195,17 +206,19 @@ class ReleaseStatusTests(unittest.TestCase):
             return dest
 
         with mock.patch.object(main, "_fetch_latest_release", return_value=release):
-            with mock.patch.object(main, "OUTPUT_ROOT", output_root):
-                with mock.patch.object(main, "download_url_to_path", side_effect=_fake_download):
-                    with mock.patch.object(main.threading, "Thread", _ImmediateThread):
-                        response = self.client.post("/api/release_download")
+            with mock.patch.object(main, "_verified_release_asset", return_value=(selected_asset, manifest)):
+                with mock.patch.object(main, "OUTPUT_ROOT", output_root):
+                    with mock.patch.object(main, "download_url_to_path", side_effect=_fake_download):
+                        with mock.patch.object(main.threading, "Thread", _ImmediateThread):
+                            response = self.client.post("/api/release_download")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "done")
         self.assertEqual(payload["version"], "v0.5.0")
         self.assertEqual(payload["filename"], "Stemsplat-v0.5.0.zip")
-        self.assertEqual(Path(payload["path"]), output_root / "Stemsplat-v0.5.0.zip")
+        self.assertNotIn("path", payload)
+        self.assertEqual(Path(main.release_download_state["path"]), output_root / "Stemsplat-v0.5.0.zip")
         self.assertEqual(main._compat_settings["update_last_notified_version"], "v0.5.0")
         self.assertEqual(main._compat_settings["update_latest_version"], "v0.5.0")
         self.assertEqual(len(calls), 1)
@@ -228,6 +241,15 @@ class ReleaseStatusTests(unittest.TestCase):
                 {"name": "Stemsplat-v0.5.0.zip", "url": "https://example.com/Stemsplat-v0.5.0.zip", "size": 100},
             ],
         }
+        selected_asset = release["assets"][0]
+        manifest = UpdateManifest(
+            version="v0.5.0",
+            asset_name=selected_asset["name"],
+            download_url=selected_asset["url"],
+            byte_length=len(b"new-bytes"),
+            sha256=hashlib.sha256(b"new-bytes").hexdigest(),
+            issued_at="2026-08-13T00:00:00Z",
+        )
         calls: list[tuple[str, Path, str, bool]] = []
 
         class _ImmediateThread:
@@ -252,16 +274,18 @@ class ReleaseStatusTests(unittest.TestCase):
             return dest
 
         with mock.patch.object(main, "_fetch_latest_release", return_value=release):
-            with mock.patch.object(main, "OUTPUT_ROOT", output_root):
-                with mock.patch.object(main, "download_url_to_path", side_effect=_fake_download):
-                    with mock.patch.object(main.threading, "Thread", _ImmediateThread):
-                        response = self.client.post("/api/release_download")
+            with mock.patch.object(main, "_verified_release_asset", return_value=(selected_asset, manifest)):
+                with mock.patch.object(main, "OUTPUT_ROOT", output_root):
+                    with mock.patch.object(main, "download_url_to_path", side_effect=_fake_download):
+                        with mock.patch.object(main.threading, "Thread", _ImmediateThread):
+                            response = self.client.post("/api/release_download")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "done")
         self.assertEqual(payload["filename"], "Stemsplat-v0.5.0_2.zip")
-        self.assertEqual(Path(payload["path"]), output_root / "Stemsplat-v0.5.0_2.zip")
+        self.assertNotIn("path", payload)
+        self.assertEqual(Path(main.release_download_state["path"]), output_root / "Stemsplat-v0.5.0_2.zip")
         self.assertEqual(existing_path.read_bytes(), b"old-bytes")
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], output_root / "Stemsplat-v0.5.0_2.zip")

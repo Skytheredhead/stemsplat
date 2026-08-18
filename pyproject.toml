@@ -1,34 +1,70 @@
-[tool.poetry]
-name = "stemrunner"
-version = "0.4.2"
-description = "Self-hosted stem separation tool"
-authors = ["Your Name <you@example.com>"]
-
-[tool.poetry.dependencies]
-python = "^3.10"
-torch = "*"
-fastapi = "*"
-uvicorn = {extras = ["standard"], version = "*"}
-python-multipart = "*"
-numpy = "*"
-pyyaml = "*"
-soundfile = "*"
-einops = "*"
-rotary_embedding_torch = "*"
-packaging = "*"
-beartype = ">=0.17"
-imageio-ffmpeg = "*"
-certifi = "*"
-mutagen = "*"
-demucs = "*"
-pywebview = "*"
-pyobjc-core = "*"
-pyobjc-framework-Cocoa = "*"
-pyobjc-framework-WebKit = "*"
-
-[tool.poetry.dev-dependencies]
-pytest = "*"
-
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools==80.10.2", "wheel==0.46.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stemsplat"
+dynamic = ["version"]
+description = "Apple Silicon stem separation desktop app"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "beartype==0.22.9",
+  "certifi==2026.7.22",
+  "cryptography==46.0.7",
+  "demucs==4.0.1",
+  "einops==0.8.2",
+  "fastapi==0.141.1",
+  "imageio-ffmpeg==0.6.0",
+  "mutagen==1.48.1",
+  "numpy==2.2.6",
+  "packaging==25.0",
+  "psutil==7.1.3",
+  "pyobjc-core==11.1",
+  "pyobjc-framework-Cocoa==11.1",
+  "pyobjc-framework-WebKit==11.1",
+  "python-multipart==0.0.32",
+  "pywebview==6.1",
+  "PyYAML==6.0.3",
+  "rotary-embedding-torch==0.9.1",
+  "soundfile==0.14.0",
+  "torch==2.11.0",
+  "torchaudio==2.11.0",
+  "uvicorn[standard]==0.52.1"
+]
+
+[project.optional-dependencies]
+dev = [
+  "cyclonedx-bom==7.2.1",
+  "detect-secrets==1.5.0",
+  "httpx2==2.10.0",
+  "mypy==1.19.1",
+  "pip-audit==2.10.1",
+  "pyinstaller==6.18.0",
+  "pytest==9.0.3",
+  "ruff==0.14.13"
+]
+quality = ["museval==0.4.1"]
+
+[tool.setuptools.dynamic]
+version = {attr = "stemsplat.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["stemsplat*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = ["experimental", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "S", "SIM"]
+ignore = ["E501", "S101", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

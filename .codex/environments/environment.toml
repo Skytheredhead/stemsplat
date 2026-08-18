@@ -9,9 +9,10 @@ script = ""
 name = "Run"
 icon = "run"
 command = '''
-cd /Users/skylarenns/Documents/GitHub/stemsplat
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "${REPO_ROOT}"
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-python3 main.py --serve
+python -m pip install --require-hashes -r requirements-macos-arm64.lock
+python launcher.py
 '''
